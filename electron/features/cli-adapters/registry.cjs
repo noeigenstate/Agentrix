@@ -6,6 +6,7 @@ const claudeSdk = require('../claude-sdk/adapter.cjs');
 const codexAppServer = require('../codex-app-server/adapter.cjs');
 const { support } = require('./capabilities.mjs');
 const { workerOf } = require('./workers.cjs');
+const { terminalAdapters } = require('./terminal.cjs');
 
 // Bind the locators main already owns for its terminal and native sessions.
 function runtimeInstall(createInstall, callbacks) {
@@ -30,7 +31,11 @@ function createAdapter(manifest, runtime, pathOptions) {
   return Object.freeze({ manifest, ...(runtime ?? { install: defaultInstall(), settingsInstall: defaultInstall }), ...(worker && { worker }) });
 }
 
-const registered = Object.freeze(declarations().map(({ manifest }) => createAdapter(manifest, runtimes.get(manifest.id))));
+const terminalFacets = terminalAdapters(Object.fromEntries(declarations().map(({ manifest }) => [manifest.id, manifest.words])));
+const registered = Object.freeze(declarations().map(({ manifest }) => {
+  const runtime = runtimes.get(manifest.id);
+  return createAdapter(manifest, runtime && { ...runtime, ...terminalFacets[manifest.id] });
+}));
 const adapters = () => registered;
 const adapterOf = id => registered.find(({ manifest }) => manifest.id === id);
 const adapterOfModel = model => adapterOf(agentOfModel(model));

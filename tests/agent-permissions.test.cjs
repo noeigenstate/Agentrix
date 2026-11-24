@@ -16,7 +16,7 @@ function handlers() {
   const calls = { broadcast: 0, restore: 0, activity: 0, follow: 0, completion: [], usageDispose: 0 };
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
-  const context = vm.createContext({ dispatchedOnly: () => null, readingHistory: { close() {} },
+  const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, dispatchedOnly: () => null, readingHistory: { close() {} },
     launchAgentAfterPrompt, followClaudeSession: () => assert.fail('no Claude launch was requested'),
     sessions: new Map([['t', session]]), store: { projects: [project], setRestore() { calls.restore++; },
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,

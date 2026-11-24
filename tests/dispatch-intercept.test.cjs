@@ -71,6 +71,7 @@ test('Claude role arguments use the carried seat reader without loading dispatch
   fs.mkdirSync(path.dirname(shimFile), { recursive: true });
   fs.mkdirSync(path.dirname(seatFile), { recursive: true });
   fs.copyFileSync(path.join(shims, 'intercept.cjs'), shimFile);
+  fs.writeFileSync(path.join(path.dirname(shimFile), 'launchers.cjs'), shim().runtimeFiles()['shims/launchers.cjs']);
   fs.writeFileSync(helper, 'throw new Error("dispatch must not load");\n');
   fs.writeFileSync(bootstrap + '.lead', 'sonnet\nlow\n0\nnull\n');
   const { intercept } = require(shimFile);
@@ -300,10 +301,40 @@ test('a native owner receives shim depth zero while account reads remain without
 test('interactive wrappers read bootstrap shims, keep real CLI lookup outside that folder, and give the shims only to the Claude Code they start', () => {
   for (const name of ['integration/bootstrap.ps1', 'integration/bash-integration.bash', 'integration/zsh-integration.zsh']) {
     const text = read(name);
-    assert.match(text, /\.shims|\[.?shims.?\]/); assert.match(text, /--shim-env/);
+    assert.match(text, /\.shims|\[.?shims.?\]/); assert.match(text, /--launch/);
     assert.match(text, /\.agentrix-shims|__pg_shims/, `${name} excludes shims when an owner wrapper resolves the CLI`);
     assert.doesNotMatch(text, /export PATH=|\$env:Path\s*=/, `${name} leaves the terminal's own PATH alone`);
   }
+});
+
+test('Claude launch argv matches the former wrapper order and the old intercept options still work', t => {
+  const folder = temporary(t), { file } = sessionBootstrap(folder, { conductor: true });
+  const model = 'claude-sonnet-5-5[1m]', effort = 'high', settings = path.join(folder, 'hook settings.json');
+  const original = ['--resume', 'fixture-session', '中文 "quoted" prompt', ''];
+  const note = 'Earlier work. Agentrix skill delivery: loaded skills';
+  const prompt = 'Earlier work. Agentrix delivers skill instructions through its SessionStart hook.';
+  fs.writeFileSync(file + '.lead', [model, effort, '1', 'null', ''].join('\n'));
+  const source = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: file, AGENTRIX_SEATS: 'null' };
+  const ask = (words, env = source) => {
+    const result = spawnSync(process.execPath, [path.join(shims, 'intercept.cjs')], {
+      env: { ...env, AGENTRIX_INTERCEPT_ARGV: JSON.stringify(words) }, encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  const shimOnly = ask(['--shim-env']).split('\0').slice(0, -1);
+  const legacy = JSON.parse(ask(['--shim-env', 'json', '--role-tools', 'claude', ...original]));
+  const mcp = legacy.at(-1);
+  assert.deepEqual(legacy.slice(0, -2), shimOnly);
+  assert.equal(legacy.at(-2), '--');
+  assert.deepEqual(toolServer(mcp).args.slice(1), ['mcp', 'claude', model, effort]);
+  const fields = { AGENTRIX_LAUNCH_MODEL: model, AGENTRIX_LAUNCH_EFFORT: effort, AGENTRIX_LAUNCH_SETTINGS: settings, AGENTRIX_LAUNCH_NOTE: note };
+  const oldLocal = [mcp, '--settings', settings, '--append-system-prompt', prompt, '--model', model, '--effort', effort, ...original];
+  const local = JSON.parse(ask(['--launch', 'claude', 'json', 'shims', ...original], { ...source, ...fields }));
+  assert.deepEqual(local.slice(0, shimOnly.length), shimOnly);
+  assert.deepEqual([...local.slice(shimOnly.length + 1), ...original], oldLocal);
+  const remote = ask(['--launch', 'claude', 'words', 'remote', ...original], { ...source, ...fields, AGENTRIX_LAUNCH_ROLE: mcp }).split('\0').slice(1, -1);
+  assert.deepEqual([...remote, ...original], [...oldLocal.slice(1, -original.length), mcp, ...original]);
 });
 
 // The terminal's own PATH stays clean; only the Claude Code its wrapper starts is a planner.

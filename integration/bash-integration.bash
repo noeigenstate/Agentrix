@@ -29,10 +29,11 @@ else
 fi
 unset __pg_login_files
 
-# The shim folder goes only to the Claude Code the claude wrapper starts (intercept.cjs --shim-env): this shell, its scripts and
+# The shim folder goes only to the Claude Code the claude wrapper starts (intercept.cjs --launch): this shell, its scripts and
 # whatever else it runs find the real CLIs, and the wrappers' own lookups skip the folder too.
 __pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" -e 'try { process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).shims || ""); } catch {}' "$AGENTRIX_BOOTSTRAP" 2>/dev/null)
 [[ -n $__pg_shims && -d $__pg_shims ]] || __pg_shims=
+__pg_intercept="${__pg_shims:-${BASH_SOURCE[0]%/*}/shims}/intercept.cjs"
 unset AGENTRIX_DISPATCH_DEPTH AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF AGENTRIX_SHIM_NODE
 
 # A JSON string (also a TOML basic string) for $1, in REPLY.
@@ -104,31 +105,14 @@ __pg_command() {
   return 0
 }
 
-# Whether $1, the first word given to codex, is one of the CLI's own management runs (codex --help, checked against
-# 0.167.0). Those start no conversation and run in this terminal; everything else opens in native mode. bootstrap.ps1,
-# zsh-integration.zsh and remote-worker.py carry the same words.
-__pg_codex_terminal() {
-  case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|migrate-rollouts|migrate-nfs-db|exec-server|features) return 0;; esac
-  return 1
-}
-
-# A management run is the CLI itself, with the user's alias and its exit status. Any other codex requests the
-# existing native session path, and no Codex executable runs here.
-codex() {
-  local -a __pg_words
-  local found=true
-  __pg_program codex || { found=false; __pg_words=(codex); }
-  if __pg_codex_terminal "${__pg_words[1]-${1-}}"; then
-    if $found; then "${__pg_words[@]}" "$@"; return; fi
-    printf '\e[33m%s\e[0m\n' 'Codex CLI was not found in PATH. Install it, then restart this terminal.'
-    return 127
-  fi
+__pg_redirect_agent() {
+  local agent=$1; shift
   local word REPLY payload='[' separator=
-  for word in "${__pg_words[@]:1}" "$@"; do
+  for word in "$@"; do
     __pg_json "$word"; payload+="$separator$REPLY"; separator=,
   done
   payload+=']'
-  __pg_send codex-started 0 codex '' '' "$payload"
+  __pg_send codex-started 0 "$agent" '' '' "$payload"
   printf '%s\n' '已请求在原生模式打开 Codex。'
   return 0
 }
@@ -166,86 +150,80 @@ __pg_ultracode_settings() {
   fi
 }
 
-# Claude Code reports each turn through the hooks main wrote for this terminal (hook-channel.cjs), passed with --settings,
-# which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
-# carry them. A proxy set in this terminal (by the user's start-up files, say) falls back too, and main is told why.
-claude() {
-  local __pg_words word conversation=1
-  case ${1-} in
-    auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade) conversation=0;;
+# The shell keeps executable lookup, pipe events and temporary hook files.
+agentrix_agent() {
+  local agent=$1; shift
+  local -a __pg_words program
+  local found=1 mode=conductor word route
+  if __pg_program "$agent"; then program=("${__pg_words[@]}"); else found=0; fi
+  [[ -n ${AGENTRIX_BOOTSTRAP-} && "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" == native ]] && mode=native
+  route=$(AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@") || return
+  case $route in
+    native)
+      __pg_redirect_agent "$agent" ${program[@]+"${program[@]:1}"} "$@"
+      return;;
+    refused)
+      printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2
+      return 2;;
   esac
-  for word in "$@"; do
-    case $word in
-      --) break;;
-      # Native mode: the lead is the plain CLI, so its own --model and --effort are the owner's to give.
-      --model|--model=*|--effort|--effort=*)
-        if [[ -z ${AGENTRIX_BOOTSTRAP-} || "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" != native ]]; then
-          printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2
-        fi;;
-      --version|-v|-V|--help|-h) conversation=0;;
-    esac
-  done
-  if ! __pg_program claude; then
-    printf '\e[33m%s\e[0m\n' 'Claude Code was not found in PATH. Install it, then restart this terminal.'
+  if [[ $found == 0 ]]; then
+    local label='Claude Code'
+    [[ $route == passthrough ]] && label='Codex CLI'
+    printf '\e[33m%s\e[0m\n' "$label was not found in PATH. Install it, then restart this terminal."
     return 127
   fi
-  local -a program=("${__pg_words[@]}")
+  if [[ $route == passthrough ]]; then "${program[@]}" "$@"; return; fi
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  local model effort fast seat_map ultracode legacy_seats lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local model effort fast seat_map ultracode legacy_seats seat_valid=0 lead_file=${AGENTRIX_BOOTSTRAP-}.lead
   local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-  local -a lead_args=()
-  if [[ $conversation == 1 && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
+  if [[ $route == conversation && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
     { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
         # Old files put the seat map on line 6, after two retired fields.
         IFS= read -r seat_map || :
         if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
       }; } < "$lead_file" &&
     [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]; then
-    lead_args=(--model "$model" --effort "$effort")
+    seat_valid=1
     if [[ $fast == 1 ]]; then launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback; fi
   fi
+  if [[ $seat_valid == 0 ]]; then model= effort=; fi
   [[ ${seat_map-} == \{* ]] || seat_map=null
   local settings=$launch_fallback REPLY
   if [[ $__pg_hook_channel == http ]]; then
-    if __pg_hook_proxy "$__pg_hook_port"; then __pg_send hook-channel 0 claude "$REPLY"; else settings=$launch_http; fi
+    if __pg_hook_proxy "$__pg_hook_port"; then __pg_send hook-channel 0 "$agent" "$REPLY"; else settings=$launch_http; fi
   fi
-  [[ ${ultracode-} == ultracode && ${#lead_args[@]} -gt 0 ]] && settings=$(__pg_ultracode_settings "$settings")
-  __pg_send codex-started 0 claude "$(__pg_command "$@")"
-  # What the reading view can show; a later --append-system-prompt of the user's wins.
-  local -a note=()
+  [[ ${ultracode-} == ultracode && $seat_valid == 1 ]] && settings=$(__pg_ultracode_settings "$settings")
+  __pg_send codex-started 0 "$agent" "$(__pg_command "$@")"
   local current_note=$(__pg_reading_note)
-  if [[ $current_note == *" Agentrix skill delivery: "* ]]; then
-    current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
-  fi
-  [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
   # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
   local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file=
-  local -a settings_args=()
   if [[ -n $settings ]]; then
     [[ -n $__pg_note_file && $session_folder != "$__pg_note_file" ]] || session_folder=${TMPDIR:-/tmp}
     session_name=${session_name%-skills.txt}
     settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
     printf '%s' "$settings" > "$settings_file"
-    settings_args=(--settings "$settings_file")
   fi
-  # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
-  # The same answer carries, after a "--" word, the arguments that give its conversation the role tools (none for a print
-  # or utility call); their server runs with the environment intercept.cjs is asked in, hence the seats.
-  local -a planner=() role_tools=()
-  local tools=
-  if [[ -n $__pg_shims ]]; then
-    while IFS= read -r -d '' word; do
-      if [[ -n $tools ]]; then role_tools+=("$word"); elif [[ $word == -- ]]; then tools=1; else planner+=("$word"); fi
-    done < <(AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env --role-tools claude "$@" 2>/dev/null)
+  local -a planner=() launch_args=()
+  local reading_args= target=plain
+  [[ -n $__pg_shims ]] && target=shims
+  while IFS= read -r -d '' word; do
+    if [[ -n $reading_args ]]; then launch_args+=("$word"); elif [[ $word == -- ]]; then reading_args=1; else planner+=("$word"); fi
+  done < <(AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" AGENTRIX_LAUNCH_NOTE="$current_note" \
+      AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 \
+      "$__pg_node" "$__pg_intercept" --launch "$agent" words "$target" "$@")
+  local code=1
+  if [[ -n $reading_args ]]; then
+    command env ${planner[@]+"${planner[@]}"} AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+      "${program[@]}" ${launch_args[@]+"${launch_args[@]}"} "$@"
+    code=$?
   fi
-  command env ${planner[@]+"${planner[@]}"} AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
-    "${program[@]}" ${role_tools[@]+"${role_tools[@]}"} \
-    ${settings_args[@]+"${settings_args[@]}"} ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} "$@"
-  local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
-  __pg_send codex-exited $code claude
+  __pg_send codex-exited $code "$agent"
   return $code
 }
+
+codex() { agentrix_agent codex "$@"; }
+claude() { agentrix_agent claude "$@"; }
 
 # Runs first at every prompt and hands the command's exit status on to the user's own prompt commands.
 __pg_precmd() { local code=$?; __pg_send shell-prompt; return $code; }

@@ -27,6 +27,7 @@ The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook
 - `electron/atomic-write.cjs` (atomic replacement of the lead file)
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)
 - `electron/features/agents/call-seat.cjs` (shared worker seat byte limit)
+- `electron/features/cli-adapters/registry.cjs` (the terminal's message-note delivery)
 
 ## Invariants
 - A failed optional seat write keeps the bootstrap usable — test: `tests/seat-auto.test.cjs` › "a failed dispatch seat snapshot write leaves the required bootstrap usable"

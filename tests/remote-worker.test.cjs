@@ -10,8 +10,10 @@ const { seatRouting } = require('../integration/agent-event.cjs');
 const { specialtyCases } = require('./seat-auto.test.cjs');
 
 function pythonProbe(t, script, timeout = 20_000) {
+  const envelope = require('../integration/shims/intercept.cjs').runtimeFiles()['shims/launchers.cjs'];
+  const wire = envelope.split('\n')[0].slice('const terminalWire = '.length, -1);
   const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
-    path.join(__dirname, '../integration/remote-worker.py')], { encoding: 'utf8', timeout, windowsHide: true });
+    path.join(__dirname, '../integration/remote-worker.py'), wire], { encoding: 'utf8', timeout, windowsHide: true });
   if (result.error?.code === 'ENOENT') { t.skip('Python missing'); return null; }
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   return result.stdout;
@@ -75,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='remote-role-e2e-') as home, patch.dict(
 
 test('remote policy write failure replies without closing the channel; Bash launches a stand-in in both switch directions', t => {
   const script = String.raw`
-import ast, os, pathlib, shutil, subprocess, sys, tempfile, types
+import ast, os, pathlib, runpy, shutil, subprocess, sys, tempfile, types
 tree = ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
 channel = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'Channel')
 receive = next(node for node in channel.body if isinstance(node, ast.FunctionDef) and node.name == 'receive')
@@ -101,9 +103,12 @@ if not bash:
     sys.exit(0)
 source = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'BASH_SOURCE' for target in node.targets))
 assert '$' + '{name^^}' not in source and 'compgen -e' not in source
-source = source[source.index('function claude {'):source.index('\n__pg_prompt()')]
+source = source[source.index('function agentrix_agent {'):source.index('\n__pg_prompt()')]
 with tempfile.TemporaryDirectory(prefix='remote-nobg-') as directory:
     root = pathlib.Path(directory)
+    notify = root / 'notify'
+    notify.write_bytes(runpy.run_path(sys.argv[1])['NOTIFY_SOURCE'].encode('utf-8'))
+    (root / 'terminal-wire.json').write_text(sys.argv[2], encoding='utf-8')
     stub = root / 'claude'
     stub.write_text('#!/bin/sh\nprintf "%s\\n" "' + '$' + '{CLAUDE_CODE_DISABLE_BACKGROUND_TASKS-unset}"\n')
     stub.chmod(0o700)
@@ -251,6 +256,9 @@ if not bash:
     sys.exit(0)
 with tempfile.TemporaryDirectory(prefix='remote-lead-shell-') as directory:
     root = pathlib.Path(directory)
+    notify = root / 'notify'
+    notify.write_bytes(runpy.run_path(sys.argv[1])['NOTIFY_SOURCE'].encode('utf-8'))
+    (root / 'terminal-wire.json').write_text(sys.argv[2], encoding='utf-8')
     stub = root / 'claude'
     stub.write_bytes('''#!/bin/sh
 IFS= read -r settings < "$2" || :
@@ -290,7 +298,7 @@ claude
                AGENTRIX_NOTIFY_FILE=(root/'notify').as_posix(), AGENTRIX_READING_NOTE_FILE=(root/'note').as_posix(),
                AGENTRIX_CLAUDE_LEAD_FILE=(root/'dispatch.json.lead').as_posix(), AGENTRIX_CLAUDE_BACKGROUND_FILE=(root/'policy').as_posix())
     result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', rc.as_posix()], cwd=directory,
-                            env=env, encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
+                            env=env, encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90 if sys.platform == 'win32' else 40)
     assert result.returncode == 0, result.stderr
     conversation = ['--model', 'sonnet', '--effort', 'high']
     assert [line.split('|') for line in result.stdout.splitlines() if line.startswith('values=')] == [
@@ -304,7 +312,7 @@ claude
     assert [line for line in result.stdout.splitlines() if line.startswith('settings=')] == [
         'settings=1|1', 'settings=1|1', 'settings=0|0', 'settings=0|0', 'settings=0|0', 'settings=0|0',
     ], result.stdout + result.stderr
-`, 50_000);
+`, process.platform === 'win32' ? 110_000 : 50_000);
   if (output?.includes('SKIP Bash missing')) t.skip('Bash missing');
 });
 

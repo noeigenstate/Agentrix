@@ -14,6 +14,7 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 
 ## Interface
 - `adapters` (`electron/features/cli-adapters/registry.cjs`) - main registry for install and runtime facets. `settingsInstall` binds locator snapshots and refreshes.
+- `terminalAdapters` (`electron/features/cli-adapters/terminal.cjs`) — launch argv, resume lines, note delivery and role server config. Also exports `claudeWire` for the SSH worker's Python 3.6 path.
 - `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared declarations for both processes. `agentOfModel(model)` uses the first matching manifest in either entry point.
 - `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version older than the capability's verified range is refused; a newer one is tried and flagged `unverified`.
 - `events` (`electron/features/cli-adapters/registry.cjs`) - optional settings builder and hook signal decoder.
@@ -41,5 +42,5 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - Each generic file matches its branch count during migration — test: `tests/cli-branch-guard.test.cjs` › "generic code matches its per-file CLI branch baseline"
 
 ## Not ours
-- CLI launch, protocol implementations and parsers — the runtime and screen modules
+- Running CLI processes, protocol implementations and parsers — the runtime and screen modules
 - Control visibility, disabled state and reason rendering — the caller's view

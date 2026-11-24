@@ -30,7 +30,7 @@ async function typedInPowerShell(t, folder, cases, { missing = false } = {}) {
   t.after(() => server.close());
   const bootstrap = path.join(root, 'bootstrap.json'), script = path.join(root, 'probe.ps1');
   fs.writeFileSync(bootstrap, JSON.stringify({ projectPath: root, projectId: 't', sessionKey: 'key', pipeName: server.name }));
-  const env = { ...isolatedEnvironment(root), AGENTRIX_BOOTSTRAP: bootstrap, ARGV_RECORDER_FILE: record, WRAPPER_CASES: JSON.stringify(cases),
+  const env = { ...isolatedEnvironment(root), AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_NODE: process.execPath, ARGV_RECORDER_FILE: record, WRAPPER_CASES: JSON.stringify(cases),
     PATH: folder + path.delimiter + process.env.PATH, PSModuleAnalysisCachePath: path.join(root, 'module-cache') };
   delete env.Path;
   // WRAPPERS_LOADED tells a probe killed by its timeout apart: stopped while loading, or inside a codex. Nothing is
@@ -61,28 +61,9 @@ async function recorderExecutable(t) {
 
 test('PowerShell native wrapper preserves empty and quoted argv and returns without an executable',
   { skip: process.platform !== 'win32', timeout: 15000 * timeoutScale }, async t => {
-    const root = fixture(t), script = path.join(root, 'wrapper.ps1');
-    const source = fs.readFileSync(path.join(integration, 'bootstrap.ps1'), 'utf8');
-    const begin = source.indexOf('function global:codex {');
-    // Windows PowerShell writes stdout in the console's code page (437 on an English system, 936 on a Chinese one), which
-    // cannot carry every argument: the request leaves as base64 of its UTF-8 JSON.
-    fs.writeFileSync(script, '\ufeff' + source.slice(begin, source.indexOf('\n# Claude Code reports each turn', begin)) + `
-function global:Send-AgentrixEvent {
-    param($Type, [string[]]$Arguments)
-    $request = @{ type=$Type; args=@($Arguments) } | ConvertTo-Json -Compress
-    Write-Output ('REQUEST=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($request)))
-}
-$values=ConvertFrom-Json $env:WRAPPER_ARGS
-codex @values
-Write-Output 'SHELL_RETURNED'
-`);
-    for (const args of [[], argv]) {
-      const result = await exec(powershell(), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
-        { env: { ...isolatedEnvironment(root), WRAPPER_ARGS: JSON.stringify(args) }, windowsHide: true, timeout: 5000 * timeoutScale });
-      assert.equal(result.stderr, ''); assert.match(result.stdout, /SHELL_RETURNED/);
-      const request = result.stdout.split(/\r?\n/).find(line => line.startsWith('REQUEST=')).slice(8);
-      assert.deepEqual(JSON.parse(Buffer.from(request, 'base64').toString()), { type: 'codex-started', args });
-    }
+    const typed = await typedInPowerShell(t, fixture(t), [[], argv].map(args => ({ args })), { missing: true });
+    assert.deepEqual(requests(typed.events), [[], argv]);
+    assert.deepEqual(typed.exits, [0, 0]);
   });
 
 test('PowerShell and the cmd shim request native Codex for every conversation form, preserve argv, return to the shell and never run its executable',
@@ -161,15 +142,17 @@ for (const kind of ['bash', 'zsh']) {
   // user's shell resolves codex to: the program, an alias with options, or nothing.
   async function typed(t, program, args) {
     const root = fixture(t), source = fs.readFileSync(path.join(integration, kind === 'bash' ? 'bash-integration.bash' : 'zsh-integration.zsh'), 'utf8').replace(/\r\n/g, '\n');
-    const begin = source.indexOf('__pg_codex_terminal() {'), wrapper = source.slice(begin, source.indexOf('\n# Claude Code reports each turn', begin));
+    const begin = source.indexOf('__pg_redirect_agent() {'), wrapper = source.slice(begin, source.indexOf('\n\n# Runs first', begin) < 0
+      ? source.indexOf('\n\n__pg_precmd', begin) : source.indexOf('\n\n# Runs first', begin));
     const jsonStart = source.indexOf('__pg_json() {'), jsonEnd = source.indexOf('\n}', jsonStart) + 2;
     const probe = path.join(root, 'probe.sh'), cli = path.join(root, 'stand-in-codex'), words = kind === 'bash' ? '__pg_words' : 'reply';
     fs.writeFileSync(cli, '#!/bin/sh\nfor word in "$@"; do printf \'RAN=%s\\n\' "$word"; done\nprintf \'RAN_END\\n\'\nexit 7\n', { mode: 0o755 });
-    fs.writeFileSync(probe, `${source.slice(jsonStart, jsonEnd)}\n${wrapper}\n` +
+    fs.writeFileSync(probe, `${source.slice(jsonStart, jsonEnd)}\n${wrapper}\n__pg_node="$PROBE_NODE"\n__pg_intercept="$PROBE_INTERCEPT"\n` +
       `__pg_program() { case $PROBE_PROGRAM in program) ${words}=("$PROBE_CLI");; alias) ${words}=("$PROBE_CLI" --model alias-model);; *) return 1;; esac; }\n` +
       `__pg_send() { printf 'REQUEST=%s\\n' "$6"; }\ncodex "$@"\nprintf 'STATUS=%s\\n' "$?"\n`);
     const result = await exec(shell, [kind === 'bash' ? '--noprofile' : '-f', ...(kind === 'bash' ? ['--norc'] : []), probe.replace(/\\/g, '/'), ...args],
-      { cwd: root, env: { ...process.env, PROBE_PROGRAM: program, PROBE_CLI: cli.replace(/\\/g, '/') }, windowsHide: true, timeout: 10000 * timeoutScale });
+      { cwd: root, env: { ...process.env, BASH_ENV: '', PROBE_PROGRAM: program, PROBE_CLI: cli.replace(/\\/g, '/'),
+        PROBE_NODE: process.execPath.replace(/\\/g, '/'), PROBE_INTERCEPT: path.join(integration, 'shims/intercept.cjs').replace(/\\/g, '/') }, windowsHide: true, timeout: 10000 * timeoutScale });
     const lines = result.stdout.split(/\r?\n/), request = lines.find(line => line.startsWith('REQUEST='));
     return { stdout: result.stdout, status: Number(lines.find(line => line.startsWith('STATUS=')).slice(7)), request: request ? JSON.parse(request.slice(8)) : null,
       ran: lines.includes('RAN_END') ? lines.filter(line => line.startsWith('RAN=')).map(line => line.slice(4)) : null };

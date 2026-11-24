@@ -96,6 +96,7 @@ const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccoun
   fetch: (url, options) => electronNet.fetch(url, options),
 }) });
 const { agentCommand } = require('./features/agents/agent-command.cjs');
+const { adapterOf } = require('./features/cli-adapters/registry.cjs');
 const { setThumbnailer, isGeneratedImage, setGeneratedPreview, setConversationTranslator } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
@@ -884,7 +885,8 @@ function onEvent(event, remote) {
   // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
   if (event.type === 'hook-channel') { reportHookChannel(s, event.command, event.sequence); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
-  if (event.type === 'codex-started' && event.agent !== 'claude') { void openCodexFromShell(project, s, event); return; }
+  const shellAdapter = event.type === 'codex-started' ? adapterOf(event.agent) ?? adapterOf('codex') : null;
+  if (shellAdapter?.terminal?.redirect === 'native') { void openCodexFromShell(project, s, event); return; }
   if (event.type === 'codex-exited' && event.agent !== 'claude') return;
   s.approval?.context('shell-event', [event.type, event.sequence]);
   if (event.type === 'shell-ready' || event.type === 'shell-prompt') {
@@ -905,14 +907,15 @@ function onEvent(event, remote) {
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
   } else if (event.type === 'codex-started') {
-    if (event.agent === 'claude') startHookLaunch(s, event.sequence);
+    const hookSession = shellAdapter?.terminal?.hookSession;
+    if (hookSession) startHookLaunch(s, event.sequence);
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
     s.needsInput = null;
     s.agentStarting = false;
     const restored = store.findTerminal(s.terminalId)?.record.restore;
-    const startingAgent = event.agent === 'claude' ? 'claude' : 'codex';
+    const startingAgent = shellAdapter.manifest.id;
     // A new CLI run must learn its own root before a received prompt can bind CLI state.
-    if (startingAgent === 'codex') s.rootThreadId = null;
+    if (!hookSession) s.rootThreadId = null;
     s.agentCwd = event.cwd || restored?.cwd || project.path;
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (restored?.codex !== true || (restored.agent || 'codex') !== startingAgent) readingHistory.close(s.terminalId);
@@ -924,7 +927,7 @@ function onEvent(event, remote) {
       readingHistory.close(s.terminalId);
       stopUsageAccount(s);
       s.ready = false; s.codexActive = true; s.status = 'codex'; s.error = null; s.codexActivity = 'unknown'; s.agentSettings = null; s.usage = null;
-      s.agent = event.agent === 'claude' ? 'claude' : 'codex';
+      s.agent = startingAgent;
       startSkillSession(project, s, event.sequence, false);
       s.activityMonitor?.stop(); s.activityMonitor = null; s.actions.reset(); s.conversation.reset(); s.promptQueue.reset();
       broadcast(); return;
@@ -934,7 +937,7 @@ function onEvent(event, remote) {
       void writeHandoff(handoffFile(s.terminalId), event.cwd || project.path, { memoryDir: memoryDir(), codexHome: event.codexHome || s.codexHome || undefined }).catch(() => {});
       void scrubProjectSkills(project).catch(() => {});
     } else void sshHandoff(project, s).catch(() => {});
-    const claudeResumeId = event.agent === 'claude' ? s.claudeResumeId : null;
+    const claudeResumeId = hookSession ? s.claudeResumeId : null;
     const keepClaudeHistory = claudeResumeId && s.claudeSessionId === claudeResumeId && s.claudeTranscript;
     if (!keepClaudeHistory) s.claudeSessionId = null;
     s.ready = false;
@@ -952,7 +955,7 @@ function onEvent(event, remote) {
     s.activityClockOffset = Number.isFinite(event.sentAt) ? s.activitySince - event.sentAt : 0;
     if (!keepClaudeHistory) { s.actions.reset(); s.conversation.reset(); s.claudeTranscript = null; s.claudeSessionId = null; }
     s.promptQueue.reset();
-    s.agent = event.agent === 'claude' ? 'claude' : 'codex';
+    s.agent = startingAgent;
     startSkillSession(project, s, event.sequence);
     if (!keepClaudeHistory) { s.activityMonitor?.stop(); s.activityMonitor = null; }
     if (!keepClaudeHistory || !s.usage) startUsage(project, s, event);
@@ -960,7 +963,7 @@ function onEvent(event, remote) {
     // A terminal restores the agent it last ran. Switching agents drops the other one's conversation id.
     const previousAgent = store.findTerminal(s.terminalId)?.record.restore?.agent || 'codex';
     const agentRestore = { agent: s.agent, ...(previousAgent !== s.agent ? { threadId: null, interrupted: false } : {}) };
-    if (s.agent === 'claude') {
+    if (hookSession) {
       // Claude reports turns and its session id through hooks (claudeActivity).
       store.setRestore(s.terminalId, { terminal: true, codex: true, cwd: event.cwd, ...agentRestore });
       s.claudeResumeId = null;
@@ -1136,14 +1139,15 @@ function roleEnded(s, project, event) {
 // with the owner's next prompt (hook-response.cjs), and a switch back before that prompt leaves nothing to tell.
 function tellMode(s, project) {
   const text = skills.modeNote(project, s.sessionId, s.agent);
-  if (!s.nativeStructured) { s.modeNote = s.agent === 'claude' && !s.modeNote ? text : null; return; }
-  if (s.nativeRuntimeSessionId) nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: randomUUID(), text }).catch(report);
+  const delivery = (adapterOf(s.agent) ?? adapterOf('codex')).notes.message(text, { native: s.nativeStructured });
+  if (!s.nativeStructured) { s.modeNote = delivery.hook && !s.modeNote ? text : null; return; }
+  if (s.nativeRuntimeSessionId) nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: randomUUID(), text: delivery.send }).catch(report);
 }
 
 function tellRemoteRouting(s, project, remote, modeChanged) {
   if (!s.codexActive) return;
   if (s.nativeStructured) { if (modeChanged) tellMode(s, project); return; }
-  if (s.agent !== 'claude') return;
+  if (!adapterOf(s.agent)?.notes.message(null).hook) return;
   const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
   const mode = modeChanged ? skills.modeNote(project, s.sessionId, s.agent) : null;
   if (!mode && !change) return;

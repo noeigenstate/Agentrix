@@ -12,10 +12,13 @@ The MCP command carries the lead provider and, for a Claude terminal with a save
 - `shimWords` (`integration/shims/intercept.cjs`) — what withShims changes, as env(1) words; the terminal wrappers start their Claude Code with them (`intercept.cjs --shim-env`).
 - `roleToolArgs` (`integration/shims/intercept.cjs`) — the arguments that attach the role-tool server (`dispatch.cjs mcp`) to a lead's conversation, with the planner environment for the server; for Claude Code one word (`--mcp-config=<json>`), so a prompt after it stays the prompt. intercept puts them before a planner's own conversation call, and the terminal wrappers get them in the same answer as the planner's words (`intercept.cjs --shim-env [json] --role-tools <agent> <the user's arguments>`, after a `--` word; the request may come in AGENTRIX_INTERCEPT_ARGV): none for a delegation (print mode, codex exec) or a call that opens no conversation, by intercept's own rule. Bash, zsh and PowerShell executable launches pass the inline word. PowerShell launches of .cmd and .ps1 use `--mcp-config=<file>` and clean up the per-launch config. A failed request leaves the launch as it was.
 - `runtimeFiles` (`integration/shims/intercept.cjs`) — the Node-only intercept module and a CJS envelope of the six source launchers and marker; shimFiles reads the same source assets for packaging.
+- `terminalLaunch` (`integration/shims/intercept.cjs`) — `--launch` classifies terminal calls and returns environment words and argv. The envelope carries the adapters for packaged and SSH runs.
 - `hookFiles` (`integration/shims/intercept.cjs`) — the start-up hooks (BASH_ENV, CLAUDE_ENV_FILE, zsh ZDOTDIR stubs) the packaged app installs beside the launchers; a session gets its own copy of the CLAUDE_ENV_FILE hook (bootstrap-file.cjs).
 
 ## May import
 - `integration/dispatch.cjs` (the helper's public run function and its CLI locators)
+- `electron/features/cli-adapters/registry.mjs` (source manifests)
+- `electron/features/cli-adapters/terminal.cjs` (terminal facets)
 
 ## Invariants
 - Shell delegation runs on the real CLI in native mode and is refused with exit code 2 in conductor mode. Interactive planner conversations get the role tools in both modes — test: `tests/dispatch-intercept.test.cjs` › "native mode runs a delegation on the real CLI and conductor mode refuses it; an interactive lead gets the role tools in both"

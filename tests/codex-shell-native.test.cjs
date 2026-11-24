@@ -41,7 +41,7 @@ function host(kind = 'local') {
   const starts = [], sent = [], launches = [], warnings = [], project = { id: 'p', kind, path: kind === 'ssh' ? '/remote/project' : path.resolve('project') };
   const session = { terminalId: 't', projectId: 'p', sessionKey: 'key', chunks: [], bytes: 0, pending: '', flush() { warnings.push(this.pending); this.pending = ''; } };
   const sessions = new Map([['t', session]]);
-  const context = vm.createContext({ path, require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return { codexLaunch }; }, randomUUID: () => 'message-id', codexLaunch, sessions,
+  const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, path, require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return { codexLaunch }; }, randomUUID: () => 'message-id', codexLaunch, sessions,
     nativeSessions: { start: async (...args) => { starts.push(args); return { runtimeSessionId: 'runtime' }; }, send: async (...args) => { sent.push(args); } },
     launchPlans: { delete: id => launches.push(id) }, restorePlans: { delete() {} }, broadcast() {},
     quitting: false, store: { projects: [project], findTerminal: () => ({ record: {} }) }, startupErrors: new Map(), acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent,

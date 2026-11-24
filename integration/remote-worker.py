@@ -301,6 +301,47 @@ def live_seats():
                     return seat_map(source.read(8193).decode("utf-8"))
         except (OSError, UnicodeError): pass
     return None
+def terminal_launch(agent, action, *args):
+    # A terminal can run without Node. Interpret the same manifest and argv layout sent with the intercept module.
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "terminal-wire.json"), encoding="utf-8") as source:
+        wire = json.load(source)
+    words = wire["words"][agent]
+    layout = wire.get(agent)
+    if action == "classify":
+        first = args[0] if args else None
+        if layout is None:
+            print("passthrough" if first in words["utilities"] else "native")
+            return
+        options = args[:args.index("--")] if "--" in args else args
+        if any(word.split("=", 1)[0] in layout["overrides"] for word in options):
+            print("refused")
+        elif first in words["subcommands"] or any(word in words["versionHelp"] for word in options):
+            print("utility")
+        elif any(word in words["print"] for word in options):
+            print("print")
+        else:
+            print("conversation")
+        return
+    fields = {key: os.environ.get("AGENTRIX_LAUNCH_" + key.upper()) for key in layout["flags"]}
+    note = fields["note"] or ""
+    marker = layout["note"]["marker"]
+    if marker in note: note = note.split(marker, 1)[0] + layout["note"]["suffix"]
+    error = os.environ.get("AGENTRIX_LAUNCH_ROLE_ERROR")
+    if error and error not in note: note = error + (" " + note if note else "")
+    if note: fields["note"] = note
+    role = os.environ.get("AGENTRIX_LAUNCH_ROLE")
+    words = ["--"]
+    for field in layout["remoteOrder"]:
+        if field == "roleTools":
+            if role: words.append(role)
+        elif fields[field]:
+            words.extend([layout["flags"][field], fields[field]])
+    sys.stdout.buffer.write(("".join(word + "\0" for word in words)).encode("utf-8"))
+
+if sys.argv[1:2] == ["terminal-launch"]:
+    terminal_launch(*sys.argv[2:])
+    sys.exit(0)
+
 try:
     mode=sys.argv[1]
     event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
@@ -405,6 +446,8 @@ __pg_note=$AGENTRIX_READING_NOTE; unset AGENTRIX_READING_NOTE
 __pg_note_file=$AGENTRIX_READING_NOTE_FILE; unset AGENTRIX_READING_NOTE_FILE
 __pg_role_tools=$AGENTRIX_ROLE_TOOLS; unset AGENTRIX_ROLE_TOOLS
 __pg_role_error=$AGENTRIX_ROLE_ERROR; unset AGENTRIX_ROLE_ERROR
+__pg_role_node=$AGENTRIX_ROLE_NODE; unset AGENTRIX_ROLE_NODE
+__pg_role_intercept=$AGENTRIX_ROLE_INTERCEPT; unset AGENTRIX_ROLE_INTERCEPT
 __pg_reading_note() { if [ -r "$__pg_note_file" ]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi; }
 unalias codex 2>/dev/null || true
 unalias claude 2>/dev/null || true
@@ -412,53 +455,52 @@ __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
 # The first word given to an agent when it is a subcommand or an option (update, --version): Agentrix tells such a run
 # from a conversation by it. Anything else is not sent.
 __pg_command() { local pattern='^-{0,2}[A-Za-z][A-Za-z-]{0,23}$'; [[ ${1-} =~ $pattern ]] && printf '%s' "$1"; return 0; }
-# The Codex CLI's own management runs (codex --help, checked against 0.167.0) start no conversation and run in this
-# terminal; everything else opens in native mode. The local shell integrations carry the same words.
-__pg_codex_terminal() { case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|migrate-rollouts|migrate-nfs-db|exec-server|features) return 0;; esac; return 1; }
-function codex {
-    local executable arguments
-    if __pg_codex_terminal "${1-}"; then
-        executable=$(type -P codex)
+# Both terminal entrypoints ask the same transported CLI definition.
+function agentrix_agent {
+    local agent=$1; shift
+    local executable arguments route
+    route=$(__pg_launch_plan "$agent" classify "$@") || return
+    case $route in
+        native)
+            arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
+            __pg_emit codex-started '' "$agent" "$arguments"
+            printf '%s\n' '已请求在原生模式打开 Codex。'
+            return 0;;
+        refused)
+            printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2
+            return 2;;
+    esac
+    executable=$(type -P "$agent")
+    if [[ $route == passthrough ]]; then
         if [ -z "$executable" ]; then printf 'Codex CLI was not found on this SSH host.\n'; return 127; fi
         "$executable" "$@"
         return
     fi
-    arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
-    __pg_emit codex-started '' codex "$arguments"
-    printf '%s\n' '已请求在原生模式打开 Codex。'
-    return 0
+    __pg_hook_agent "$agent" "$route" "$executable" "$@"
 }
-function claude {
-    local executable result settings word conversation=1 print_mode=0
-    case ${1-} in
-        auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade) conversation=0;;
-    esac
-    for word in "$@"; do
-        case $word in
-            --) break;;
-            --model|--model=*|--effort|--effort=*) printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2;;
-            -p|--print) print_mode=1;;
-            --version|-v|-V|--help|-h) conversation=0;;
-        esac
-    done
-    executable=$(type -P claude)
+function codex { agentrix_agent codex "$@"; }
+function claude { agentrix_agent claude "$@"; }
+__pg_hook_agent() {
+    local agent=$1 route=$2 executable=$3; shift 3
+    local result settings word
     if [ -z "$executable" ]; then printf 'Claude Code CLI was not found on this SSH host.\n'; return 127; fi
     local model effort seat_fast seat_map ultracode legacy_seats fast=0 ultra=0
     local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-    local -a lead_args=()
-    if [[ $conversation == 1 && -r ${AGENTRIX_CLAUDE_LEAD_FILE-} ]] &&
+    local seat_valid=0
+    if [[ $route != utility && -r ${AGENTRIX_CLAUDE_LEAD_FILE-} ]] &&
         { IFS= read -r model && IFS= read -r effort && IFS= read -r seat_fast && {
             # Old files put the seat map on line 6, after two retired fields.
             IFS= read -r seat_map || :
             if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
         }; } < "$AGENTRIX_CLAUDE_LEAD_FILE" &&
         [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $seat_fast == 0 || $seat_fast == 1 ) ]]; then
-        lead_args=(--model "$model" --effort "$effort")
+        seat_valid=1
         fast=$seat_fast
         [[ $ultracode == ultracode ]] && ultra=1
     fi
     [[ ${seat_map-} == \{* ]] || seat_map=null
-    __pg_emit codex-started "$(__pg_command "$@")" claude
+    [[ $seat_valid == 1 ]] || { model=; effort=; }
+    __pg_emit codex-started "$(__pg_command "$@")" "$agent"
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
     settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" "$ultra" <<'PY'
 import json,shlex,sys
@@ -474,18 +516,11 @@ if sys.argv[3]=="1": settings["ultracode"]=True
 print(json.dumps(settings))
 PY
     )
-    local -a note=() role_tools=()
-    local current_note=$(__pg_reading_note)
-    if [[ $current_note == *" Agentrix skill delivery: "* ]]; then
-        current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
+    local role_tools= role_error= current_note=$(__pg_reading_note)
+    if [[ $route == conversation ]] && [[ $(cat "${AGENTRIX_CLAUDE_LEAD_FILE%/*}/dispatch.json.mode" 2>/dev/null) == conductor ]]; then
+        if [[ -n $__pg_role_tools ]]; then role_tools=$__pg_role_tools
+        else role_error=$__pg_role_error; fi
     fi
-    if [[ $conversation == 1 && $print_mode == 0 ]] && [[ $(cat "${AGENTRIX_CLAUDE_LEAD_FILE%/*}/dispatch.json.mode" 2>/dev/null) == conductor ]]; then
-        if [[ -n $__pg_role_tools ]]; then role_tools=("$__pg_role_tools");
-        elif [[ -n $__pg_role_error && $current_note != *"$__pg_role_error"* ]]; then
-            current_note="$__pg_role_error${current_note:+ $current_note}"
-        fi
-    fi
-    [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
     local settings_file
     settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX") || return 1
     printf '%s' "$settings" > "$settings_file"
@@ -493,13 +528,30 @@ PY
     local -a background=(-u CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
     allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
     [[ $allowed == 1 ]] || background+=(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1)
-    command env "${background[@]}" AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
-        "$executable" --settings "$settings_file" ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} ${role_tools[@]+"${role_tools[@]}"} "$@"
-    result=$?
+    local -a launch_args=()
+    local reading_args=
+    while IFS= read -r -d '' word; do
+        if [[ -n $reading_args ]]; then launch_args+=("$word"); elif [[ $word == -- ]]; then reading_args=1; fi
+    done < <(AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" AGENTRIX_LAUNCH_NOTE="$current_note" \
+        AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_LAUNCH_ROLE="$role_tools" AGENTRIX_LAUNCH_ROLE_ERROR="$role_error" __pg_launch_plan "$agent" words)
+    result=1
+    if [[ -n $reading_args ]]; then
+        command env "${background[@]}" AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+            "$executable" "${launch_args[@]}" "$@"
+        result=$?
+    fi
     rm -f -- "$settings_file"
-    __pg_emit codex-exited "$result" claude
+    __pg_emit codex-exited "$result" "$agent"
     return "$result"
 }
+__pg_launch_plan() {
+    local agent=$1 action=$2; shift 2
+    if [[ -n $__pg_role_node && -n $__pg_role_intercept ]]; then
+        "$__pg_role_node" "$__pg_role_intercept" --launch "$agent" "$action" remote "$@" && return
+    fi
+    "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" terminal-launch "$agent" "$action" "$@"
+}
+
 __pg_prompt() {
     local result=$? available=0 claude_available=0
     if type -P codex >/dev/null; then available=1; fi
@@ -2067,6 +2119,11 @@ class Worker:
         os.chmod(os.path.join(self.temp, "skill-note.txt"), 0o600)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
+        modules = getattr(self, "dispatch_modules", None)
+        envelope = modules.get("shims/launchers.cjs", "") if isinstance(modules, dict) else ""
+        prefix = "const terminalWire = "
+        wire = json.loads(envelope.partition("\n")[0][len(prefix):-1]) if envelope.startswith(prefix) else {}
+        if wire: self.write_routing_file("terminal-wire.json", json.dumps(wire))
         for filename, content in ((notify_file, NOTIFY_SOURCE), (rc_file, BASH_SOURCE)):
             with open(filename, "w", encoding="utf-8") as target: target.write(content)
             os.chmod(filename, 0o600)
@@ -2082,9 +2139,13 @@ class Worker:
         env["AGENTRIX_SEATS"] = encoded if native else "null"
         if self.dispatch_server:
             env["AGENTRIX_BOOTSTRAP"] = self.dispatch_server["env"]["AGENTRIX_BOOTSTRAP"]
-            if not native:
-                server = dict(self.role_server("claude"), type="stdio")
-                env["AGENTRIX_ROLE_TOOLS"] = "--mcp-config=" + json.dumps({"mcpServers": {"agentrix": server}}, separators=(",", ":"))
+            if not native and wire:
+                role = wire["claude"]["roleTools"]
+                server = dict(self.role_server("claude"))
+                server["type"] = role["type"]
+                env["AGENTRIX_ROLE_TOOLS"] = role["prefix"] + json.dumps({role["table"]: {role["name"]: server}}, separators=(",", ":"))
+                env["AGENTRIX_ROLE_NODE"] = server["command"]
+                env["AGENTRIX_ROLE_INTERCEPT"] = os.path.join(os.path.dirname(server["args"][0]), "electron", "shims", "intercept.cjs")
         elif self.dispatch_error and not native: env["AGENTRIX_ROLE_ERROR"] = self.dispatch_error
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note

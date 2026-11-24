@@ -140,6 +140,8 @@ $global:sent = @()
 function global:Send-AgentrixEvent { param([string]$Type, [int]$ExitCode = 0, [string]$Agent = 'codex', [string]$Command = '') $global:sent += "$Type|$Command" }
 $global:AgentrixSession = @{ hooks = (${psQuote(JSON.stringify(hooks))} | ConvertFrom-Json) }
 $global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand = ${psQuote(launcher)}
+$global:AgentrixNode = ${psQuote(process.execPath)}
+$global:AgentrixIntercept = ${psQuote(path.join(integration, 'shims/intercept.cjs'))}
 foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY')) { [Environment]::SetEnvironmentVariable($name, $null) }
 $plain = claude
 $env:HTTP_PROXY = 'http://proxy:1'

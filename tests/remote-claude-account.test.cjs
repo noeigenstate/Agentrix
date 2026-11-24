@@ -141,7 +141,7 @@ test('resuming SSH Claude rebinds its quota poller while preserving the existing
   const session = { terminalId: 't', projectId: project.id, sessionKey: 'fixture', agent: 'claude', usage,
     claudeResumeId: 'same-session', claudeSessionId: 'same-session', claudeTranscript: {}, submissions: { reset() {} }, promptQueue: { reset() {} } };
   let rebound = 0;
-  const context = vm.createContext({ sessions: new Map([[project.id, session], ['t', session]]), project, session,
+  const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, sessions: new Map([[project.id, session], ['t', session]]), project, session,
     store: { projects: [project], findTerminal: () => ({ record: { restore: { codex: true, agent: 'claude', cwd: project.path } } }), setRestore() {} },
     acceptShellEvent: () => true, startHookLaunch() {}, agentCommand: () => null, sshHandoff: async () => {}, prepareReading: async () => {}, startSkillSession() {}, broadcast() {},
     startUsage() { assert.fail('resume must retain its conversation totals'); }, followClaudeSession: async () => {},

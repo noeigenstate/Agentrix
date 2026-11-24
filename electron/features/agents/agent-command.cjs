@@ -1,9 +1,8 @@
-// Claude's terminal-only utility commands. Codex shell commands request a
-// native app-server session instead, using codexLaunch below.
-const COMMANDS = {
-  claude: ['update', 'upgrade', 'install', 'migrate-installer', 'doctor', 'mcp', 'config', 'plugin', 'setup-token', 'login', 'logout', 'auth',
-    '--version', '-v', '-V', '--help', '-h', '-p', '--print'],
-};
+const path = require('node:path');
+
+// The portable helper uses the routing predicates alone. Resolve the registry only for terminal commands in main.
+const terminalOf = agent => require(path.join(__dirname, '../cli-adapters/registry.cjs')).adapterOf(agent)?.terminal;
+
 const ROUTING_MESSAGE = '模型由模型路由决定，请在模型路由中更改。';
 const routingCommand = name => ['model', 'effort', 'fast'].includes(name);
 const routingText = text => typeof text === 'string' && /^\/(?:model|effort|fast)(?:\s|$)/.test(text.trim());
@@ -12,43 +11,10 @@ const routingOwned = () => Object.assign(new Error(ROUTING_MESSAGE), { code: 'ro
 
 // The command when this run is one of these, else null (a conversation, new or resumed).
 function agentCommand(agent, word) {
-  if (agent !== 'claude') return null;
   if (typeof word !== 'string' || !/^-{0,2}[A-Za-z][A-Za-z-]{0,23}$/.test(word)) return null;
-  return COMMANDS.claude.includes(word) ? word : null;
+  return terminalOf(agent)?.command?.(word) ?? null;
 }
 
-// This is a request from Agentrix's authenticated shell wrapper, not an argv
-// escape hatch into app-server. Reject unsupported semantics without echoing
-// possible credentials or quietly changing what the owner asked to run.
-function codexLaunch(args) {
-  const fail = () => { throw new Error('Agentrix 内的 Codex 仅使用原生模式；此命令或参数暂不支持，请在软件外的终端运行。'); };
-  if (!Array.isArray(args) || args.length > 64 || args.some(value => typeof value !== 'string' || value.includes('\0')) || JSON.stringify(args).length > 32768) fail();
-  const result = { resume: false }, seen = new Set();
-  const set = (key, value) => { if (seen.has(key) || !value) fail(); seen.add(key); result[key] = value; };
-  const commands = new Set(['update', 'upgrade', 'login', 'logout', 'mcp', 'mcp-server', 'app-server', 'app', 'completion', 'debug', 'apply', 'a', 'exec', 'e', 'review', 'sandbox', 'cloud', 'features', 'doctor', 'help', 'fork', 'agents', 'queue', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'exec-server', 'remote-control', 'plugin']);
-  for (let i = 0; i < args.length; i++) {
-    const word = args[i], equals = word.indexOf('='), option = equals < 0 ? word : word.slice(0, equals);
-    const value = () => equals < 0 ? args[++i] : word.slice(equals + 1);
-    if (word === 'resume' && !seen.has('prompt')) {
-      if (result.resume) fail();
-      result.resume = true;
-      const identity = args[++i];
-      if (identity === '--last') result.latest = true;
-      else {
-        if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(identity || '')) fail();
-        result.providerSessionId = identity;
-      }
-    } else if (['-m', '--model'].includes(option)) {
-      throw routingOwned();
-    } else if (['-C', '--cd'].includes(option)) set('cwd', value());
-    else if (['-c', '--config'].includes(option)) {
-      if (/^\s*(model|model_reasoning_effort|service_tier)\s*=/.test(value() || '')) throw routingOwned();
-      fail();
-    } else if (word === '--') { if (i !== args.length - 2) fail(); set('prompt', args[++i]); }
-    else { if (word.startsWith('-') || commands.has(word)) fail(); set('prompt', word); }
-  }
-  if (result.cwd?.length > 4096) fail();
-  return result;
-}
+const codexLaunch = args => terminalOf('codex').launch(args, routingOwned);
 
 module.exports = { agentCommand, codexLaunch, routingCommand, routingText, routingPatch, routingOwned };

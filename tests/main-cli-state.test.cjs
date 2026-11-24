@@ -17,7 +17,8 @@ function fixture(agent = 'claude') {
     claudeSessionId: agent === 'claude' ? 'provider' : null, reportedThreadId: agent === 'codex' ? 'provider' : null,
     promptQueue: { finish() {}, list: () => [] }, actions: { settle() {} }, conversation: { settle() {}, list: [] },
     completionWork: { begin() { beginnings++; }, end() {}, state: snapshot => snapshot.state } };
-  const context = vm.createContext({ sessions: new Map([['t', s]]), Date: class extends Date { static now() { return now; } },
+  const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf,
+    sessions: new Map([['t', s]]), Date: class extends Date { static now() { return now; } },
     broadcast() { frames.push(s.cliState && { ...s.cliState }); }, scheduleState: () => assert.fail('CLI transitions must not schedule delayed state'),
     store: { projects: [project], setRestore() {}, expectCompletion(_id, value = true) { armed = value; }, complete() { if (!armed) return false; armed = false; return true; } },
     notifyCompletion() { notifications++; }, summarizeTask: () => '', isLocalAgentCommand: require('../electron/agent-commands.cjs').isLocalAgentCommand,

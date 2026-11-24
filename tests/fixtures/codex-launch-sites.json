@@ -32,6 +32,10 @@
     "id": "electron/desktop-glass.cjs:6013ca9de11ec4856ca2f2a7"
   },
   {
+    "text": "terminalOf('codex').launch(args, routingOwned)",
+    "id": "electron/features/agents/agent-command.cjs:1757921ca476a5deacfe07e9"
+  },
+  {
     "text": "resolveExecutable(env)",
     "id": "electron/features/agents/codex-account-usage.cjs:3a908719d731205401b693b4"
   },
@@ -540,16 +544,16 @@
     "id": "integration/role-tools.cjs:669d626e704a02e1d4510d8c"
   },
   {
-    "text": "['exec', 'e']",
-    "id": "integration/shims/intercept.cjs:7c8ee6260251bd5d8fc1689a"
-  },
-  {
     "text": "launch(file, args, { cwd, env: childEnv, stdio: 'inherit' })",
     "id": "integration/shims/intercept.cjs:ed652fa68a572023f96c2fe3"
   },
   {
     "text": "stderr.write('[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell\\n')",
     "id": "integration/shims/intercept.cjs:95cbe4e67d000ee4c67a4da6"
+  },
+  {
+    "text": "terminal.launch({ ...plan, seat: { model, effort }, note, roleError: remote ? roleError : undefined, hooks: { file }, remote })",
+    "id": "integration/shims/intercept.cjs:8e11bb0abfd74ba577917389"
   },
   {
     "text": "run()",

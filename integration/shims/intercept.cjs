@@ -7,15 +7,29 @@ const { spawn } = require('node:child_process');
 const SHIM_NAMES = ['.agentrix-shims', 'codex', 'codex.cmd', 'codex.ps1', 'claude', 'claude.cmd', 'claude.ps1'];
 const ZSH_PHASES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'];
 const HOOK_FILES = ['hooks/path.sh', 'hooks/bash-env.sh', 'hooks/claude-env.sh', 'hooks/owner.sh', 'hooks/zsh/phase.zsh', ...ZSH_PHASES.map(name => `hooks/zsh/${name}`)];
-// The CLIs' own runs that only print: a worker may still run them.
-const HARMLESS = { codex: ['--version', '-V', '--help', '-h', 'help'], claude: ['--version', '-v', '--help', '-h'] };
-// Codex's root options that take a value (codex --help, 0.169.0), so the subcommand after them can be found.
-const CODEX_ROOT_VALUES = new Set(['-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env', '-i', '--image', '-m', '--model',
-  '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval']);
+const sourceAdapters = path.resolve(__dirname, '../../electron/features/cli-adapters');
+const terminalSource = path.join(sourceAdapters, 'terminal.cjs');
+
+function sourceWords() {
+  const { adapters } = require(path.join(sourceAdapters, 'registry.mjs'));
+  return Object.fromEntries(adapters().map(({ manifest }) => [manifest.id, manifest.words]));
+}
+
+let facets;
+function carriedEnvelope() {
+  const packaged = path.resolve(__dirname, '../electron/shims/launchers.cjs');
+  return fs.existsSync(packaged) ? packaged : path.join(__dirname, 'launchers.cjs');
+}
+
+function terminalFacets() {
+  if (facets) return facets;
+  if (fs.existsSync(terminalSource)) return facets = require(terminalSource).terminalAdapters(sourceWords());
+  return facets = require(carriedEnvelope()).terminal;
+}
 
 function shimFiles() {
   // The SSH carrier accepts CJS modules only. Its launcher envelope is the same files, never a second implementation.
-  if (!fs.existsSync(path.join(__dirname, 'codex'))) return require('./launchers.cjs');
+  if (!fs.existsSync(path.join(__dirname, 'codex'))) return require(carriedEnvelope());
   return Object.fromEntries(SHIM_NAMES.map(name => [name, fs.readFileSync(path.join(__dirname, name), 'utf8')]));
 }
 
@@ -23,8 +37,21 @@ function shimFiles() {
 function hookFiles() { return Object.fromEntries(HOOK_FILES.map(name => [name, fs.readFileSync(path.join(__dirname, name), 'utf8')])); }
 
 function runtimeFiles() {
-  return { 'shims/intercept.cjs': fs.readFileSync(__filename, 'utf8'),
-    'shims/launchers.cjs': `module.exports = ${JSON.stringify(shimFiles())};\n` };
+  const intercept = fs.readFileSync(__filename, 'utf8');
+  if (!fs.existsSync(terminalSource)) return { 'shims/intercept.cjs': intercept, 'shims/launchers.cjs': fs.readFileSync(carriedEnvelope(), 'utf8') };
+  const words = sourceWords(), source = fs.readFileSync(terminalSource, 'utf8');
+  const { claudeWire } = require(terminalSource);
+  const envelope = [
+    'const terminalWire = ' + JSON.stringify({ words, claude: claudeWire }) + ';',
+    'const terminalModule = { exports: {} };',
+    '(function (module) {',
+    source,
+    '})(terminalModule);',
+    'module.exports = ' + JSON.stringify(shimFiles()) + ';',
+    'Object.defineProperty(module.exports, "terminal", { value: terminalModule.exports.terminalAdapters(terminalWire.words) });',
+    '',
+  ].join('\n');
+  return { 'shims/intercept.cjs': intercept, 'shims/launchers.cjs': envelope };
 }
 
 // A folder as a POSIX shell names it: Git Bash spells C:\x as /c/x.
@@ -87,28 +114,6 @@ function claudeLaunchEnvironment(source) {
   return next;
 }
 
-// The Codex subcommand after the root options, and those options.
-function codexCommand(argv) {
-  let index = 0;
-  while (index < argv.length && /^-./.test(argv[index]) && argv[index] !== '--') index += !argv[index].includes('=') && CODEX_ROOT_VALUES.has(argv[index]) ? 2 : 1;
-  return { leading: argv.slice(0, index), command: argv[index], rest: argv.slice(index + 1) };
-}
-
-// A planner's delegation: codex exec (alias e), or Claude Code's print mode.
-function delegates(agent, argv) {
-  if (agent === 'codex') return ['exec', 'e'].includes(codexCommand(argv).command);
-  const end = argv.indexOf('--');
-  return (end < 0 ? argv : argv.slice(0, end)).some(token => token === '-p' || token === '--print');
-}
-
-// A call that opens the conversation itself: no version or help word, and no subcommand but Codex's resume and fork. A
-// first word with spaces is the prompt; any other bare first word is taken as a subcommand, whatever the CLI version.
-function converses(agent, argv) {
-  if (argv.some(token => HARMLESS[agent].includes(token))) return false;
-  const first = agent === 'codex' ? codexCommand(argv).command : argv[0];
-  return first === undefined || /\s/.test(first) || (agent === 'codex' ? ['resume', 'fork'].includes(first) : first.startsWith('-'));
-}
-
 function helperPath() {
   // Local source/packaged shims are beside dispatch.cjs; a carried shim module is under electron/shims.
   return path.resolve(__dirname, fs.existsSync(path.join(__dirname, '../dispatch.cjs')) ? '../dispatch.cjs' : '../../dispatch.cjs');
@@ -124,8 +129,9 @@ const sessionMode = env => { try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP
 // session started in native mode has them when the owner switches it to conductor mode.
 function roleToolArgs(agent, env) {
   const helper = helperPath(), command = env.AGENTRIX_SHIM_NODE || process.execPath;
+  const roleTools = terminalFacets()[agent].roleTools;
   let lead;
-  if (agent === 'claude') {
+  if (roleTools.lead) {
     try {
       const installed = path.join(path.dirname(helper), 'electron');
       const runtime = fs.existsSync(installed) ? installed : path.resolve(path.dirname(helper), '../electron');
@@ -138,11 +144,7 @@ function roleToolArgs(agent, env) {
   const args = [helper, 'mcp', agent, ...(lead ? [lead.model, lead.effort] : [])];
   const serverEnv = { ELECTRON_RUN_AS_NODE: '1', ...Object.fromEntries(Object.entries(env)
     .filter(([name]) => /^(AGENTRIX_(BOOTSTRAP|SEATS|DISPATCH_DEPTH|SHIMS|SHIM_NODE)|CODEX_HOME)$/.test(name))) };
-  // One word: --mcp-config takes several values, and as a word of its own it would take the user's prompt for another.
-  if (agent === 'claude') return ['--mcp-config=' + JSON.stringify({ mcpServers: { agentrix: { type: 'stdio', command, args, env: serverEnv } } })];
-  const toml = value => JSON.stringify(value);
-  return ['-c', `mcp_servers.agentrix.command=${toml(command)}`, '-c', `mcp_servers.agentrix.args=${toml(args)}`,
-    '-c', `mcp_servers.agentrix.env={${Object.entries(serverEnv).map(([name, value]) => `${name}=${toml(value)}`).join(', ')}}`];
+  return roleTools.args({ command, args, env: serverEnv });
 }
 
 // Not a delegation: the real CLI, found outside the shim folder, runs with this process's streams and its exit status.
@@ -164,30 +166,45 @@ async function passThrough(agent, args, { env, cwd, stderr, locate, launch }) {
 
 async function intercept(argv, { env = process.env, cwd = process.cwd(), stderr = process.stderr, locate = locateCli, launch = spawn } = {}) {
   const [agent, ...rest] = argv, args = rest[0] === '--' ? rest.slice(1) : rest;
-  if (!planner(env)) {
-    if (args.length === 1 && HARMLESS[agent]?.includes(args[0])) return passThrough(agent, args, { env, cwd, stderr, locate, launch });
+  const adapter = Object.hasOwn(terminalFacets(), agent) ? terminalFacets()[agent] : null;
+  if (!planner(env) || !adapter) {
+    if (args.length === 1 && adapter?.words.harmless.includes(args[0])) return passThrough(agent, args, { env, cwd, stderr, locate, launch });
     stderr.write('[agentrix] not run: a role cannot start another role\n');
     return 2;
   }
-  const conductor = sessionMode(env) === 'conductor';
-  if (conductor && delegates(agent, args)) {
+  const { delegates, converses } = adapter.terminal;
+  const delegation = delegates(args);
+  if (sessionMode(env) === 'conductor' && delegation) {
     stderr.write('[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell\n');
     return 2;
   }
   // Native mode runs a delegation on the real CLI, as it was before Agentrix; a lead's conversation gets the role tools in both modes.
-  return passThrough(agent, converses(agent, args) && !delegates(agent, args) ? [...roleToolArgs(agent, env), ...args] : args, { env, cwd, stderr, locate, launch });
+  return passThrough(agent, converses(args) && !delegation ? [...roleToolArgs(agent, env), ...args] : args, { env, cwd, stderr, locate, launch });
 }
 
-// What an owner's wrapper starts its CLI with, from one request: the planner's env(1) words, a "--" word, then the arguments
-// that give the planner's conversation the role tools, whose server runs with that same environment. A delegation and a
-// call that opens no conversation get none, by the rule intercept follows.
-function launchWords(source, agent, args) {
+// Both terminal protocols give the MCP server the same environment as its planner.
+function plannerLaunch(source, agent, args) {
   const next = withShims(claudeLaunchEnvironment(source), { depth: 0 });
-  const tools = planner(next) && Object.hasOwn(HARMLESS, agent) && converses(agent, args) && !delegates(agent, args);
-  return [...envWords(source, next), '--', ...(tools ? roleToolArgs(agent, next) : [])];
+  const terminal = Object.hasOwn(terminalFacets(), agent) && terminalFacets()[agent].terminal;
+  const tools = planner(next) && terminal && terminal.converses(args) && !terminal.delegates(args);
+  return { env: envWords(source, next), roleTools: tools ? roleToolArgs(agent, next) : [] };
 }
 
-module.exports = { intercept, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };
+function terminalLaunch(source, agent, action, mode, args) {
+  const terminal = Object.hasOwn(terminalFacets(), agent) && terminalFacets()[agent].terminal;
+  if (!terminal) throw new Error('Unknown terminal adapter');
+  const remote = mode === 'remote';
+  if (action === 'classify') return terminal.classify(args, { native: mode === 'native', remote, alias: remote ? undefined : source.AGENTRIX_LAUNCH_ALIAS });
+  if (terminal.redirect) throw new Error('Terminal launch redirects to ' + terminal.redirect);
+  const { AGENTRIX_LAUNCH_MODEL: model, AGENTRIX_LAUNCH_EFFORT: effort,
+    AGENTRIX_LAUNCH_NOTE: note, AGENTRIX_LAUNCH_SETTINGS: file, AGENTRIX_LAUNCH_ROLE: role, AGENTRIX_LAUNCH_ROLE_ERROR: roleError } = source;
+  const plan = mode === 'shims' ? plannerLaunch(source, agent, args) : { env: [], roleTools: remote && role ? [role] : [] };
+  const { argv, env } = terminal.launch({ ...plan, seat: { model, effort }, note, roleError: remote ? roleError : undefined, hooks: { file }, remote });
+  const words = [...env, '--', ...argv];
+  return action === 'json' ? JSON.stringify(words) : words.map(word => word + '\0').join('');
+}
+
+module.exports = { intercept, terminalLaunch, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };
 
 if (require.main === module) {
   let argv = process.argv.slice(2);
@@ -196,11 +213,16 @@ if (require.main === module) {
   }
   delete process.env.AGENTRIX_INTERCEPT_ARGV;
   if (!Array.isArray(argv) || !argv.every(word => typeof word === 'string')) argv = [];
-  if (argv[0] === '--shim-env') {
+  if (argv[0] === '--launch') {
+    const [, agent, action, mode, ...args] = argv;
+    process.stdout.write(terminalLaunch(process.env, agent, action, mode, args));
+  } else if (argv[0] === '--shim-env') {
+    // Remove next version, once old terminal wrappers are gone.
     // --shim-env [json] [--role-tools <agent> <the user's arguments>]: NUL-terminated words, or JSON. A terminal opened
     // before an update still asks without --role-tools, for the planner's words alone.
     const json = argv[1] === 'json', [flag, agent, ...args] = argv.slice(json ? 2 : 1);
-    const words = flag === '--role-tools' ? launchWords(process.env, agent, args) : shimWords(process.env, { depth: 0 });
+    const plan = flag === '--role-tools' && plannerLaunch(process.env, agent, args);
+    const words = plan ? [...plan.env, '--', ...plan.roleTools] : shimWords(process.env, { depth: 0 });
     process.stdout.write(json ? JSON.stringify(words) : words.map(word => word + '\0').join(''));
   } else intercept(argv).then(code => { process.exitCode = code; });
 }

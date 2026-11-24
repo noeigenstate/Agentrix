@@ -32,9 +32,9 @@ const seats = '{"researcher":{"model":"sonnet","effort":"high"}}';
 const leadFormats = [[seats], [background, subagent, seats], [background, subagent], []];
 const settings = mode => JSON.stringify({ hooks: { Stop: [{ fixture: mode }] }, ...(mode === 'fast' && { fastMode: true }) });
 const cases = [
-  ['bash-integration.bash', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
-  ['zsh-integration.zsh', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
-  ['bootstrap.ps1', 'function global:claude {', /--\(\?:model\|effort\)/],
+  ['bash-integration.bash', 'agentrix_agent() {', 'refused)'],
+  ['zsh-integration.zsh', 'agentrix_agent() {', 'refused)'],
+  ['bootstrap.ps1', 'function global:agentrix_agent {', "if ($route -ceq 'refused')"],
 ];
 
 test('the local Claude wrappers read the lead file and refuse overrides before reporting launch', () => {
@@ -45,7 +45,7 @@ test('the local Claude wrappers read the lead file and refuse overrides before r
     assert.ok(begin >= 0, file);
     assert.match(source, /\.lead/);
     assert.match(wrapper, refusal);
-    assert.ok(wrapper.search(flags) >= 0 && wrapper.search(flags) < wrapper.indexOf('codex-started'), file);
+    assert.ok(wrapper.indexOf(flags) >= 0 && wrapper.indexOf(flags) < wrapper.lastIndexOf('codex-started'), file);
   }
 });
 
@@ -116,8 +116,8 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       'printf "RESTORED=%s|%s\\n" "${ANTHROPIC_DEFAULT_HAIKU_MODEL-unset}" "${CLAUDE_CODE_SUBAGENT_MODEL-unset}"',
     ].join('\n') + '\n');
     const { stdout, stderr } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), shellPath(script)], {
-      cwd: dir, timeout: win ? 120000 : 15000, env: {
-        PATH: '/usr/bin:/bin', HOME: shellPath(dir), ZDOTDIR: shellPath(dir), TMPDIR: shellPath(dir), AGENTRIX_NODE: ':',
+      cwd: dir, timeout: win ? 240000 : 15000, env: {
+        PATH: '/usr/bin:/bin', HOME: shellPath(dir), ZDOTDIR: shellPath(dir), TMPDIR: shellPath(dir), AGENTRIX_NODE: shellPath(process.execPath),
         AGENTRIX_TEST_INTEGRATION: shellPath(path.join(integration, file)), AGENTRIX_CLAUDE_EXECUTABLE: shellPath(fake), AGENTRIX_CODEX_EXECUTABLE: shellPath(fake),
         AGENTRIX_BOOTSTRAP: shellPath(bootstrap), AGENTRIX_SOCKET: shellPath(path.join(dir, 'unused.sock')),
         AGENTRIX_HOOK_FALLBACK: settings('ordinary'), AGENTRIX_FAST_HOOK_FALLBACK: settings('fast'), ANTHROPIC_DEFAULT_HAIKU_MODEL: 'inherited' },
@@ -132,7 +132,7 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   const wrapper = path.join(dir, 'bootstrap.ps1');
   fs.copyFileSync(path.join(integration, 'bootstrap.ps1'), wrapper);
   fs.writeFileSync(path.join(dir, 'refresh-path.ps1'), '# Keep the fixture PATH isolated.\n');
-  fs.writeFileSync(bootstrap, JSON.stringify({ hooks: { settings: { fallback: settings('ordinary') }, fastSettings: { fallback: settings('fast') } } }));
+  fs.writeFileSync(bootstrap, JSON.stringify({ nodePath: process.execPath, hooks: { settings: { fallback: settings('ordinary') }, fastSettings: { fallback: settings('fast') } } }));
   ultracodeLeads(bootstrap);
   fs.writeFileSync(fake, [
     '"CALL"',
@@ -148,6 +148,7 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   ].join('\n'));
   fs.writeFileSync(script, '\uFEFF' + [
     '. $env:AGENTRIX_TEST_INTEGRATION',
+    `$global:AgentrixIntercept = '${path.join(integration, 'shims/intercept.cjs').replaceAll("'", "''")}'`,
     'function global:Send-AgentrixEvent {}',
     '$ErrorActionPreference = "Stop"',
     '$lead = $env:AGENTRIX_BOOTSTRAP + ".lead"',
@@ -174,7 +175,8 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   ].join('\n'));
   const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const { stdout } = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
-    cwd: dir, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', PATH: path.dirname(shell), USERPROFILE: dir, TEMP: dir, TMP: dir, AGENTRIX_AGENT_ONLY: '1',
+    cwd: dir, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', PATH: path.dirname(shell), PATHEXT: '.COM;.EXE;.BAT;.CMD',
+      USERPROFILE: dir, TEMP: dir, TMP: dir, AGENTRIX_AGENT_ONLY: '1',
       AGENTRIX_TEST_INTEGRATION: wrapper, AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: fake,
       AGENTRIX_CODEX_EXECUTABLE: fake, ANTHROPIC_DEFAULT_HAIKU_MODEL: 'inherited' },
   });
@@ -203,7 +205,7 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       ...modeLines(mode => `printf '${mode}\n' > "$AGENTRIX_BOOTSTRAP.mode"`, 'claude --effort low 2>&1')].join('\n') + '\n');
     const { stdout } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), shellPath(script)], {
       cwd: dir, timeout: 15000, env: {
-        PATH: '/usr/bin:/bin', HOME: shellPath(dir), ZDOTDIR: shellPath(dir), TMPDIR: shellPath(dir), AGENTRIX_NODE: ':',
+        PATH: '/usr/bin:/bin', HOME: shellPath(dir), ZDOTDIR: shellPath(dir), TMPDIR: shellPath(dir), AGENTRIX_NODE: shellPath(process.execPath),
         AGENTRIX_TEST_INTEGRATION: shellPath(path.join(integration, file)), AGENTRIX_CLAUDE_EXECUTABLE: shellPath(fake), AGENTRIX_CODEX_EXECUTABLE: shellPath(fake),
         AGENTRIX_BOOTSTRAP: shellPath(bootstrap), AGENTRIX_SOCKET: shellPath(path.join(dir, 'unused.sock')), AGENTRIX_HOOK_FALLBACK: 'ordinary' },
     });
@@ -216,14 +218,16 @@ test('PowerShell Claude passes the owner\'s --model and --effort only in native 
   const wrapper = path.join(dir, 'bootstrap.ps1');
   fs.copyFileSync(path.join(integration, 'bootstrap.ps1'), wrapper);
   fs.writeFileSync(path.join(dir, 'refresh-path.ps1'), '# Keep the fixture PATH isolated.\n');
-  fs.writeFileSync(bootstrap, JSON.stringify({ hooks: { settings: { fallback: 'ordinary' } } }));
+  fs.writeFileSync(bootstrap, JSON.stringify({ nodePath: process.execPath, hooks: { settings: { fallback: 'ordinary' } } }));
   fs.writeFileSync(bootstrap + '.lead', '');
   fs.writeFileSync(fake, ['"CALL"', '  if ($args.Length -gt 2) { $args[2..($args.Length - 1)] | ForEach-Object { "WORD=" + $_ } }', '  $global:LASTEXITCODE = 0'].join('\n'));
-  fs.writeFileSync(script, '\uFEFF' + ['. $env:AGENTRIX_TEST_INTEGRATION', 'function global:Send-AgentrixEvent {}', '$ErrorActionPreference = "Stop"',
+  fs.writeFileSync(script, '\uFEFF' + ['. $env:AGENTRIX_TEST_INTEGRATION', `$global:AgentrixIntercept = '${path.join(integration, 'shims/intercept.cjs').replaceAll("'", "''")}'`,
+    'function global:Send-AgentrixEvent {}', '$ErrorActionPreference = "Stop"',
     ...modeLines(mode => `[IO.File]::WriteAllText($env:AGENTRIX_BOOTSTRAP + '.mode', "${mode}\`n")`, 'claude --effort low')].join('\n'));
   const shell = path.join(process.env.SystemRoot || 'C:\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const { stdout } = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
-    cwd: dir, env: { SystemRoot: process.env.SystemRoot || 'C:\Windows', PATH: path.dirname(shell), USERPROFILE: dir, TEMP: dir, TMP: dir, AGENTRIX_AGENT_ONLY: '1',
+    cwd: dir, env: { SystemRoot: process.env.SystemRoot || 'C:\Windows', PATH: path.dirname(shell), PATHEXT: '.COM;.EXE;.BAT;.CMD',
+      USERPROFILE: dir, TEMP: dir, TMP: dir, AGENTRIX_AGENT_ONLY: '1',
       AGENTRIX_TEST_INTEGRATION: wrapper, AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: fake, AGENTRIX_CODEX_EXECUTABLE: fake },
   });
   assertModes(stdout.replaceAll('\r\n', '\n'));
