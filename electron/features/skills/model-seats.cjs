@@ -1,6 +1,6 @@
 // Seat choices are configuration, never evidence of which model actually ran.
 const { modelRow } = require('./model-catalog.cjs');
-const { BASE_EFFORTS, EFFORT, familyOf: family, allowsUltracode, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
+const { adapterOfModel, agentOfModel, EFFORT, allowsUltracode, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const ALIASES = ['opus', 'sonnet', 'haiku'];
 const TEAM = { orchestrator: 'opus', product: 'opus', architect: 'opus', designer: 'sonnet', developer: 'opus',
@@ -11,9 +11,9 @@ const fail = (code, seat, message) => { throw Object.assign(new Error(message), 
 
 function cleanSeat(raw, seat, models, stored = false, isLead = seat === 'orchestrator') {
   if (!object(raw) || !validModel(raw.model)) fail('invalid-model', seat, 'Expected a valid model id of at most 160 characters.');
-  const agent = family(raw.model);
+  const { id: agent, models: { efforts } } = adapterOfModel(raw.model).manifest;
   const row = models?.find(row => row.model === raw.model);
-  if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || BASE_EFFORTS[agent]).includes(raw.effort)) {
+  if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || efforts).includes(raw.effort)) {
     fail('invalid-effort', seat, unsupportedEffort(agent));
   }
   if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && (row ? !row.fast : agent === 'claude'))) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
@@ -41,8 +41,8 @@ function oldRoleValues(raw, claude, codex) {
 function migrateSeats(raw) {
   const source = cleanStoredSeats(raw, ['architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']);
   const lead = cleanStoredSeats(raw?.lead, ['claude', 'codex']);
-  const claude = lead.claude && family(lead.claude.model) === 'claude' ? lead.claude : undefined;
-  const codex = lead.codex && family(lead.codex.model) === 'codex' ? lead.codex : undefined;
+  const claude = lead.claude && agentOfModel(lead.claude.model) === 'claude' ? lead.claude : undefined;
+  const codex = lead.codex && agentOfModel(lead.codex.model) === 'codex' ? lead.codex : undefined;
   const kept = claude ?? codex;
   const notice = kept ? `总指挥沿用原领队 ${claude ? 'Claude' : 'Codex'} 槽 ${kept.model}·${kept.effort}${kept.fast ? '·fast' : ''}${claude && codex ? `；原 Codex 槽 ${codex.model} 未保留` : ''}` : null;
   return { map: oldRoleValues(source, claude, codex), notice };
@@ -59,7 +59,8 @@ function migrateDefaultModels(raw, seatIds) {
 function catalog(installed, knownModels = []) {
   const rows = [
     ...ALIASES.map(model => ({ ...modelRow({ model, displayName: `${model[0].toUpperCase() + model.slice(1)} (follows latest)` }, 'alias') })),
-    ...(!knownModels.some(row => family(row.model || row.value || '') === 'codex') ? [modelRow({ model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', fast: true }, 'cached')] : []),
+    ...(!knownModels.some(row => agentOfModel(row.model || row.value || '') === 'codex')
+      ? [modelRow({ model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', fast: true }, 'cached')] : []),
   ];
   for (const row of knownModels) {
     const normalized = modelRow(row, row.source || 'live');
@@ -130,7 +131,7 @@ function modelIdentity(models) {
 }
 
 function resolveSeat(choice, fallback, installed, models, isLead = false) {
-  const selected = choice && installed[family(choice.model)] ? choice : fallback;
+  const selected = choice && installed[agentOfModel(choice.model)] ? choice : fallback;
   if (!selected) return null;
   const row = models.find(row => row.model === selected.model);
   const seat = { ...selected };
@@ -143,13 +144,13 @@ function resolveSeat(choice, fallback, installed, models, isLead = false) {
 function leadOptions(map, agent, installed, models = [], lead = 'orchestrator') {
   if (!installed[agent]) return null;
   const fallback = agent === 'claude' ? high('opus') : codexDefault(models);
-  const selected = Object.hasOwn(map, lead) && family(map[lead].model) === agent ? map[lead] : fallback;
+  const selected = Object.hasOwn(map, lead) && agentOfModel(map[lead].model) === agent ? map[lead] : fallback;
   return resolveSeat(selected, fallback, installed, models, true);
 }
 
 function leadConfiguration(map, lead, installed, models) {
   const leads = { claude: leadOptions(map, 'claude', installed, models, lead), codex: leadOptions(map, 'codex', installed, models, lead) };
-  const preferred = Object.hasOwn(map, lead) ? family(map[lead].model) : null;
+  const preferred = Object.hasOwn(map, lead) ? agentOfModel(map[lead].model) : null;
   return { leads, leadAgent: preferred && leads[preferred] ? preferred : leads.claude ? 'claude' : leads.codex ? 'codex' : null };
 }
 

@@ -9,7 +9,7 @@ const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
-const { familyOf, allowsUltracode } = require('./seat-rules.mjs');
+const { agentOfModel, allowsUltracode } = require('./seat-rules.mjs');
 const { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 const { readRouting, writeRouting, routingState, reviewFile, routingWatch } = require('./project-routing.cjs');
 const { renderRoutingSkill, modelWords } = require('./skill-render.cjs');
@@ -503,7 +503,7 @@ class SkillsStore {
     const roles = team.team.map(item => item.row);
     const leadConfig = modelSeats.leadConfiguration(effective, lead, installed, catalog);
     const runningLead = snapshot?.seatsMap?.[lead];
-    const agent = runningLead && familyOf(runningLead.model), remote = project?.kind === 'ssh';
+    const agent = runningLead && agentOfModel(runningLead.model), remote = project?.kind === 'ssh';
     const restartLead = agent && (remote && agent === 'claude'
       ? modelSeats.leadOptions(effective, agent, { ...installed, claude: true }, catalog, lead) : leadConfig.leads[agent]);
     const applied = snapshot && binding.appliedRouting;

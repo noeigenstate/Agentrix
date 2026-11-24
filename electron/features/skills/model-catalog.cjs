@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
-const { BASE_EFFORTS: BASE, EFFORT, familyOf, validModel, rankByName: rankOf } = require('./seat-rules.mjs');
+const { adapterOfModel, EFFORT, validModel, rankByName: rankOf } = require('./seat-rules.mjs');
 
 const RETAIN = 30 * 24 * 60 * 60 * 1000;
 
@@ -22,10 +22,10 @@ function modelRow(raw, source = 'live') {
   if (!raw || typeof raw !== 'object') return null;
   const model = raw.resolvedModel || raw.model || raw.value;
   if (!validModel(model) || model === 'default' || raw.value === 'default') return null;
-  const family = familyOf(model);
+  const { id: family, models: { efforts: baseEfforts } } = adapterOfModel(model).manifest;
   const supplied = raw.efforts ?? raw.supportedEffortLevels ?? raw.supportedReasoningEfforts?.map(item => item.reasoningEffort);
-  const efforts = Array.isArray(supplied) ? [...new Set(supplied.filter(value => typeof value === 'string' && EFFORT.test(value)))].slice(0, 32) : [...BASE[family]];
-  const levels = efforts.length ? efforts : [...BASE[family]];
+  const efforts = Array.isArray(supplied) ? [...new Set(supplied.filter(value => typeof value === 'string' && EFFORT.test(value)))].slice(0, 32) : [];
+  const levels = efforts.length ? efforts : [...baseEfforts];
   const advertised = raw.fast ?? raw.supportsFastMode;
   const tiers = raw.additionalSpeedTiers || raw.serviceTiers;
   const fast = advertised === true || Array.isArray(tiers) && tiers.some(tier => ['fast', 'priority'].includes(typeof tier === 'string' ? tier : tier?.id));
@@ -93,4 +93,4 @@ class ModelCatalog {
   }
 }
 
-module.exports = { BASE, EFFORT, familyOf, validModel, rankOf, modelRow, ModelCatalog, trackModelRuntime };
+module.exports = { EFFORT, validModel, rankOf, modelRow, ModelCatalog, trackModelRuntime };

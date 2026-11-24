@@ -22,7 +22,7 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 - `src/features/settings/skill-*.ts`
 
 ## Interface
-- `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared model family, rank, effort lists and validation.
+- `agentOfModel` (`electron/features/skills/seat-rules.mjs`) — shared seat validation, model rank, registry lookups and Ultracode eligibility.
 - `checkTeamRules` (`electron/features/skills/role-rules.mjs`) — validates the lead, role limits and name uniqueness. The module also exports custom role validation and role kinds.
 - `SkillsStore` (`electron/features/skills/store.cjs`) — skill library, project routing, launch manifests, frozen sessionRoles, catalog observation and model probes.
 - `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including routing reads, saves and confirmation actions
@@ -37,11 +37,11 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 
 ## May import
 - `electron/features/agents/call-seat.cjs` (parse the same description prefix the Agent tab recognises)
+- `electron/features/cli-adapters/registry.mjs` (model ownership, default efforts and lead Ultracode)
 - `src/shared/types.ts`
 - `src/shared/i18n.ts`
 - `src/shared/IconButton.tsx`
 - `src/shared/Select.tsx`
-- `src/shared/routing-command.ts`
 - `src/shared/time.ts`
 - `src/features/reading/ReadingView.tsx`
 - `electron/agent-actions.cjs`

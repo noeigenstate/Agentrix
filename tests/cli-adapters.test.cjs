@@ -1,8 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { adapters, adapterOf, agentOfModel } = require('../electron/features/cli-adapters/registry.cjs');
+const { adapters, adapterOf, adapterOfModel, agentOfModel } = require('../electron/features/cli-adapters/registry.cjs');
 const shared = require('../electron/features/cli-adapters/registry.mjs');
 const { CAPABILITY_KEYS, UNSUPPORTED, UNVERIFIED_VERSION, support } = require('../electron/features/cli-adapters/capabilities.mjs');
+const { allowsUltracode } = require('../electron/features/skills/seat-rules.mjs');
 const en = require('../electron/locales/en.json');
 
 test('both registry entry points expose complete capability manifests', () => {
@@ -27,6 +28,20 @@ test('both registry entry points expose complete capability manifests', () => {
 test('the first matching model rule preserves existing seat ownership', () => {
   for (const model of ['opus', 'sonnet-5', 'haiku', 'fable', 'claude-opus-5-5']) assert.equal(agentOfModel(model), 'claude');
   for (const model of ['gpt-6.2-sol', 'third-party-model', 'Claude-opus', '']) assert.equal(agentOfModel(model), 'codex');
+});
+
+test('model defaults preserve effort order and restrict Ultracode to eligible leads', () => {
+  for (const [model, agent, efforts, ultracode] of [
+    ['fable', 'claude', ['low', 'medium', 'high', 'xhigh', 'max'], true],
+    ['third-party-model', 'codex', ['low', 'medium', 'high', 'xhigh'], false],
+  ]) {
+    const adapter = adapterOfModel(model);
+    assert.equal(adapter, adapterOf(agent));
+    assert.equal(adapter, shared.adapterOfModel(model));
+    assert.deepEqual(adapter.manifest.models.efforts, efforts);
+    assert.equal(allowsUltracode(model, true), ultracode);
+    assert.equal(allowsUltracode(model, false), false);
+  }
 });
 
 test('support reports the implementation channel or an explicit unsupported reason', () => {

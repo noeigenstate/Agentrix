@@ -3,7 +3,7 @@ import { UNSUPPORTED } from '../capabilities.mjs';
 export default Object.freeze({
   id: 'codex', label: 'Codex', command: 'codex',
   install: { npm: '@openai/codex', versionPattern: /\b\d+\.\d+\.\d+(?:-[\w.]+)?/, minVersion: '0.166.0', label: 'Codex CLI' },
-  // The current seat rules assign every model without a more specific match to Codex.
+  // Keep this catch-all after the specific model rules.
   models: { match: /^/, efforts: ['low', 'medium', 'high', 'xhigh'], ultracodeLead: false },
   words: {
     utilities: ['--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'plugin', 'app-server', 'remote-control', 'app', 'completion',

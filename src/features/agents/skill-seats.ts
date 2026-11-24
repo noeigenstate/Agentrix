@@ -4,11 +4,11 @@ import type {
   SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
 } from '../../shared/types';
 import { aliasTarget } from '../../shared/routing-command.ts';
-import { BASE_EFFORTS, allowsUltracode, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
+import { adapterOfModel, agentOfModel, allowsUltracode, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
 
 import { roleLocks } from '../../../electron/features/skills/role-rules.mjs';
 
-export { allowsUltracode, familyOf };
+export { agentOfModel, allowsUltracode };
 
 export function displayedSeat(info: SeatsInfo, id: SeatId) {
   return id === info.lead ? info.current?.[id] ?? info.effective[id] : info.effective[id];
@@ -64,8 +64,8 @@ export function canonicalModel(catalog: SeatModel[], model: string): string {
 export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
 // A typed-in id the catalog does not list: its family comes from the id, its efforts from the family's base list, fast only where Codex can apply it.
 const customRow = (model: string): SeatModel => {
-  const family = familyOf(model);
-  return { model, label: model, family, efforts: BASE_EFFORTS[family], fast: family === 'codex',
+  const { id: family, models: { efforts } } = adapterOfModel(model).manifest;
+  return { model, label: model, family, efforts: [...efforts], fast: family === 'codex',
     ...(family === 'codex' ? {} : { fastReason: 'unknown' as const }), rank: rankByName(model), available: true, source: 'custom' };
 };
 // The catalog's row, or the row a valid typed-in id would get.
@@ -156,7 +156,7 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
 // A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).
 function fitSeat(seat: Seat, row: SeatModel, ultracode = seat.ultracode): Seat {
   const effort = fitEffort(row, seat.effort);
-  const fast = row.family === 'codex' ? seat.fast ?? true : familyOf(seat.model) === 'claude' && !!seat.fast;
+  const fast = row.family === 'codex' ? seat.fast ?? true : agentOfModel(seat.model) === 'claude' && !!seat.fast;
   return { model: row.model, effort, ...(row.fast && { fast }), ...(allowsUltracode(row.model, !!ultracode) && { ultracode: true }) };
 }
 
@@ -188,7 +188,7 @@ export function swapSlots(map: SeatMap, a: SlotId, b: SlotId, catalog: SeatModel
 export function setEffort(map: SeatMap, slot: SlotId, effort: string, catalog: SeatModel[]): Edit {
   const seat = getSlot(map, slot);
   if (!seat) return { ok: false, reason: 'unknown-model' };
-  const efforts = rowFor(catalog, seat.model)?.efforts ?? BASE_EFFORTS[familyOf(seat.model)];
+  const efforts = modelRow(catalog, seat.model)?.efforts ?? adapterOfModel(seat.model).manifest.models.efforts;
   return efforts.includes(effort) ? { ok: true, map: withSlot(map, slot, { ...seat, effort }) } : { ok: false, reason: 'effort' };
 }
 
@@ -205,9 +205,9 @@ export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError
   for (const seat of Object.keys(map)) {
     const value = getSlot(map, seat);
     if (!value) continue;
-    const family = familyOf(value.model);
+    const { id: family, models: { efforts } } = adapterOfModel(value.model).manifest;
     const row = rowFor(catalog, value.model);
-    if (!(row?.efforts ?? BASE_EFFORTS[family]).includes(value.effort)) return refuse('invalid-effort', seat, unsupportedEffort(family));
+    if (!(row?.efforts ?? efforts).includes(value.effort)) return refuse('invalid-effort', seat, unsupportedEffort(family));
     if (value.fast && !row?.fast) return refuse('fast-not-allowed', seat, 'This model has no fast mode.');
   }
   return null;

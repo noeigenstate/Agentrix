@@ -9,7 +9,7 @@ const { terminalHooks } = require('../electron/features/terminal-events/hook-cha
 const { writeBootstrap, removeBootstrap, updateBootstrapLead, updateDispatchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 const { argumentsOf, commandOf, WorkerOutput } = require('../integration/dispatch.cjs');
 const { seatRouting } = require('../integration/agent-event.cjs');
-const { BASE_EFFORTS, familyOf: rendererFamily } = require('../electron/features/skills/seat-rules.mjs');
+const { adapterOfModel, agentOfModel } = require('../electron/features/skills/seat-rules.mjs');
 const { CLAUDE_EFFORT, familyOf } = require('../electron/features/agents/call-seat.cjs');
 
 const seats = {
@@ -275,10 +275,11 @@ test('a failed dispatch seat snapshot write leaves the required bootstrap usable
   assert.equal(Object.hasOwn(bootstrap, 'dispatchSeats'), false);
 });
 
-test('the renderer and the CJS helper agree on Claude model family and built-in effort values', () => {
+test('the CLI registry and the carried CJS helper agree on Claude model family and built-in effort values', () => {
   const ids = ['opus', 'haiku', 'sonnet', 'fable', 'claude-internal', 'opus-next', 'gpt-6.2-sol', 'o4-mini', 'x-claude-opus'];
-  assert.deepEqual(ids.map(familyOf), ids.map(rendererFamily));
-  assert.deepEqual(['low', 'medium', 'high', 'xhigh', 'max', 'adaptive', 'HIGH'].filter(effort => CLAUDE_EFFORT.test(effort)), BASE_EFFORTS.claude);
+  assert.deepEqual(ids.map(familyOf), ids.map(agentOfModel));
+  const effortValues = ['low', 'medium', 'high', 'xhigh', 'max', 'adaptive', 'HIGH'];
+  assert.deepEqual(effortValues.filter(effort => CLAUDE_EFFORT.test(effort)), adapterOfModel('sonnet').manifest.models.efforts);
 });
 
 test('dispatch fills omitted flags from its launch snapshot and preserves explicit values', () => {

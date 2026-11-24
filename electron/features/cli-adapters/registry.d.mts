@@ -14,4 +14,5 @@ type Adapter = Readonly<{ manifest: Manifest }>;
 
 export function adapters(): readonly Adapter[];
 export function adapterOf(id: string): Adapter | undefined;
-export function agentOfModel(model: string): AgentProvider | undefined;
+export function adapterOfModel(model: string): Adapter;
+export function agentOfModel(model: string): AgentProvider;

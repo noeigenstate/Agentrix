@@ -1,12 +1,12 @@
 const { outsideFences, region } = require('./builtin-format.cjs');
 const { agentAlias, defaultsFor, resolveSeat } = require('./model-seats.cjs');
-const { familyOf } = require('./seat-rules.mjs');
+const { agentOfModel } = require('./seat-rules.mjs');
 
 const modelWords = seat => [seat.model, seat.effort, seat.fast && 'fast', seat.ultracode && 'ultracode'].filter(Boolean).join(' · ');
 
 function launchWords(id, lead, seat, leadAgent, catalog, enabledSpecialties) {
   if (id === lead) return 'this session';
-  const family = familyOf(seat.model), alias = family === 'claude' && leadAgent === 'claude' && !seat.fast && agentAlias(seat.model, catalog);
+  const family = agentOfModel(seat.model), alias = family === 'claude' && leadAgent === 'claude' && !seat.fast && agentAlias(seat.model, catalog);
   const specialties = id !== 'developer' ? '' : '; specialties: seat ' + (enabledSpecialties.length ? enabledSpecialties.join(', seat ')
     : 'developer/<frontend or backend or desktop or database or ai>');
   const agentCall = alias ? `, or Agent call, model "${alias}", effort "${seat.effort}", description starts with [${id}]` : '';

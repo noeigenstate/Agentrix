@@ -11,7 +11,7 @@ import { t, currentLanguage } from '../../shared/i18n';
 import {
   paletteGroups, ageOf, menuPlacement, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, rowFor,
-  sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, allowsUltracode, familyOf, withSlot,
+  sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, agentOfModel, allowsUltracode, withSlot,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
 } from './skill-seats';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
@@ -566,7 +566,7 @@ function SeatPicker({ state, role }: DialogPart & { role: TeamRole }) {
     aria-label={t('{seat}：选择模型（{model}）', { seat: seatName(slot), model: [name, summary].filter(Boolean).join(' · ') })}
     onPointerDown={event => { if (model) startDrag(event, model, slot); }}
     onClick={event => { if (!dragged.current || event.detail === 0) openMenu(slot, event.currentTarget); }}>
-    {model && <i className="seats-mk" data-family={rowFor(catalog, model)?.family ?? familyOf(model)} aria-hidden="true" />}
+    {model && <i className="seats-mk" data-family={rowFor(catalog, model)?.family ?? agentOfModel(model)} aria-hidden="true" />}
     <span className="seats-gem-name">{name}</span><span className="seats-gem-summary">{summary}</span><CaretDown size={14} aria-hidden="true" />
   </button>;
 }
@@ -1015,7 +1015,7 @@ export function SeatsDialog(props: SeatsDialogProps) {
         </div>
         {!review.visible && <DialogMenu state={state} />}
         {ghost && <span className="seats-ghost" style={{ left: ghost.x, top: ghost.y }} data-family={modelRow(catalog, ghost.model)?.family}>
-          <i className="seats-mk" data-family={modelRow(catalog, ghost.model)?.family ?? familyOf(ghost.model)} />{label(ghost.model)}
+          <i className="seats-mk" data-family={modelRow(catalog, ghost.model)?.family ?? agentOfModel(ghost.model)} />{label(ghost.model)}
         </span>}
         </div>
         {editor && <RoleEditor key={JSON.stringify([editor.id, !!editor.existing])} {...editor} roles={state.draft.roles} taken={state.roles.taken}

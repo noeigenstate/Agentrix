@@ -6,4 +6,5 @@ const registered = Object.freeze([claude, codex].map(manifest => Object.freeze({
 
 export const adapters = () => registered;
 export const adapterOf = id => registered.find(({ manifest }) => manifest.id === id);
-export const agentOfModel = model => registered.find(({ manifest }) => manifest.models.match.test(model))?.manifest.id;
+export const adapterOfModel = model => registered.find(({ manifest }) => manifest.models.match.test(model));
+export const agentOfModel = model => adapterOfModel(model).manifest.id;

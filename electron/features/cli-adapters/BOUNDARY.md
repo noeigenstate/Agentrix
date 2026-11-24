@@ -2,6 +2,7 @@
 
 Owns the CLI registry and capability manifests shared by main and the renderer.
 Generic modules get CLI differences through the registry and `support()`.
+The first matching model rule wins and the final rule matches every model.
 Installer version floors describe the native runtime. Each capability's `via` describes its primary path. Claude's live controls describe the terminal path.
 After the migration, adding a CLI requires only its manifest, adapter and screen files, with the entries wired into their registries.
 Keep CLI names out of generic control flow, including regex tests, string tricks and lookup tables that evade the branch guard.
@@ -11,7 +12,7 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - `electron/features/cli-adapters/**`
 
 ## Interface
-- `adapters` (`electron/features/cli-adapters/registry.cjs`) — main's registry. Exposes each adapter's manifest, `adapterOf(id)` and `agentOfModel(model)`. The first matching model rule wins.
+- `adapters` (`electron/features/cli-adapters/registry.cjs`) — main's registry. Exposes `adapterOf(id)`, `adapterOfModel(model)` and `agentOfModel(model)`.
 - `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared registry and renderer entry point with the same exports.
 - `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version must be within the capability's verification interval when set.
 

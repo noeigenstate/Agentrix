@@ -1,6 +1,6 @@
 const modelSeats = require('./model-seats.cjs');
 const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules } = require('./role-rules.mjs');
-const { familyOf, BASE_EFFORTS } = require('./seat-rules.mjs');
+const { adapterOfModel, agentOfModel } = require('./seat-rules.mjs');
 const { outsideFences, region } = require('./builtin-format.cjs');
 
 const seatKeys = ['model', 'effort', 'fast', 'ultracode'];
@@ -13,8 +13,8 @@ const unknownKey = (value, keys) => Object.keys(value).some(key => !keys.include
 const unsafeFileModel = value => typeof value === 'string' && (value.endsWith(':') || value.includes('://'));
 const fileEffort = value => {
   if (value?.effort === undefined || typeof value.model !== 'string') return true;
-  const family = familyOf(value.model);
-  return BASE_EFFORTS[family].includes(value.effort) || value.effort === (family === 'claude' ? 'adaptive' : 'minimal');
+  const { id, models: { efforts } } = adapterOfModel(value.model).manifest;
+  return efforts.includes(value.effort) || value.effort === (id === 'claude' ? 'adaptive' : 'minimal');
 };
 
 function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
@@ -123,7 +123,7 @@ function resolveTeam(entry, config, defaults) {
     effective: Object.fromEntries(team.filter(({ row, seat }) => row.enabled && seat).map(({ row, seat }) => [row.id, { ...seat }])) };
 }
 
-const needsCodexFallback = defaults => !Object.values(defaults).some(seat => familyOf(seat.model) === 'claude');
+const needsCodexFallback = defaults => !Object.values(defaults).some(seat => agentOfModel(seat.model) === 'claude');
 const englishNamesByEntry = new WeakMap();
 
 function englishNames(entry) {

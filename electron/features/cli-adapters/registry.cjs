@@ -1,3 +1,3 @@
-const { adapters, adapterOf, agentOfModel } = require('./registry.mjs');
+const { adapters, adapterOf, adapterOfModel, agentOfModel } = require('./registry.mjs');
 
-module.exports = { adapters, adapterOf, agentOfModel };
+module.exports = { adapters, adapterOf, adapterOfModel, agentOfModel };
