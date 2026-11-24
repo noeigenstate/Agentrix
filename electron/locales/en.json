@@ -3858,5 +3858,11 @@
   "此 CLI 在 Agentrix 中不提供 SSH 原生会话。": "This CLI does not provide native SSH sessions in Agentrix.",
   "未验证的 {cli} 版本。": "Unverified {cli} version.",
   "未验证的 {cli} 版本，不支持运行中切换": "This {cli} version is unverified. Switching during a session is unavailable.",
-  "此 CLI 不支持这项能力。": "This CLI does not support this capability."
+  "此 CLI 不支持这项能力。": "This CLI does not support this capability.",
+  "统一接口": "One interface",
+  "每种 CLI 的差异收进一份能力清单和适配接口；以后接入新的 CLI 不必改通用代码，它不支持的功能会明确说明原因。": "The differences between CLIs now live in a capability manifest and an adapter interface; a new CLI no longer needs changes to generic code, and what it does not support says why.",
+  "干活标记": "Working mark",
+  "路由栏里，有角色正在干活的座位会在模型名右侧显示一把敲打的小锤子。": "In the routing card, a seat whose role is working shows a small tapping hammer beside its model name.",
+  "版本提示": "Version notice",
+  "Claude Code 版本过旧时，运行中切换模型、深度、快速模式和 Ultracode 的控件会置灰并说明原因，不再悄悄失败。": "When Claude Code is too old, the controls that switch model, effort, fast mode and Ultracode in a running session are greyed out with the reason instead of failing silently."
 }
