@@ -19,11 +19,12 @@ function loadFeatureFile(relative, language = 'zh') {
   return loadedFiles.get(key);
 }
 const loadAgentsFile = (basename, language = 'zh') => loadFeatureFile(`agents/${basename}`, language);
-function compileFile(filename, language, hooks) {
+function compileFile(filename, language, hooks, overrides = {}) {
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   mod.require = name => {
+    if (Object.hasOwn(overrides, name)) return overrides[name];
     if (name === 'react' && hooks) return { ...React, ...hooks };
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
@@ -55,7 +56,8 @@ function compileFile(filename, language, hooks) {
     if (name === './native-words') return loadFeatureFile('native-session/native-words.ts', language);
     if (name === '../native-session/native-words') return loadFeatureFile('native-session/native-words.ts', language);
     if (name === 'react-dom') return { createPortal: children => children };
-    if (name === '@phosphor-icons/react') return new Proxy({}, { get: (_, icon) => ({ className }) => React.createElement('svg', { className, 'data-icon': icon }) });
+    if (name === '@phosphor-icons/react') return new Proxy({}, { get: (_, icon) => ({ className, role, 'aria-label': label, focusable, size }) =>
+      React.createElement('svg', { className, 'data-icon': icon, role, 'aria-label': label, focusable, width: icon === 'Hammer' ? size : undefined }) });
     return original(name);
   };
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
@@ -75,6 +77,49 @@ function rightMarkup(terminal = {}, language = 'zh') {
   const { ActivityPane } = loadAgentsFile('ActivityPane.tsx', language);
   return renderToStaticMarkup(React.createElement(ActivityPane, { terminal: { id: 'placeholder', codexActive: true, ...terminal } }));
 }
+
+function routingWorkMarkup(terminal, { terminals = [terminal], conductor = true, language = 'en' } = {}) {
+  const { roles, defaults, catalog } = require('./fixtures/team-seats.json');
+  const info = { roles, effective: defaults, conductor, lead: 'orchestrator', catalog };
+  const component = file => path.join(__dirname, '../src/features/agents', file);
+  const routing = compileFile(component('RoutingKeyCard.tsx'), language, { useState: initial => React.useState(initial ?? info) });
+  const { ActivityPane } = compileFile(component('ActivityPane.tsx'), language, undefined, { './RoutingKeyCard': routing });
+  return renderToStaticMarkup(React.createElement(ActivityPane, { terminal, terminals }));
+}
+
+const hammerSeats = markup => [...markup.matchAll(/data-seat="([^"]+)"[^>]*>(?:(?!data-seat=).)*?data-icon="Hammer"/g)].map(match => match[1]);
+
+test('routing shows one hammer per seat with an unfinished role across the project and removes it after the last one ends', () => {
+  const terminal = { id: 'selected', codexActive: true };
+  const running = { seat: 'developer', state: 'running', endedAt: null };
+  const starting = { ...running, state: 'starting' };
+  const done = { ...running, state: 'done', endedAt: 42 };
+  const reviewing = { seat: 'reviewer', state: 'reviewing', endedAt: 42 };
+  const render = items => routingWorkMarkup(terminal, { terminals: [terminal, { id: 'other', agentUsage: { calls: [{ items }] } }] });
+  const both = render([running, starting, reviewing]);
+  assert.deepEqual(hammerSeats(both), ['developer']);
+  assert.match(both, /GPT-6\.2-Sol<\/span><svg class="activity-routing-hammer" data-icon="Hammer" role="img" aria-label="Working" focusable="false" width="14"/);
+  assert.deepEqual(hammerSeats(render([done, starting, reviewing])), ['developer']);
+  assert.deepEqual(hammerSeats(render([done, done, reviewing])), []);
+});
+
+test('routing shows the lead hammer only while the selected main conversation works', () => {
+  const terminal = { id: 'selected', sessionId: 'pty', codexActive: true, mainTurn: { state: 'working' } };
+  const working = routingWorkMarkup(terminal, { language: 'zh' });
+  assert.deepEqual(hammerSeats(working), ['orchestrator']);
+  assert.match(working, /data-icon="Hammer" role="img" aria-label="正在工作" focusable="false"/);
+  const waiting = { ...terminal, cliState: { sessionId: 'pty', revision: 1, updatedAt: 1, state: 'waiting' } };
+  assert.deepEqual(hammerSeats(routingWorkMarkup(waiting)), []);
+  const finished = { ...terminal, mainTurn: { state: 'complete' } };
+  assert.deepEqual(hammerSeats(routingWorkMarkup(finished, { terminals: [finished, terminal] })), []);
+});
+
+test('native routing shows no hammer even when the lead and a role are working', () => {
+  const terminal = { id: 'selected', codexActive: true, mainTurn: { state: 'working' },
+    agentUsage: { calls: [{ items: [{ seat: 'developer', state: 'preparing', endedAt: null }] }] } };
+  assert.deepEqual(hammerSeats(routingWorkMarkup(terminal)), ['orchestrator', 'developer']);
+  assert.deepEqual(hammerSeats(routingWorkMarkup(terminal, { conductor: false })), []);
+});
 
 // The called models, as the left bar's Agent tab (and the narrow window's popover) lists them.
 function callsMarkup(calls, language = 'zh', terminalId = 'placeholder') {

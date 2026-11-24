@@ -230,7 +230,15 @@
   font-size: 14px; line-height: 20px; color: var(--flow-muted);
 }
 .activity-routing-role { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-routing-model { overflow-wrap: anywhere; }
+.activity-routing-model { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.activity-routing-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-routing-hammer { flex: none; color: var(--running); transform-origin: 22% 80%; animation: activity-routing-strike 600ms ease-in-out infinite; }
+@keyframes activity-routing-strike {
+  0%, 100% { transform: rotate(0); }
+  35% { transform: rotate(-24deg); }
+  52%, 72% { transform: rotate(16deg); }
+}
+@media (prefers-reduced-motion: reduce) { .activity-routing-hammer { animation: none; } }
 .activity-routing-setting { text-align: end; white-space: nowrap; }
 .activity-routing-fast-icon { display: none; }
 .activity-routing-key strong { color: var(--flow-ink); font-weight: 500; }
