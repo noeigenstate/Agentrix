@@ -14,7 +14,7 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 ## Interface
 - `adapters` (`electron/features/cli-adapters/registry.cjs`) - main registry for install and runtime facets. `settingsInstall` binds locator snapshots and refreshes.
 - `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared declarations for both processes. `agentOfModel(model)` uses the first matching manifest in either entry point.
-- `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version must be within the capability's verification interval when set.
+- `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version older than the capability's verified range is refused; a newer one is tried and flagged `unverified`.
 - `events` (`electron/features/cli-adapters/registry.cjs`) - optional settings builder and hook signal decoder.
 - `transcript` (`electron/features/cli-adapters/registry.cjs`) - resolves, validates and interprets local session records.
 

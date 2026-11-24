@@ -41,9 +41,11 @@ export function belowMinimum(version, minimum) {
   return !!(actual && lower && compareVersion(actual, lower) < 0);
 }
 
+// 'older' is refused. 'newer' is tried: the CLI updates itself almost daily, and a failed switch already reports itself.
 function verifiedVersion(version, [min, max]) {
   const actual = versionParts(version), lower = versionParts(min), upper = versionParts(max);
-  return !!(actual && lower && upper && compareVersion(actual, lower) >= 0 && compareVersion(actual, upper) <= 0);
+  if (!actual || !lower || !upper || compareVersion(actual, lower) < 0) return 'older';
+  return compareVersion(actual, upper) > 0 ? 'newer' : 'verified';
 }
 
 export function support(manifest, key, version) {
@@ -51,8 +53,7 @@ export function support(manifest, key, version) {
   if (capability === true) return { ok: true };
   if (capability?.unsupported) return { ok: false, reason: capability.unsupported };
   if (!capability) return { ok: false, reason: Object.hasOwn(UNSUPPORTED, key) ? UNSUPPORTED[key] : UNKNOWN_CAPABILITY };
-  if (version != null && capability.verified && !verifiedVersion(version, capability.verified)) {
-    return { ok: false, reason: UNVERIFIED_VERSION, params: { cli: manifest.label } };
-  }
-  return { ok: true, via: capability.via };
+  const verified = version != null && capability.verified ? verifiedVersion(version, capability.verified) : 'verified';
+  if (verified === 'older') return { ok: false, reason: UNVERIFIED_VERSION, params: { cli: manifest.label } };
+  return { ok: true, via: capability.via, ...(verified === 'newer' ? { unverified: true } : {}) };
 }

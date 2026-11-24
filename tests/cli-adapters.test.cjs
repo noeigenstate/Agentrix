@@ -112,17 +112,19 @@ test('support reports the implementation channel or an explicit unsupported reas
   assert.deepEqual(support({ supports: {} }, 'resume'), { ok: false, reason: UNSUPPORTED.resume });
 });
 
-test('support honors inclusive numeric verification bounds', () => {
+test('support refuses versions older than the verified range and flags newer ones', () => {
   const { manifest: claude } = adapterOf('claude');
   const screen = { ok: true, via: 'screen' };
   const unverified = { ok: false, reason: UNVERIFIED_VERSION, params: { cli: claude.label } };
   for (const key of ['liveModel', 'liveEffort', 'fast', 'ultracode']) {
-    for (const version of [undefined, '2.1.331', '2.1.331+build.1']) assert.deepEqual(support(claude, key, version), screen);
-    for (const version of ['2.1.330', '2.1.332', '2.1.331-beta.1', 'invalid']) assert.deepEqual(support(claude, key, version), unverified);
+    for (const version of [undefined, '2.1.317', '2.1.331', '2.1.331+build.1']) assert.deepEqual(support(claude, key, version), screen);
+    assert.deepEqual(support(claude, key, '2.1.332'), { ...screen, unverified: true });
+    for (const version of ['2.1.316', '2.1.331-beta.1', 'invalid']) assert.deepEqual(support(claude, key, version), unverified);
   }
   const fixture = { ...claude, supports: { liveModel: { via: 'screen', verified: ['2.1.9', '2.1.11'] } } };
   for (const version of ['2.1.9', '2.1.10', '2.1.11']) assert.deepEqual(support(fixture, 'liveModel', version), screen);
-  assert.deepEqual(support(fixture, 'liveModel', '2.1.12'), unverified);
+  assert.deepEqual(support(fixture, 'liveModel', '2.1.8'), unverified);
+  assert.deepEqual(support(fixture, 'liveModel', '2.1.12'), { ...screen, unverified: true });
   assert.deepEqual(support(claude, 'native', '2.1.332'), { ok: true, via: 'api' });
 });
 

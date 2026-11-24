@@ -1,7 +1,7 @@
 import { UNSUPPORTED } from '../capabilities.mjs';
 
 // The repository has captured picker rows from 2.1.331. Keep the screen range pinned until more releases are checked.
-const liveScreen = { via: 'screen', verified: ['2.1.331', '2.1.331'] };
+const liveScreen = { via: 'screen', verified: ['2.1.317', '2.1.331'] };
 
 export default Object.freeze({
   id: 'claude', label: 'Claude Code', command: 'claude',

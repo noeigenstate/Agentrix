@@ -347,7 +347,7 @@ test('an unverified live version reports why and sends no routing keys until a v
   const terminal = { id: 'lead-version', sessionId: 'pty', agent: 'claude', codexActive: true,
     agentSettings: { model: 'sonnet', effort: 'medium', ultracode: false, fast: false } };
   const scope = leadRoutingScope(terminal), keys = [];
-  let agentVersion = '2.1.332', repaint;
+  let agentVersion = '2.1.316', repaint;
   const before = global.window;
   global.window = { agentrix: {
     skillSeats: async () => ({ conductor: true, leads: { claude: { model: 'opus', effort: 'high', ultracode: true, fast: true } } }),
