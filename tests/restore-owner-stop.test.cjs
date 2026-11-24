@@ -10,6 +10,7 @@ test('R5 restoreTerminal continues crashes once, but never an owner stop, includ
     let stream, runtimeId;
     const host = { nativeStructured: true, nativeMessages: new Map(), completionWork: { begin() {} } };
     const context = vm.createContext({ sessions: new Map([['t', host]]), nativeSpecs: new Map(), quitting: false,
+      ...require('../electron/features/cli-adapters/registry.cjs'),
       createNativeUsage: () => ({ apply() {} }), scheduleState() {}, applyActivity() {}, restorePlans: new Map(), startupErrors: new Map(), broadcast() {},
       store: { findTerminal: () => ({ project: { id: 'p', kind }, record: { restore: saved } }), expectCompletion() {}, setRestore(_id, patch) { Object.assign(saved, patch); } } });
     vm.runInContext(main.slice(main.indexOf('function structuredEvent('), main.indexOf('async function initializeNativeSessions(')), context);

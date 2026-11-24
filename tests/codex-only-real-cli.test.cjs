@@ -122,6 +122,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       await policy.close(); hold = false;
       policy = makeFacade(); sessions.push(policy);
       const context = require('node:vm').createContext({ nativeSessions: policy, restorePlans: new Map(), startupErrors: new Map(), broadcast() {},
+        ...require('../electron/features/cli-adapters/registry.cjs'),
         store: { findTerminal: () => ({ record: { restore: saved } }), setRestore(_id, patch) { Object.assign(saved, patch); } } });
       require('node:vm').runInContext(main.slice(main.indexOf('function restoreTerminal('), main.indexOf('function startTerminal(')), context);
       const beforeRestore = requests.length; await context.restoreTerminal(id);

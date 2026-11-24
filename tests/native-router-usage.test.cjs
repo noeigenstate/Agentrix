@@ -105,13 +105,17 @@ test('real main assembly reports terminal-only Claude subscription usage without
   const focused = { claude: { ...claudeAccounts.account, connection: { kind: 'subscription', active: false } },
     codex: { ...codexAccounts.entries.get('codex-scope').value, connection: { kind: 'subscription', active: false } } };
   let focusedReads = 0;
+  const { adapterOf, legacyRestoreAgent } = require('../electron/features/cli-adapters/registry.cjs');
   const context = { path, structuredClone, claudeAccounts, codexAccounts, sessions: new Map([['t', terminal]]),
     projectAccounts: { snapshot: id => id === 'p' ? focused : null, read: async () => { focusedReads++; } },
     shellPathReady: Promise.resolve(), createTerminalEnvironment: () => ({}), withoutAppImage: value => value, process: { env: {} },
     store: { projects: [{ id: 'p', kind: 'local' }], findTerminal: () => ({ project: { id: 'p', kind: 'local' }, record: { restore: {} } }) },
     randomUUID: require('node:crypto').randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
     app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
-    createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
+    legacyRestoreAgent,
+    adapterOf: id => ({ ...adapterOf(id), native: { load: () => id === 'claude'
+      ? options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden })
+      : () => ({ create: forbidden }) } }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
     // main's own checkClaude (read below) runs over this stand-in for the locator's check.
     inspectClaude: () => context.inspectClaudeExecutable(),
@@ -124,7 +128,6 @@ test('real main assembly reports terminal-only Claude subscription usage without
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {
-      if (name === './features/codex-app-server/index.cjs') return { createCodexRuntime: () => ({ create: forbidden }) };
       if (name === './features/agents/dispatch-control.cjs') return { createDispatchControl: () => ({
         listen: async () => ({ address: 'fixture-control' }), onRequest() {},
       }) };

@@ -129,6 +129,7 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
 function historyReader({ project, spec, restore = {} }) {
   const start = source.indexOf('    readHistory: '), end = source.indexOf('    readCommands:', start), folders = [], lookups = [];
   const context = { nativeSpecs: new Map(spec ? [['t', spec]] : []), randomUUID: () => 'fixture', t: text => text,
+    ...require('../electron/features/cli-adapters/registry.cjs'),
     store: { findTerminal: id => id === 't' ? { project, record: { restore } } : null },
     folderHistory: async folder => { folders.push(folder); return { claude: { id: 'claude-latest' }, codex: null }; },
     codexFactory: { history: async lookup => { lookups.push(lookup); return { id: 'codex-latest' }; } } };

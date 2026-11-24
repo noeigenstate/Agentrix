@@ -17,10 +17,13 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version older than the capability's verified range is refused; a newer one is tried and flagged `unverified`.
 - `events` (`electron/features/cli-adapters/registry.cjs`) - optional settings builder and hook signal decoder.
 - `transcript` (`electron/features/cli-adapters/registry.cjs`) - resolves, validates and interprets local session records.
+- `bindNativeAdapters` (`electron/features/cli-adapters/registry.cjs`) — binds each host's runtime as `native.create(spec, emit)`. The registered facet loads the factory with `native.load()`.
 
 ## May import
 - `electron/features/claude-runtime/adapter.cjs` (Claude Code install, hooks and transcript)
 - `electron/features/codex-runtime/adapter.cjs` (Codex install and transcript)
+- `electron/features/claude-sdk/adapter.cjs` (Claude native runtime and policy)
+- `electron/features/codex-app-server/adapter.cjs` (Codex native runtime and policy)
 - `src/shared/agent-events.ts` (the provider ID type for the renderer declaration)
 
 ## Invariants

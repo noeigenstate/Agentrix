@@ -75,6 +75,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   const project = { id: 'p', kind, path: root }, calls = new AgentCalls(), sent = []; t.after(() => calls.dispose());
   const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', codexActive: true, status: 'codex',
     activitySince: Date.now(), usage: { agent: 'claude', limits: [] } };
+  const { adapterOf, legacyRestoreAgent } = require('../electron/features/cli-adapters/registry.cjs');
   const context = { path, structuredClone, sessions: new Map([['t', planner]]), claudeAccounts: { account: claudeAccount },
     codexAccounts: new Proxy({ interval: 30000, entries: new Map(), closeProject() {} }, { get: (target, key) => key in target ? target[key] : forbidden }),
     projectAccounts: { snapshot: id => id === 'p' && projectAccount ? { codex: projectAccount } : null, read: async () => null, close() {} },
@@ -82,7 +83,10 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), remove() {} },
     randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
     app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
-    createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
+    legacyRestoreAgent,
+    adapterOf: id => ({ ...adapterOf(id), native: { load: () => id === 'claude'
+      ? options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden })
+      : () => ({ create: forbidden }) } }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
     // main's own checkClaude (read below) runs over this stand-in for the locator's check.
     inspectClaude: () => context.inspectClaudeExecutable(),
@@ -97,7 +101,6 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {
-      if (name === './features/codex-app-server/index.cjs') return { createCodexRuntime: () => ({ create: forbidden }) };
       if (name === './features/agents/dispatch-control.cjs' && locate) return { createDispatchControl };
       if (name === './features/agents/dispatch-control.cjs') return { createDispatchControl: () => ({ listen: async () => ({ address: 'fixture-control' }), onRequest() {} }) };
       assert.fail(`unexpected import: ${name}`);

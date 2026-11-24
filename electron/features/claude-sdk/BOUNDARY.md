@@ -24,6 +24,7 @@ The worker stream carries denied work with a reason code and a short action summ
 - `electron/features/claude-sdk/**`
 
 ## Interface
+- `nativePolicy` (`electron/features/claude-sdk/adapter.cjs`) — native runtime initializer and policy for API route selection, fallback, resume preparation, observations and host inputs.
 - `apiEnvironment` (`electron/features/claude-sdk/index.cjs`) — also exports listModels; main composes a model-only catalog probe through these exports: scrub alternate authentication/routing before injecting the saved key into the SDK environment, and list model ids through an injected request. Neither function reads stored credentials; main owns that read and tests inject synthetic keys or sources.
 - `createClaudeRuntime` (`electron/features/claude-sdk/index.cjs`) — injected SDK session factory, credentials, usage and availability; GUI specs may inject `onSubagent(signal, { runtimeSessionId, providerSessionId, folder })` for C-15 lifecycle reporting to the current host; synthetic stops include optional `outcome: 'killed'`, while SDK stops omit it; the file also exports `netRequest`, which gives the connection test Electron net (the session's proxy) in the shape of https.request
 - `createSdkLoader` (`electron/features/claude-sdk/runtime.cjs`) — deferred ESM loading from development or unpacked production paths

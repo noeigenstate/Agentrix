@@ -1,31 +1,23 @@
 const { randomUUID } = require('node:crypto');
-const { decide, nameOf } = require('../claude-runtime/decide.cjs');
 const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
-const { adapters, adapterOf } = require('../cli-adapters/registry.cjs');
-const { support } = require('../cli-adapters/capabilities.mjs');
+const { adapters, adapterOf, bindNativeAdapters, defaultNativeAgent, support, supportsNative } = require('../cli-adapters/registry.cjs');
 const { retainLimits } = require('../agents/agent-usage.cjs');
 const { routingOwned, routingPatch, routingText } = require('../agents/agent-command.cjs');
-// What the owner is told when a provider limit moved a session to the terminal, chosen by the limit's code: [moved, moved with
-// the refused message kept in the composer]. Each is one whole sentence, so the translation table holds it as it is shown.
-const LIMIT_SWITCHED = {
-  credits_exhausted: ['控制台余额不足，请到 Claude Console 的 Billing 充值。已转到 Claude Code 终端。',
-    '控制台余额不足，请到 Claude Console 的 Billing 充值。已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
-  rate_limited: ['API 请求达到速率限制，已转到 Claude Code 终端。',
-    'API 请求达到速率限制，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
-  account_limit: ['Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端。',
-    'Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
-};
-const providerLimit = status => Object.hasOwn(LIMIT_SWITCHED, status);
-const remoteNative = spec => spec.kind === 'ssh' && support(adapterOf(spec.agent).manifest, 'ssh.native').ok;
+const remoteNative = spec => spec.kind === 'ssh' && supportsNative(spec.agent, spec.kind);
+const wirePath = path => path === 'native' ? 'subscription' : path;
+const turnBoundary = event => event.type === 'turn.started' || event.type === 'turn.completed';
 function createRouter({
-  claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now,
+  settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now,
   saveSession = () => {}, invalidateSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [],
   terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {},
-  prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {},
+  prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {}, ...providers
 }) {
+  const nativeAdapterOf = bindNativeAdapters(providers);
+  // The existing key and billing endpoints belong to the API provider.
+  const { native: api } = nativeAdapterOf(defaultNativeAgent);
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = Object.fromEntries(adapters().map(({ manifest: { id } }) => [id, { path: null, reason: null, limits: null }]));
   const projectLimits = new Map(), historyReads = new Map();
@@ -42,12 +34,12 @@ function createRouter({
     }).finally(() => { if (historyReads.get(id) === entry) historyReads.delete(id); });
     historyReads.set(id, entry); return entry.task;
   }
-  // The facts a Claude session's path is decided from: its project's and its card's, as a new or a running session reads them.
-  const factsOf = (spec, card, running = false) => spec.agent === 'codex' ? [] : claude.facts(spec.projectId, card, { running });
   // A running session's path; a failed switch that kept the API holds it there as if API-only.
   function selection(spec, retained = false) {
-    const { path, wire } = decide(factsOf(spec, spec.terminalId, true), settings.get(), { agent: spec.agent, owner: spec.owner, trial: spec.apiTrial,
-      retained: retained && switches.retained(spec.terminalId), running: true });
+    const { native, nativePolicy } = nativeAdapterOf(spec.agent);
+    const { path, wire } = nativePolicy.select?.(native, spec, spec.terminalId, settings.get(), {
+      retained: retained && switches.retained(spec.terminalId), running: true,
+    }) ?? { path: nativePolicy.path, wire: null };
     return { path, reason: wire };
   }
   function pathChanged(agent, path, reason) {
@@ -75,18 +67,15 @@ function createRouter({
     return { status: 'rejected', reason };
   }
   function makeRecord(spec, staged = false, restoreFactory) {
-    const { agent } = spec;
-    const record = { spec, runtime: null, lock: null, inputs: new Map(), staged, buffered: [] };
+    const { native, nativePolicy } = nativeAdapterOf(spec.agent);
+    const record = { spec, nativePolicy, runtime: null, lock: null, inputs: new Map(), staged, buffered: [] };
     record.stream = eventStream(spec);
     const receive = event => {
       if (record.staged) { record.buffered.push(event); return; }
       forward(record, event);
     };
-    if (agent === 'claude') {
-      spec.mayContinue = () => selection(spec, true).path === 'api';
-      spec.quotaFallback = () => spec.owner !== 'dispatch' && settings.get().claudePath === 'api-then-terminal';
-    }
-    record.runtime = restoreFactory ? restoreFactory(spec, receive) : (agent === 'claude' ? claude : codex).create(spec, receive);
+    nativePolicy.configure?.(spec, () => settings.get(), () => selection(spec, true).path === nativePolicy.path);
+    record.runtime = restoreFactory ? restoreFactory(spec, receive) : native.create(spec, receive);
     return record;
   }
   function rememberSession(record, providerSessionId) {
@@ -95,7 +84,7 @@ function createRouter({
     saveSession(record.spec.terminalId, { agent: record.spec.agent, providerSessionId });
   }
   function forward(record, event) {
-    const { spec } = record, { agent, terminalId: id } = spec;
+    const { spec, nativePolicy } = record, { agent, terminalId: id } = spec;
     if (sessions.get(id) !== record) return;
     if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
       record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
@@ -103,13 +92,13 @@ function createRouter({
     const deferHistory = remoteNative(spec);
     // SSH has no local rollout check. A thread/start reply alone does not establish history.
     if (deferHistory && event.type === 'turn.started' && !event.replay) rememberSession(record, event.providerSessionId);
-    if (agent === 'codex' && !event.replay && ['turn.started', 'turn.completed'].includes(event.type)) {
+    if (nativePolicy.canContinueInterrupted && !event.replay && turnBoundary(event)) {
       saveInterrupted(id, !record.ownerStopped && (event.type === 'turn.started' || ['interrupted', 'unknown'].includes(event.payload.status)));
     }
-    if (['turn.started', 'turn.completed'].includes(event.type)) record.turnRevision = (record.turnRevision || 0) + 1;
+    if (turnBoundary(event)) record.turnRevision = (record.turnRevision || 0) + 1;
     if (!record.retiring && event.type === 'session.state' && ended.has(event.payload.state)
       && switches.failed(id, spec.runtimeSessionId)) return;
-    if (agent === 'claude' && (event.type === 'error' && event.payload.stage === 'startup' && settings.get().claudePath === 'api-then-terminal'
+    if (nativePolicy.fallbackEnabled && (event.type === 'error' && event.payload.stage === 'startup' && nativePolicy.fallbackEnabled(settings.get())
       || record.failures?.length && event.type === 'session.state' && event.payload.state === 'failed')) {
       (record.failures ||= []).push(event); return;
     }
@@ -126,23 +115,51 @@ function createRouter({
     if (event.type === 'input.receipt') record.inputs.set(event.payload.clientMessageId, event.payload.status);
     // A proved empty rejected turn continues on the terminal. It must not announce an
     // interrupted round before the same owner input has reached its destination.
-    if (event.type === 'turn.completed' && agent === 'claude' && spec.owner !== 'dispatch'
-      && settings.get().claudePath === 'api-then-terminal' && record.runtime.fallbackInput?.()?.safe) { record.quotaCompletion = event; return; }
+    if (event.type === 'turn.completed' && nativePolicy.fallbackEnabled && spec.quotaFallback?.() && record.runtime.fallbackInput?.()?.safe) {
+      record.quotaCompletion = event; return;
+    }
     record.stream.provider(event.providerSessionId); record.stream.turn(event.turnId);
     record.stream.publish(event.type, event.payload, { itemId: event.itemId, replay: event.replay, occurredAtMs: event.occurredAtMs });
     switches.observe(id);
+  }
+  async function failStart(id, record, error, resume) {
+    const { spec, runtime, nativePolicy, stream } = record, { agent } = spec;
+    if (record.lock) occupied.delete(record.lock);
+    if (nativePolicy.startupMessage) {
+      record.lock = null;
+      record.startupFailed = true;
+      if (remoteNative(spec) && resume && nativePolicy.invalidateResume?.(error)) invalidateSession(id, spec.providerSessionId, agent);
+      try { await runtime.close(); } catch { }
+      const message = nativePolicy.startupMessage(error, spec);
+      const code = typeof error.code === 'string' ? error.code : nativePolicy.startupCode;
+      stream.publish('error', { code, message, retryable: true, willRetry: false, stage: 'startup' });
+      stream.publish('session.state', { state: 'failed', reason: message });
+      throw Object.assign(new Error(message), { code: error.code || nativePolicy.startupCode });
+    }
+    const target = nativePolicy.fallback?.(error, settings.get(), true);
+    if (target === 'terminal') {
+      const notice = error.beforeInput ? error.message : error.code || error.message;
+      stream.publish('path.changed', { previous: nativePolicy.path, selected: target, reason: notice });
+      terminalStreams.set(id, stream);
+      await runtime.close(); sessions.delete(id); await terminal(spec, notice);
+      terminalStreams.set(id, stream); pathChanged(agent, target, notice); changed();
+      return { runtimeSessionId: spec.runtimeSessionId };
+    }
+    flushFailures(record);
+    throw error;
   }
   async function start(id, { agent, resume = false, launch = null }) {
     if (busy.has(id)) throw new Error('会话正在启动。');
     busy.add(id);
     try {
-      const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, agent === 'codex' ? launch : null);
+      const { native, nativePolicy } = nativeAdapterOf(agent);
+      const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, nativePolicy.launchOptions ? launch : null);
       const spec = { ...resolved, agent, runtimeSessionId: randomUUID() };
       if (resume && !spec.providerSessionId) {
         spec.providerSessionId = (await history(id))?.[agent]?.id || null;
         resolveSpec(id, agent, false, true);
         if (!spec.providerSessionId) {
-          if (agent === 'codex' && launch?.resume) throw new Error('没有找到可恢复的 Codex 会话，请使用 codex 开始新会话。');
+          if (nativePolicy.missingResume && launch?.resume) throw new Error(nativePolicy.missingResume);
           resume = false;
         }
       }
@@ -151,10 +168,10 @@ function createRouter({
       if (previous && !ended.has(previous.runtime.snapshot().state)) throw new Error('请先停止当前会话。');
       switches.forget(id);
       if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
-      if (agent === 'claude') await claude.refreshAvailability?.();
-      if (agent === 'claude' && spec.owner !== 'dispatch' && spec.kind !== 'ssh' && config.claudePath === 'api-then-terminal') spec.apiTrial = claude.claimApiRetry?.(spec.projectId);
-      const decision = decide(factsOf(spec, id), config, { agent, owner: spec.owner, trial: spec.apiTrial });
-      if (!decision.path) throw new Error(decision.message || 'Claude API 路径当前不可用。');
+      if (nativePolicy.refresh) await nativePolicy.refresh(native);
+      nativePolicy.claimTrial?.(native, spec, config);
+      const decision = nativePolicy.select?.(native, spec, id, config, {}) ?? { path: nativePolicy.path, wire: null };
+      if (!decision.path) throw new Error(decision.message || nativePolicy.unavailable);
       if (decision.path === 'terminal') {
         const stream = createEventStream(spec, emit, now);
         stream.publish('path.changed', { previous: null, selected: 'terminal', reason: decision.wire }); terminalStreams.set(id, stream);
@@ -168,47 +185,16 @@ function createRouter({
       const runtime = record.runtime; sessions.set(id, record);
       let startup;
       try { startup = await runtime[resume ? 'resume' : 'start'](spec); }
-      catch (error) {
-        if (record.lock) occupied.delete(record.lock);
-        const reason = error.code || error.message;
-        if (agent === 'codex') {
-          record.lock = null;
-          record.startupFailed = true;
-          if (remoteNative(spec) && resume && error.stage === 'thread_resume' && error.missingThread) invalidateSession(id, spec.providerSessionId, agent);
-          try { await runtime.close(); } catch { }
-          // A sandbox Codex did not apply is named by the runtime, which knows what was asked and what came back.
-          const message = reason === 'sandbox_mismatch' ? error.message
-            : ['codex_cli_required', 'ENOENT'].includes(reason) ? spec.kind === 'ssh'
-              ? '远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。'
-              : '未找到 Codex 程序，请在设置中安装。'
-            : reason === 'unsupported_codex_version' ? 'Codex 版本过低，请升级后重试。'
-              // The general sentence names no cause: the runtime's redacted reason goes with it.
-              : 'Codex app-server 连接失败，请重试。' + (error.detail ? `原因：${error.detail}` : '');
-          record.stream.publish('error', { code: typeof error.code === 'string' ? error.code : 'codex_start_failed', message, retryable: true, willRetry: false, stage: 'startup' });
-          record.stream.publish('session.state', { state: 'failed', reason: message });
-          throw Object.assign(new Error(message), { code: error.code || 'codex_start_failed' });
-        }
-        if (agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
-          && (error.code === 'native_cli_required' || error.beforeInput === true)) {
-          const notice = error.beforeInput ? error.message : reason;
-          record.stream.publish('path.changed', { previous: 'api', selected: 'terminal', reason: notice });
-          terminalStreams.set(id, record.stream);
-          await runtime.close(); sessions.delete(id); await terminal(spec, notice);
-          terminalStreams.set(id, record.stream); pathChanged(agent, 'terminal', notice); changed();
-          return { runtimeSessionId: spec.runtimeSessionId };
-        }
-        flushFailures(record);
-        throw error;
-      }
+      catch (error) { return await failStart(id, record, error, resume); }
       if (remoteNative(spec) && resume) rememberSession(record, startup?.providerSessionId);
       const reason = startup?.reason || decision.wire;
-      record.stream.publish('path.changed', { previous: null, selected: decision.path === 'api' ? 'api' : 'subscription', reason });
+      record.stream.publish('path.changed', { previous: null, selected: wirePath(decision.path), reason });
       pathChanged(agent, decision.path, reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
     } finally { busy.delete(id); }
   }
   function localSessions() {
     return [...sessions.values()].filter(record => record.fallbackReason || switches.recovering(record.spec.terminalId) || !ended.has(record.runtime.snapshot().state))
-      .map(record => ({ identity: record, record, spec: record.spec, path: record.spec.agent === 'claude' ? 'api' : 'native' }))
+      .map(record => ({ identity: record, record, spec: record.spec, path: record.nativePolicy.path }))
       .concat(terminalSessions().filter(session => !sessions.has(session.spec.terminalId)));
   }
   function carryHistory(source, target, inputs) {
@@ -219,6 +205,16 @@ function createRouter({
       target.publish(event.type, event.payload, { itemId: event.itemId, replay: true, occurredAtMs: event.occurredAtMs ?? event.receivedAtMs });
     }
     target.turn(null);
+  }
+  function keepFallbackInput(draft, refused) {
+    const returned = [refused.input, ...(refused.remaining || [])];
+    if (!draft.text && !draft.images.length && !draft.undelivered.length && returned.length === 1 && !refused.input.images?.length) {
+      draft.text = refused.input.text;
+      return;
+    }
+    for (const input of returned) {
+      if (!draft.undelivered.some(kept => kept.clientMessageId === input.clientMessageId)) draft.undelivered.push(input);
+    }
   }
   const switches = createSwitches({
     ...switchOptions,
@@ -249,9 +245,7 @@ function createRouter({
     async prepare(session, target, handoff, currentChange, restoring, transition) {
       const id = session.spec.terminalId, old = session.record, previousStream = old?.stream || terminalStreams.get(id);
       if (!restoring) session.restoreFactory = old?.rollbackFactory || old?.runtime.checkpoint?.();
-      if (!session.spec.providerSessionId) {
-        session.spec.providerSessionId = old?.runtime.snapshot().events.findLast(event => event.providerSessionId)?.providerSessionId;
-      }
+      session.spec.providerSessionId ||= old?.runtime.snapshot().events.findLast(event => event.providerSessionId)?.providerSessionId;
       const hasHistory = session.spec.hasHistory || [...(old?.inputs.values() || [])].some(status => ['delivered', 'consumed', 'unknown'].includes(status))
         || previousStream?.snapshot().events.some(event => event.type === 'item.upsert' && event.payload.content?.unsent !== true);
       if (!session.spec.providerSessionId && hasHistory) throw new Error('missing_resume_identity');
@@ -268,10 +262,10 @@ function createRouter({
           stream.provider(spec.providerSessionId); terminalStreams.set(id, stream);
           carryHistory(previousStream, stream);
           let reason = old?.fallbackReason || null;
-          // This card's state: a rate limit is this session's own, credits and account limits the project's.
-          const limit = nameOf(decide(factsOf(spec, id, true), {}, { agent: spec.agent, owner: spec.owner, running: true }).reason);
-          if (settings.get().claudePath === 'api-then-terminal' && providerLimit(limit)) {
-            reason = LIMIT_SWITCHED[limit][0];
+          const { native, nativePolicy } = nativeAdapterOf(spec.agent);
+          const notices = nativePolicy.quotaSwitchNotices?.(native, spec, id, () => settings.get());
+          if (notices) {
+            reason = notices[0];
             const refused = old?.runtime.fallbackInput?.();
             if (refused && !old.fallbackTaken) {
               old.fallbackTaken = true;
@@ -283,17 +277,13 @@ function createRouter({
                 if (status !== 'rejected') switches.input(id, spec.runtimeSessionId);
               }
               if (status !== 'delivered') {
-                const returned = [refused.input, ...(refused.remaining || [])];
-                if (!draft.text && !draft.images.length && !draft.undelivered.length && returned.length === 1 && !refused.input.images?.length) draft.text = refused.input.text;
-                else for (const input of returned) {
-                  if (!draft.undelivered.some(kept => kept.clientMessageId === input.clientMessageId)) draft.undelivered.push(input);
-                }
-                reason = LIMIT_SWITCHED[limit][1];
+                keepFallbackInput(draft, refused);
+                reason = notices[1];
               }
             }
           }
           stream.publish('session.state', { state: 'idle', reason: null });
-          stream.publish('path.changed', { previous: session.path === 'native' ? 'subscription' : session.path, selected: 'terminal', reason });
+          stream.publish('path.changed', { previous: wirePath(session.path), selected: 'terminal', reason });
           pathChanged(spec.agent, 'terminal', reason); changed();
           // The destination is ready. A failed retirement must not destroy it and resurrect a closed source.
           try { await old?.runtime.close(); }
@@ -311,8 +301,8 @@ function createRouter({
         record = makeRecord(spec, true, restoring?.restoreFactory);
         const initialized = await record.runtime[spec.providerSessionId ? 'resume' : 'start'](spec);
         if (initialized?.providerSessionId) spec.providerSessionId = initialized.providerSessionId;
-        if (spec.agent === 'claude') {
-          const prepared = await record.runtime.prepareResume({ allowFresh: !hasHistory });
+        if (record.nativePolicy.prepareResume) {
+          const prepared = await record.nativePolicy.prepareResume(record.runtime, { allowFresh: !hasHistory });
           if (prepared && Object.hasOwn(prepared, 'providerSessionId')) spec.providerSessionId = prepared.providerSessionId;
         }
         if (record.runtime.snapshot().state !== 'idle') throw new Error('resume_not_idle');
@@ -328,7 +318,7 @@ function createRouter({
         carryHistory(previousStream, record.stream, record.inputs);
         for (const event of record.buffered) forward(record, event);
         record.buffered = [];
-        record.stream.publish('path.changed', { previous: 'terminal', selected: target === 'api' ? 'api' : 'subscription', reason: null });
+        record.stream.publish('path.changed', { previous: 'terminal', selected: wirePath(target), reason: null });
         pathChanged(spec.agent, target, null); changed();
       } };
     },
@@ -343,12 +333,12 @@ function createRouter({
       switches.reconcile(retry); return switches.settled();
     });
   }
-  const unsubscribeAvailability = claude.onAvailabilityChange?.(() => reconcile());
+  const unsubscribeAvailability = api.onAvailabilityChange?.(() => reconcile());
   return { start,
     history,
     async continueInterrupted(id, runtimeSessionId, beforeSend) {
       const record = current(id, runtimeSessionId), revision = record.turnRevision;
-      if (record.spec.agent !== 'codex' || record.continued || record.ownerInput || record.ownerStopped || !record.runtime.canContinueInterrupted) return;
+      if (!record.nativePolicy.canContinueInterrupted || record.continued || record.ownerInput || record.ownerStopped || !record.runtime.canContinueInterrupted) return;
       const unfinished = await record.runtime.canContinueInterrupted();
       if (current(id, runtimeSessionId) !== record || record.turnRevision !== revision || record.continued || record.ownerInput || record.ownerStopped || !unfinished) return;
       record.continued = true;
@@ -379,7 +369,7 @@ function createRouter({
     async shell(id, runtimeSessionId, clientMessageId, command) {
       const record = current(id, runtimeSessionId);
       if (!record.runtime.shell) throw new Error('此会话不支持运行命令。');
-      if (record.spec.agent === 'codex') {
+      if (record.nativePolicy.trackShellInput) {
         requireStarted(record);
         if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') throw new Error('会话正在切换，请稍后重试。');
         record.ownerInput = true; record.ownerStopped = false; switches.input(id, runtimeSessionId);
@@ -396,21 +386,22 @@ function createRouter({
       let next, finishPreparation;
       try {
         const spec = { ...previous.spec, runtimeSessionId: randomUUID(), providerSessionId: null, threadId: null };
+        const { newConversationIdentity, path } = previous.nativePolicy;
         finishPreparation = prepareConversation(spec);
         next = makeRecord(spec, true);
         const started = await next.runtime.start();
-        if (previous.spec.agent === 'codex') spec.providerSessionId = started.providerSessionId;
+        if (newConversationIdentity) spec.providerSessionId = newConversationIdentity(started);
         current(id, runtimeSessionId);
         await activateNative(spec, null, { newConversation: true });
         sessions.set(id, next); switches.forget(id);
         if (!remoteNative(spec)) {
-          saveSession(id, { agent: spec.agent, providerSessionId: spec.agent === 'codex' ? spec.providerSessionId : null });
-          next.persisted = spec.agent === 'codex';
+          saveSession(id, { agent: spec.agent, providerSessionId: newConversationIdentity ? spec.providerSessionId : null });
+          next.persisted = !!newConversationIdentity;
         }
         next.staged = false;
         for (const event of next.buffered) forward(next, event);
         next.buffered = [];
-        const selected = spec.agent === 'codex' ? 'subscription' : 'api';
+        const selected = wirePath(path);
         next.stream.publish('path.changed', { previous: selected, selected, reason: null });
         if (previous.lock) occupied.delete(previous.lock);
         // The new binding is committed. A cleanup error must not tell the renderer
@@ -422,29 +413,29 @@ function createRouter({
     },
     async commands(id, runtimeSessionId) {
       const record = current(id, runtimeSessionId);
-      const fallback = record.spec.agent === 'claude' ? await readCommands(record.spec) : [];
+      const fallback = record.nativePolicy.fileCommands ? await readCommands(record.spec) : [];
       const commands = await record.runtime.commands?.(fallback) || [];
       if (current(id, runtimeSessionId) !== record) throw new Error('会话已变化，请刷新后重试。');
       return commands;
     },
     async send(id, runtimeSessionId, message) {
-      const record = current(id, runtimeSessionId);
+      const record = current(id, runtimeSessionId), { nativePolicy } = record;
       if (record.spec.owner !== 'dispatch' && routingText(message.text)) throw routingOwned();
       requireStarted(record);
       // A read-only popup query is not the owner's message: it keeps their stop and input flags, leaves no item in the conversation and, mid-switch, says so
       // instead of leaving an unsent bubble behind.
-      const observation = (record.spec.agent === 'codex' ? ['/status', '/usage'] : ['/context', '/cost', '/status', '/usage']).includes(message.text.trim()) && record.spec.owner !== 'dispatch';
+      const observation = nativePolicy.observationCommands.includes(message.text.trim()) && record.spec.owner !== 'dispatch';
       if (!observation) record.ownerInput = true;
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') {
         if (observation) throw new Error('会话正在切换，请稍后重试。');
         return unsent(record, message, 'switch_in_progress');
       }
-      if (record.spec.agent === 'claude') {
+      if (nativePolicy.select) {
         const selected = selection(record.spec, true);
-        if (selected.path !== 'api') {
+        if (selected.path !== nativePolicy.path) {
           reconcile();
-          if (observation) throw new Error('Claude API 暂时不可用，不能读取。');
+          if (observation) throw new Error(nativePolicy.observationUnavailable);
           return unsent(record, message, selected.reason || 'api_unavailable');
         }
       }
@@ -454,7 +445,7 @@ function createRouter({
         return receipt.status === 'rejected' && !record.inputs.has(message.clientMessageId) ? unsent(record, message, 'input_rejected') : receipt;
       }
       catch (error) {
-        if (record.spec.agent !== 'claude' || settings.get().claudePath !== 'api-then-terminal' || error.beforeInput !== true) {
+        if (nativePolicy.fallback?.(error, settings.get()) !== 'terminal') {
           flushFailures(record); throw error;
         }
         record.fallbackReason = error.message;
@@ -464,12 +455,12 @@ function createRouter({
     interrupt(id, runtimeSessionId) {
       const record = current(id, runtimeSessionId);
       record.ownerStopped = true;
-      if (record.spec.agent === 'codex') saveInterrupted(id, false);
+      if (record.nativePolicy.canContinueInterrupted) saveInterrupted(id, false);
       return record.runtime.interrupt();
     },
     answer(id, runtimeSessionId, requestId, answer) {
       if (answer.switch || answer.handoff) {
-        resolveSpec(id, sessions.get(id)?.spec.agent || 'claude', false, true);
+        resolveSpec(id, sessions.get(id)?.spec.agent || defaultNativeAgent, false, true);
         if (answer.handoff) {
           const inputs = sessions.get(id)?.inputs;
           answer = { handoff: { ...answer.handoff, draft: { ...answer.handoff.draft,
@@ -486,7 +477,7 @@ function createRouter({
       if (!record) {
         const snapshot = terminalStreams.get(id)?.snapshot() || null;
         if (snapshot) { snapshot.switchState = switches.state(id); snapshot.handoff = switches.handoff(id); }
-        if (snapshot) resolveSpec(id, snapshot.events[0]?.provider || 'claude', false, true);
+        if (snapshot) resolveSpec(id, snapshot.events[0]?.provider || defaultNativeAgent, false, true);
         return snapshot;
       }
       current(id, record.spec.runtimeSessionId); return { ...record.stream.snapshot(), switchState: switches.state(id), handoff: switches.handoff(id) || record.handoff };
@@ -494,29 +485,30 @@ function createRouter({
     usage({ cli = {}, limits = {} } = {}, projectId) {
       const config = settings.get(), snapshot = structuredClone(agents);
       for (const { manifest: { id: agent } } of adapters()) {
+        const { native, nativePolicy } = nativeAdapterOf(agent);
         if (projectId) {
           snapshot[agent].limits = structuredClone(projectLimits.get(projectId)?.[agent] || null);
           const running = localSessions().findLast(session => session.spec.projectId === projectId && session.spec.agent === agent);
           snapshot[agent].path = running?.path || null;
           snapshot[agent].reason = running?.record?.stream.snapshot().events.findLast(event => event.type === 'path.changed')?.payload.reason || null;
         }
-        snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.facts(projectId) : [], cli[agent]);
+        snapshot[agent].next = nextPath(agent, config, nativePolicy.usageFacts?.(native, projectId), cli[agent]);
         snapshot[agent].limits ||= structuredClone(limits[agent] || null);
         if (snapshot[agent].limits?.billingRoute === limits[agent]?.billingRoute &&
           Number.isFinite(limits[agent]?.observedAtMs) && limits[agent].observedAtMs > (snapshot[agent].limits.observedAtMs ?? -Infinity)) {
           snapshot[agent].limits = structuredClone(retainLimits(snapshot[agent].limits, limits[agent]));
         }
       }
-      return { ...claude.usage.summary(), agents: snapshot, switches: { waiting: switches.waiting() } };
+      return { ...api.usage.summary(), agents: snapshot, switches: { waiting: switches.waiting() } };
     },
     keyClear() {
       // Retain an in-memory rollback capability before deleting the saved key, even for a lazy idle query.
-      for (const record of sessions.values()) if (record.spec.agent === 'claude') { try { record.rollbackFactory ||= record.runtime.checkpoint?.(); } catch {} }
-      const result = claude.credentials.clear();
+      for (const record of sessions.values()) if (record.nativePolicy.checkpointOnKeyClear) { try { record.rollbackFactory ||= record.runtime.checkpoint?.(); } catch {} }
+      const result = api.credentials.clear();
       for (const record of sessions.values()) record.runtime.policyChanged?.();
       reconcile(true); return result;
     },
-    keySave(key) { const result = claude.credentials.save(key); for (const record of sessions.values()) record.rollbackFactory = null; reconcile(true); return result; },
+    keySave(key) { const result = api.credentials.save(key); for (const record of sessions.values()) record.rollbackFactory = null; reconcile(true); return result; },
     // The same settle point without asking for a pass: whatever was already requested has run and every change has settled.
     settled: () => Promise.resolve(reconcileQueued).then(() => switches.settled()),
     reconcile, observe: id => switches.observe(id), input: (id, runtimeSessionId) => switches.input(id, runtimeSessionId),

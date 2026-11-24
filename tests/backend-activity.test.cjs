@@ -38,6 +38,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
     if (!armed && project.completionArmed) armings++;
   };
   const context = vm.createContext({ sessions, store,
+    ...require('../electron/features/cli-adapters/registry.cjs'),
     readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, summarizeTask: () => '', isLocalAgentCommand, promptText,
     notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},

@@ -168,11 +168,12 @@ test('dynamic pins cover loader aliases, wrappers, binding chains and unresolved
   }
 });
 
-test('the Codex module skips independent Claude budget and connection tests; mixed-provider tests remain conservatively selected', async () => {
+test('the Codex module skips isolated Claude SDK tests and selects tests that import the shared native router', async () => {
   const p = (await core).selectTests(await actual(), ['electron/features/codex-app-server/index.cjs']);
   assert.equal(p.full, false);
   assert.ok(p.unit.includes('tests/native-commands-codex.test.cjs'));
-  for (const file of ['tests/claude-sdk-budget.test.cjs', 'tests/claude-sdk-connection.test.cjs', 'tests/claude-sdk-availability.test.cjs']) assert.ok(![...p.unit, ...p.real].includes(file), file);
+  assert.ok(![...p.unit, ...p.real].includes('tests/claude-sdk-budget.test.cjs'));
+  for (const file of ['tests/claude-sdk-connection.test.cjs', 'tests/claude-sdk-availability.test.cjs']) assert.ok(p.unit.includes(file), file);
   assert.ok(p.unit.includes('tests/claude-sdk-runtime.test.cjs'), 'this file imports Codex workerEnvironment too');
 });
 

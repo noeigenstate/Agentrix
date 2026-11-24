@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter } = require('../electron/features/cli-adapters/registry.cjs');
+const { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter, bindNativeAdapters } = require('../electron/features/cli-adapters/registry.cjs');
 const shared = require('../electron/features/cli-adapters/registry.mjs');
 const { CAPABILITY_KEYS, UNSUPPORTED, UNVERIFIED_VERSION, support } = require('../electron/features/cli-adapters/capabilities.mjs');
 const claudeRuntime = require('../electron/features/claude-runtime/adapter.cjs');
@@ -38,6 +38,20 @@ test('registry adapters expose dedicated install facets and native version floor
     assert.equal(typeof install.locate, 'function');
     assert.equal(typeof install.refresh, 'function');
   }
+});
+
+test('native adapters use the runtime bound to their host', () => {
+  const spec = { agent: 'codex' }, emit = () => {};
+  const first = { create(...args) { assert.deepEqual(args, [spec, emit]); return this; } };
+  const second = { create() { return this; } };
+  const firstHost = bindNativeAdapters({ codex: first }), secondHost = bindNativeAdapters({ codex: second });
+  const registered = adapterOf(spec.agent), bound = firstHost(spec.agent);
+  assert.equal(typeof registered.native.load, 'function');
+  assert.equal(bound.manifest, registered.manifest);
+  assert.equal(bound.nativePolicy, registered.nativePolicy);
+  assert.equal(bound.native.create(spec, emit), first);
+  assert.equal(secondHost(spec.agent).native.create(spec, emit), second);
+  assert.equal(firstHost(spec.agent).native.create(spec, emit), first);
 });
 
 test('install facets forward the environment and retain the locator outcomes', async () => {

@@ -72,6 +72,10 @@
     "id": "electron/features/claude-sdk/shell.cjs:2d7dadcf31593105fd0dee50"
   },
   {
+    "text": "run(file, args, options, (error, stdout) => resolve(error ? { reason: error.killed ? 'timeout' : 'failed' } : { stdout }))",
+    "id": "electron/features/cli-adapters/path-install.cjs:a9f7346b8445b4a586161496"
+  },
+  {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\n        { windowsHide: true, timeout: 2000 }, error => {\n          if (error) {\n            onTreeStopFailure(new Error(`taskkill ${typeof error.code === 'number' ? `exited with code ${error.code}` : error.code || 'failed'}`));\n            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');\n          }\n          treeStopped = true; settle();\n        })",
     "id": "electron/features/codex-app-server/index.cjs:f348e9cb3b41216bc5011a5b"
   },

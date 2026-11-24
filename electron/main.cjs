@@ -27,7 +27,8 @@ const { createProjectAccounts } = require('./features/native-session/project-acc
 const { inspectClaudeExecutable, resolveClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { createLocator } = require('./features/claude-runtime/locator.cjs');
 const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson } = require('./features/native-session/storage.cjs');
-const { createClaudeRuntime, netRequest, apiEnvironment, listModels } = require('./features/claude-sdk/index.cjs');
+const { netRequest, apiEnvironment, listModels } = require('./features/claude-sdk/index.cjs');
+const { adapterOf, legacyRestoreAgent } = require('./features/cli-adapters/registry.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
 const { createWorkerTerminals } = require('./features/worker-terminals/worker-terminals.cjs');
@@ -1240,8 +1241,8 @@ function structuredEvent(id, event) {
 }
 
 async function initializeNativeSessions() {
-  // Load optional provider composition after app.ready; neither module starts a real account session here.
-  const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
+  // Load optional provider composition after app.ready without opening a session.
+  const createCodexRuntime = await adapterOf('codex').native.load(), createClaudeRuntime = adapterOf('claude').native.load();
   const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
   const { locateTeam } = require('./features/team/team-locate.cjs');
   const { resolveRegistration } = require('./features/agents/dispatch-registration.cjs');
@@ -1325,20 +1326,20 @@ function wireNativeSessions(directory, codex, codexFactory) {
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
     prepareConversation: spec => {
       const project = findProject(spec.terminalId), previous = spec.skillSessionId || spec.sessionId, skillSessionId = randomUUID();
+      const { nativePolicy } = adapterOf(spec.agent);
       const lead = skills.leadOptions(project.id, spec.agent);
       const delivery = skills.delivery(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
       Object.assign(spec, { skillSessionId, model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
         seatsMap: delivery?.agentSeats,
         env: { ...spec.env, AGENTRIX_SEATS: JSON.stringify(delivery?.agentSeats ?? null) } });
-      if (spec.agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
-      if (spec.agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: spec.terminalId }, binding);
+      nativePolicy.observeSubagents?.(spec, nativeSubagent);
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
         delivery);
       return committed => {
         if (committed && spec.bootstrapFile) {
           try { updateDispatchLaunchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { report(error); }
           try { updateDispatchSeats(spec.bootstrapFile, skills.dispatchSeats?.(spec.projectId) ?? delivery?.agentSeats ?? {}); } catch (error) { report(error); }
-          if (spec.agent === 'claude') {
+          if (nativePolicy.bootstrapLead) {
             try { updateBootstrapLead(spec.bootstrapFile, lead); } catch (error) { report(error); }
           }
         }
@@ -1348,11 +1349,14 @@ function wireNativeSessions(directory, codex, codexFactory) {
     readHistory: async (id, { signal } = {}) => {
       const project = findProject(id);
       const spec = nativeSpecs.get(id);
-      if (project.kind !== 'ssh' && spec?.agent !== 'codex') return folderHistory(folderOf(id));
+      const agent = project.kind === 'ssh' ? legacyRestoreAgent : spec?.agent;
+      const nativePolicy = adapterOf(agent)?.nativePolicy;
+      if (!nativePolicy?.structuredHistory) return folderHistory(folderOf(id));
       const saved = store.findTerminal(id).record.restore;
       const history = await codexFactory.history({ kind: project.kind, owner: 'gui', projectId: project.id, terminalId: id,
         cwd: spec?.cwd || saved?.cwd || project.path, env: spec?.env, sessionId: randomUUID(), sessionKey: randomUUID(), providerSessionId: null }, { signal }).catch(error => {
-        if (error.code === 'codex_cli_required' && project.kind === 'ssh') throw Object.assign(new Error(t('远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。')), { code: error.code });
+        const message = project.kind === 'ssh' && nativePolicy.remoteHistoryError?.(error);
+        if (message) throw Object.assign(new Error(t(message)), { code: error.code });
         throw error;
       });
       if (findProject(id) !== project) throw new Error('项目已变化，请重试。');
@@ -1371,10 +1375,10 @@ function wireNativeSessions(directory, codex, codexFactory) {
     terminalSessions: localSwitchSessions, observeTerminal: observeSwitchTerminal, prepareTerminal: prepareSwitchTerminal, retireTerminal, activateNative,
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
-      nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
+      nativeTransport: adapterOf(saved.agent).nativePolicy.transport }),
     invalidateSession: (id, threadId, agent) => {
       const saved = store.findTerminal(id)?.record.restore;
-      if (threadId && saved?.threadId === threadId && (saved.agent || 'codex') === agent) store.setRestore(id, { threadId: null, interrupted: false });
+      if (threadId && saved?.threadId === threadId && (saved.agent || legacyRestoreAgent) === agent) store.setRestore(id, { threadId: null, interrupted: false });
     },
     saveInterrupted: (id, interrupted) => { if (!quitting) store.setRestore(id, { interrupted }); },
     terminal: async (spec, reason) => {
@@ -1393,13 +1397,14 @@ function wireNativeSessions(directory, codex, codexFactory) {
 
 function restoreTerminal(id) {
   const found = store.findTerminal(id), saved = found?.record.restore;
-  const localCodex = (saved?.agent || 'codex') === 'codex' && (saved?.codex || saved?.nativeTransport);
-  if (localCodex || saved?.nativeTransport && nativeSessions) {
+  const agent = saved?.agent || legacyRestoreAgent, nativePolicy = adapterOf(agent)?.nativePolicy;
+  const legacyNative = nativePolicy?.restoreWithoutNative && (saved?.codex || saved?.nativeTransport);
+  if (legacyNative || saved?.nativeTransport && nativeSessions) {
     restorePlans.delete(id);
-    if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
+    if (!nativeSessions) throw new Error(nativePolicy.restoreWithoutNative);
     const interrupted = saved.interrupted === true;
-    return nativeSessions.start(id, { agent: saved.agent || 'codex', resume: !!saved.threadId }).then(async opened => {
-      if ((saved.agent || 'codex') === 'codex' && saved.threadId && interrupted) {
+    return nativeSessions.start(id, { agent, resume: !!saved.threadId }).then(async opened => {
+      if (nativePolicy?.canContinueInterrupted && saved.threadId && interrupted) {
         await nativeSessions.continueInterrupted(id, opened.runtimeSessionId, () => store.setRestore(id, { interrupted: false }));
       }
       return opened;

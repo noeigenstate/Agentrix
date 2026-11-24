@@ -171,6 +171,7 @@ test('N10 history lookup preserves the actionable missing-remote-Codex reason', 
   const expression = source.slice(start, end).trim().replace(/^readHistory: /, '').replace(/,$/, '');
   const project = { kind: 'ssh', id: 'remote', path: '/srv' };
   const lookup = vm.runInNewContext('(' + expression + ')', { findProject: () => project, nativeSpecs: new Map(),
+    ...require('../electron/features/cli-adapters/registry.cjs'),
     store: { findTerminal: () => ({ record: { restore: {} } }) }, randomUUID: () => 'fixture', t: value => value,
     codexFactory: { history: async () => { throw Object.assign(new Error('codex_cli_required'), { code: 'codex_cli_required' }); } } });
   await assert.rejects(lookup('terminal'), error => error.code === 'codex_cli_required' && /远端未找到 Codex/.test(error.message));
@@ -183,6 +184,7 @@ for (const kind of ['local', 'ssh']) test(`${kind} shell native history uses the
   const project = { kind, id: 'p', path: '/project' }, env = { CODEX_HOME: '/private/codex' }, signal = new AbortController().signal;
   let observed;
   const lookup = vm.runInNewContext('(' + expression + ')', { findProject: () => project,
+    ...require('../electron/features/cli-adapters/registry.cjs'),
     nativeSpecs: new Map([['t', { agent: 'codex', cwd: '/project/sub', env }]]),
     store: { findTerminal: () => ({ record: { restore: { threadId: 'stale', cwd: '/previous' } } }) }, randomUUID: () => 'fixture', t: value => value,
     codexFactory: { history: async (spec, options) => { observed = { spec, options }; return { id: 'latest' }; } } });

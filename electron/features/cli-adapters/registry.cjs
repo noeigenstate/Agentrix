@@ -2,6 +2,9 @@ const { adapters: declarations, agentOfModel } = require('./registry.mjs');
 const { createPathInstall, onPath } = require('./path-install.cjs');
 const claude = require('../claude-runtime/adapter.cjs');
 const codex = require('../codex-runtime/adapter.cjs');
+const claudeSdk = require('../claude-sdk/adapter.cjs');
+const codexAppServer = require('../codex-app-server/adapter.cjs');
+const { support } = require('./capabilities.mjs');
 
 // Bind the locators main already owns for its terminal and native sessions.
 function runtimeInstall(createInstall, callbacks) {
@@ -16,8 +19,8 @@ function runtimeInstall(createInstall, callbacks) {
 }
 
 const runtimes = new Map([
-  ['claude', { ...runtimeInstall(claude.createInstall, ({ claude: peek, refreshClaude: refresh }) => ({ peek, refresh })), transcript: claude.transcript, events: claude.events }],
-  ['codex', { ...runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh })), transcript: codex.transcript }],
+  ['claude', { ...runtimeInstall(claude.createInstall, ({ claude: peek, refreshClaude: refresh }) => ({ peek, refresh })), transcript: claude.transcript, events: claude.events, ...claudeSdk }],
+  ['codex', { ...runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh })), transcript: codex.transcript, ...codexAppServer }],
 ]);
 
 function createAdapter(manifest, runtime, pathOptions) {
@@ -30,4 +33,22 @@ const adapters = () => registered;
 const adapterOf = id => registered.find(({ manifest }) => manifest.id === id);
 const adapterOfModel = model => adapterOf(agentOfModel(model));
 
-module.exports = { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter, onPath };
+// These defaults are part of the existing native and saved-session wire formats.
+const defaultNativeAgent = 'claude';
+const legacyRestoreAgent = 'codex';
+const supportsNative = (id, kind) => {
+  const adapter = adapterOf(id);
+  return !!adapter && support(adapter.manifest, kind === 'ssh' ? 'ssh.native' : 'native').ok;
+};
+
+// Runtimes belong to one host. The bound native facet exposes create(spec, emit).
+function bindNativeAdapters(providers) {
+  const bound = new Map(registered.filter(adapter => adapter.native).map(adapter => {
+    const { id } = adapter.manifest;
+    return [id, { ...adapter, native: providers[id] }];
+  }));
+  return id => bound.get(id);
+}
+
+module.exports = { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter, onPath,
+  bindNativeAdapters, defaultNativeAgent, legacyRestoreAgent, support, supportsNative };
