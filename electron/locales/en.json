@@ -3825,5 +3825,15 @@
   "远端续接": "Remote resume",
   "SSH 项目里启动后没发过消息的 Codex 会话不再被当成历史，续接不到时“开始新的对话”直接新开；启动中和连接失败时发送有各自的提示。": "On an SSH project, a Codex session that never sent a message is no longer offered as history, and \"Start a new conversation\" starts one directly when a resume finds nothing; sending while starting or after a failed connection says which it is.",
   "角色启动": "Role start",
-  "修复 Codex 角色在部分 Windows 环境报“沙箱尚未确认工作目录”而无法启动的问题。": "Fixes Codex roles failing to start on some Windows setups with \"the sandbox has not confirmed the working folder\"."
+  "修复 Codex 角色在部分 Windows 环境报“沙箱尚未确认工作目录”而无法启动的问题。": "Fixes Codex roles failing to start on some Windows setups with \"the sandbox has not confirmed the working folder\".",
+  "远端角色": "Remote roles",
+  "SSH 项目的总指挥现在可以调用角色：角色在远端主机的项目目录里运行，状态显示在活动栏。需要远端有 Node 20.3 和 Git 2.11 以上。": "The conductor of an SSH project can now call roles: they run on the host in the project folder and show in the activity pane. The host needs Node 20.3 and Git 2.11 or later.",
+  "远端同步": "Remote sync",
+  "指挥家模式下，SSH 远端的 Claude Code 也跟随总指挥座位的快速模式和 Ultracode。": "In conductor mode, Claude Code on an SSH host now follows the orchestrator seat's fast mode and Ultracode as well.",
+  "切换说明": "Switch notice",
+  "自动切换没能完成时，左栏和阅读视图会说明并提示手动切换，不再一直显示“正在切换”；新会话在第一轮之前显示“已就绪”。": "When an automatic switch cannot finish, the side panel and the reading view say so and suggest switching by hand instead of showing \"switching\" forever; a new session shows \"Ready\" before its first turn.",
+  "角色跑测试": "Roles run tests",
+  "可写的 Claude 角色在命令行方式下也能运行命令和测试，仍不能提交、推送或强制回退。": "Writable Claude roles on the command line can now run commands and tests too; they still cannot commit, push or hard-reset.",
+  "限流提示": "Limit notice",
+  "Codex 的限流提示只在请求确实被拒绝时显示，之后成功的一轮会清除它。": "The Codex rate-limit notice shows only when a request was actually refused, and the next successful turn clears it."
 }

@@ -3,6 +3,11 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
+  { title: "远端角色", text: "SSH 项目的总指挥现在可以调用角色：角色在远端主机的项目目录里运行，状态显示在活动栏。需要远端有 Node 20.3 和 Git 2.11 以上。", group: "new" },
+  { title: "远端同步", text: "指挥家模式下，SSH 远端的 Claude Code 也跟随总指挥座位的快速模式和 Ultracode。", group: "new" },
+  { title: "切换说明", text: "自动切换没能完成时，左栏和阅读视图会说明并提示手动切换，不再一直显示“正在切换”；新会话在第一轮之前显示“已就绪”。", group: "new" },
+  { title: "角色跑测试", text: "可写的 Claude 角色在命令行方式下也能运行命令和测试，仍不能提交、推送或强制回退。", group: "new" },
+  { title: "限流提示", text: "Codex 的限流提示只在请求确实被拒绝时显示，之后成功的一轮会清除它。", group: "new" },
   { title: "远端 Claude", text: "SSH 项目的启动页现在也列出 Claude Code，点击后在远端终端里启动；选“继承开发历史”时由远端的 Claude Code 自己续接。" },
   { title: "远端切换", text: "指挥家模式下改总指挥座位，SSH 远端运行中的 Claude Code 也会自动切换模型和思考深度，改动的座位表随你的下一条消息告知模型。" },
   { title: "别名座位", text: "座位用 sonnet、opus 这类别名时，新版 Claude Code 的模型选择器按版本号列出模型也能选中，不再切换失败。" },
