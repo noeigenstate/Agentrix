@@ -596,6 +596,18 @@
     "id": "src/features/agents/WorkerTerminal.tsx:35709bb77a051233d0b750f2"
   },
   {
+    "text": "facet?.input(rows)",
+    "id": "src/features/cli-screens/index.ts:b097596f63afdeabce2d4d65"
+  },
+  {
+    "text": "screenOf(agent)?.input(rows)",
+    "id": "src/features/cli-screens/index.ts:dc14a9dba99739564cdc819e"
+  },
+  {
+    "text": "screenOf(agent)?.input(rows, screen.inputHint)",
+    "id": "src/features/cli-screens/index.ts:a77594a4b091fbbafe5b499e"
+  },
+  {
     "text": "run(item, item.state === 'open' ? 'adopted' : 'open')",
     "id": "src/features/dashboard/Suggestions.tsx:14a3f1ce4f8c3a98d22fb02d"
   },
