@@ -18,6 +18,7 @@ Shows the selected terminal's Orchestrator, current step and prompt history in t
 - `src/features/terminal/terminal-screen.ts`
 - `src/shared/elapsed-clock.ts`
 - `src/shared/i18n.ts`
+- `src/shared/lead-routing-notices.ts` (the active automatic switch failure for the selected terminal's conversation)
 - `src/shared/model-name.ts`
 - `src/shared/types.ts`
 - `src/shared/useNow.ts`

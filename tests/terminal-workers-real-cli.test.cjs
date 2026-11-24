@@ -14,12 +14,12 @@ const permissionProbes = [
   ['Write', { file_path: 'made.txt', content: 'blocked' }],
 ];
 
-function probeReply(data, results) {
+function probeReply(data, results, probes) {
   const blocks = data.messages.flatMap(({ content }) => Array.isArray(content) ? content : []);
   const tools = blocks.filter(block => block.type === 'tool_use');
   for (const tool of tools) results.set(tool.id, blocks.find(block => block.tool_use_id === tool.id && block.type === 'tool_result'));
-  if (tools.length === permissionProbes.length) return answer(data);
-  const [name, input] = permissionProbes[tools.length];
+  if (tools.length === probes.length) return answer(data);
+  const [name, input] = probes[tools.length];
   return [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_probe${tools.length}`, name, input: {} } },
     { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
     { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
@@ -33,8 +33,9 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
   const { createEventServer } = require('../electron/events.cjs');
   const pty = require('node-pty');
-  const results = new Map(), f = await harness(t, readOnly ? data => probeReply(data, results) : answer);
-  if (readOnly) fs.writeFileSync(path.join(f.cwd, 'probe.test.cjs'), 'require("node:test")("WORKER_TEST_OK", () => {});\n');
+  const probes = readOnly ? permissionProbes : permissionProbes.slice(0, 2);
+  const results = new Map(), f = await harness(t, data => probeReply(data, results, probes));
+  fs.writeFileSync(path.join(f.cwd, 'probe.test.cjs'), 'require("node:test")("WORKER_TEST_OK", () => {});\n');
   const env = { ...f.env }; delete env.CI;
   const run = { runId: 'offline-run', projectId: 'terminal', agent: 'claude', cwd: f.cwd, local: true, leadMode: 'terminal' };
   const runtimeDir = path.join(path.dirname(f.cwd), 'runtime'), integration = path.join(__dirname, '../integration');
@@ -57,6 +58,7 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   });
   eventServer = await createEventServer(event => terminals.event(event));
   hookServer = await createHookServer(createHookIngest({ keyOf: id => terminals.keyOf(id), deliver: event => terminals.hook(event) }));
+  const waits = [];
   let workerPty, exited = false, screen = '';
   terminals = createWorkerTerminals({ spawn: (file, args, options) => {
     workerPty = pty.spawn(file, args, options);
@@ -64,7 +66,8 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
     workerPty.onData(chunk => { screen = (screen + chunk).slice(-3000); });
     return workerPty;
   }, claudeFile: () => process.env.AGENTRIX_REAL_CLAUDE,
-    parent: () => ({ env, sessionKey: 'offline-owner', bootstrapFile }), calls: () => ({ setAwaiting() {} }), runtimeDir: () => runtimeDir,
+    parent: () => ({ env, sessionKey: 'offline-owner', bootstrapFile }), runtimeDir: () => runtimeDir,
+    calls: () => ({ setAwaiting(_runId, value) { if (value) waits.push(value); } }),
     claudeHome: () => env.CLAUDE_CONFIG_DIR,
     hooks: ({ terminalId, sessionKey, env: workerEnv, cwd }) => terminalHooks({ port: hookServer.port, terminalId, sessionKey, eventServer, env: workerEnv, cwd,
       workerPermission: true,
@@ -83,13 +86,14 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   assert.equal(events.find(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message')?.payload.content.text, 'REAL WORKER ANSWER');
   assert.equal(events.find(event => event.type === 'path.changed').payload.selected, 'terminal-worker');
   assert.ok(f.stats.keys.every(key => key === env.ANTHROPIC_API_KEY), 'the worker used the throwaway profile\'s key only');
+  assert.deepEqual(waits, [], 'running the probes never waits for the owner');
+  const [ran, git, write] = results.values();
+  assert.ok(ran);
+  assert.notEqual(ran.is_error, true, JSON.stringify(ran.content));
+  assert.match(JSON.stringify(ran.content), /WORKER_TEST_OK/);
+  assert.equal(git?.is_error, true);
+  assert.match(JSON.stringify(git.content), /denied|permission|not allowed/i);
   if (readOnly) {
-    const [ran, git, write] = results.values();
-    assert.ok(ran);
-    assert.notEqual(ran.is_error, true, JSON.stringify(ran.content));
-    assert.match(JSON.stringify(ran.content), /WORKER_TEST_OK/);
-    assert.equal(git?.is_error, true);
-    assert.match(JSON.stringify(git.content), /denied|permission|not allowed/i);
     assert.equal(write?.is_error, true);
     assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false);
   }

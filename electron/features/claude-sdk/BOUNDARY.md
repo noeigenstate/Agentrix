@@ -15,8 +15,9 @@ Project hooks remain enabled for workers, matching the trusted project's CLI beh
 Worker scope policy constrains the model's requested inputs and applies the bound read-only flag; it does not sandbox project hooks, which can execute commands
 and rewrite an allowed input to a path outside the worker scope. This is an explicit owner decision, not an isolation guarantee.
 Dispatch sessions offer only the built-in tools the worker policy can allow at that access level. PreToolUse denials give a specific reason and a direction to stop.
-Read-only dispatch sessions use dontAsk and expose reading tools and Bash for commands and tests. Worker PreToolUse denies explicit Git commit, push and reset --hard.
-The role selects relevant tests and must leave project files untouched. Edits, planning, questions and MCP remain blocked.
+Both worker access levels expose Bash for commands and tests. Worker PreToolUse denies explicit Git commit, push and reset --hard.
+The role selects relevant tests. Read-only sessions use dontAsk, leave project files untouched and expose reading tools.
+Edits, planning, questions and MCP remain blocked for read-only sessions.
 The worker stream carries denied work with a reason code and a short action summary. Bookkeeping denials stay in the audit, and summaries omit command arguments and file contents.
 
 ## Owns

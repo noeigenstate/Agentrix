@@ -241,8 +241,11 @@ test('helper constructs exact Codex/Claude argv and rejects incomplete or ambigu
   const base = ['--role', '审查', '--title', 'Inspect the parser', '--model', 'test-model', '--effort', 'high', '--cwd', os.tmpdir(), '--brief', 'brief.md', '--out', 'out.md'];
   const options = argumentsOf(['codex', ...base, '--fast', '--image', 'a.png', '--image', 'b.png', '--read-only']);
   assert.deepEqual(commandOf(options), ['app-server', '--listen', 'stdio://']);
+  const shells = process.platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
+  const git = shells.flatMap(shell => [`${shell}(git commit *)`, `${shell}(git push *)`, `${shell}(git reset *--hard*)`]);
   assert.deepEqual(commandOf(argumentsOf(['claude', ...base, '--permission', 'acceptEdits'])),
-    ['-p', '--model', 'test-model', '--effort', 'high', '--permission-mode', 'acceptEdits', '--disallowedTools', 'EnterPlanMode', '--output-format', 'stream-json', '--verbose']);
+    ['-p', '--model', 'test-model', '--effort', 'high', '--permission-mode', 'acceptEdits', '--allowedTools', shells.join(','),
+      '--disallowedTools', ['EnterPlanMode', ...git].join(','), '--output-format', 'stream-json', '--verbose']);
   for (const seat of ['designer', 'developer/frontend', 'a' + '1'.repeat(31) + '/b' + '2'.repeat(23)]) {
     assert.equal(argumentsOf(['codex', ...base, '--seat', seat]).seat, seat);
   }
@@ -1040,7 +1043,10 @@ test('standing rules inline bounded standards for normal briefs and keep referen
     assert.match(readOnly, /Report what you found/);
     assert.doesNotMatch(readOnly, /Files you may change|what you changed/);
   }
-  assert.match(section({ permission: 'acceptEdits' }), /Scope: Change only what the task needs\./);
+  const writableClaude = section({ agent: 'claude', permission: 'acceptEdits' });
+  assert.match(writableClaude, /Scope: Change only what the task needs\./);
+  assert.match(writableClaude, /may run commands and tests\. Decide whether to run tests and which to run based on the task/);
+  assert.match(writableClaude, /Do not commit, push, or run git reset --hard/);
   for (const file of ['resources/skills/code-standard/SKILL.md', 'skills/code-standard-team/SKILL.md', 'skills/other/SKILL.md']) {
     await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
     await fs.writeFile(path.join(directory, file), `---\nname: fixture\n---\n# ${path.basename(path.dirname(file))} rules\n`);

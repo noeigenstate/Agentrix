@@ -87,3 +87,28 @@ test('fast settings re-reads concurrent edits before replacing the staged file',
   assert.deepEqual(JSON.parse(f.read()), { theme: 'light' });
   assert.deepEqual(fs.readdirSync(path.dirname(f.file)), ['settings.json']);
 });
+
+test('SSH fast settings stays on the originating channel and masks remote errors', async t => {
+  const f = fixture(t), calls = [], remoteToken = 'a'.repeat(32);
+  f.setRemote();
+  f.write('{"fastMode":false}');
+  f.session.usageEnv = null;
+  f.session.terminal = { connected: true, async request(op, data, options) {
+    calls.push([op, data, options]);
+    if (data.target === false || data.confirmed === false) throw new Error('/remote/private/settings.json');
+    return data.token ? null : remoteToken;
+  } };
+  assert.throws(() => f.begin(true, 'stale'));
+  const token = await f.begin(true);
+  assert.notEqual(token, remoteToken);
+  const origin = f.session.terminal;
+  f.session.terminal = { connected: true, request() { assert.fail('replacement channel'); } };
+  assert.equal(await f.end(token), null);
+  assert.throws(() => f.end(token));
+  f.session.terminal = origin;
+  await assert.rejects(f.begin(false), error => !error.message.includes('/remote/') && /Claude Code/.test(error.message));
+  await assert.rejects(f.end(await f.begin(true), false), error => !error.message.includes('/remote/') && /Claude Code/.test(error.message));
+  assert.deepEqual(calls, [{ target: true }, { token: remoteToken, confirmed: true }, { target: false },
+    { target: true }, { token: remoteToken, confirmed: false }].map(data => ['claude-fast-settings', data, { timeout: 3000 }]));
+  assert.equal(f.read(), '{"fastMode":false}');
+});

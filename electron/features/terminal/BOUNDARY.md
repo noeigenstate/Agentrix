@@ -10,7 +10,7 @@ resolution and title tracking. Agentrix starts Codex only through app-server; te
 - `electron/zsh-terminal.cjs`
 
 ## Interface
-- `registerTerminalIpc` (`electron/features/terminal/ipc.cjs`) — terminal IPC, including local fast settings restoration; returns the tracked write path for quota fallback
+- `registerTerminalIpc` (`electron/features/terminal/ipc.cjs`) — terminal IPC and local or SSH Fast default restoration. Returns the tracked quota fallback writer.
 - `registerNativeIpc` (`electron/features/terminal/native-ipc.cjs`) — the native approval, question-answer and managed-prompt IPC handlers
 - `ApprovalGuard` (`electron/features/terminal/approval-guard.cjs`) — a session's observation epochs; the file also exports approvalStamp
 - `createTerminalEnvironment` (`electron/terminal-env.cjs`) — the environment a PTY starts with

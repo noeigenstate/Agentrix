@@ -46,4 +46,19 @@ function restoreTerminals({ store, restorePlans, startupErrors, startTerminal, b
   });
 }
 
-module.exports = { createCloseGuards, restoreTerminals };
+function launchAfterPrompt(project, session, { launchPlans, t, broadcast, followClaudeSession }) {
+  const plan = launchPlans.get(session.terminalId);
+  if (!plan || !session.ready || session.inputDirty || session.codexActive) return;
+  launchPlans.delete(session.terminalId);
+  if (!session.claudeAvailable) {
+    session.error = project.kind === 'ssh' ? t('远端主机上没有找到 Claude Code。请在该主机上安装，并确保它在 PATH 中。')
+      : t('没有找到 {agent}，请在设置 › 编码助手中安装。', { agent: 'Claude Code' });
+    broadcast(); return;
+  }
+  session.ready = false;
+  if (plan.threadId) { session.claudeResumeId = plan.threadId; void followClaudeSession(project, session, plan.threadId); }
+  if (project.kind === 'ssh') session.gate.input(plan.command); else session.gate.afterPrompt(plan.command);
+  broadcast();
+}
+
+module.exports = { createCloseGuards, restoreTerminals, launchAfterPrompt };

@@ -3,12 +3,15 @@ import type { ConversationEntry, ProjectTerminal } from './types';
 export type LeadRoutingCommand = '/model' | '/effort' | '/fast on' | '/fast off';
 type Submission = { command: LeadRoutingCommand; at: number; until: number };
 export type LeadRoutingNotice = { model?: string; effort?: string; fast?: boolean; ultracode?: boolean; incomplete?: boolean; fastError?: { target: boolean; reason: string } };
+type LeadRoutingFailure = { targetModel: string; notice: LeadRoutingNotice };
 type Route = { submissions: Submission[]; outcome: LeadRoutingNotice | null };
 
 // Renderer memory only. A reopened transcript needs the same live PTY and conversation to use these receipts.
 const routes = new Map<string, readonly Route[]>();
+const failures = new Map<string, LeadRoutingFailure>();
 const listeners = new Set<() => void>();
 const empty: readonly Route[] = [];
+const notify = () => { for (const listener of listeners) listener(); };
 
 export function leadRoutingScope(terminal: ProjectTerminal) {
   return terminal.sessionId ? JSON.stringify([
@@ -17,6 +20,13 @@ export function leadRoutingScope(terminal: ProjectTerminal) {
 }
 
 export const leadRoutingSnapshot = (scope: string) => routes.get(scope) ?? empty;
+export const leadRoutingFailure = (scope: string) => failures.get(scope) ?? null;
+
+export function setLeadRoutingFailure(scope: string, failure: LeadRoutingFailure | null) {
+  if (failure) failures.set(scope, failure);
+  else if (!failures.delete(scope)) return;
+  notify();
+}
 
 export function subscribeLeadRouting(listener: () => void) {
   listeners.add(listener);
@@ -31,7 +41,7 @@ export function trackLeadRouting(scope: string) {
     routes.delete(scope);
     routes.set(scope, [...previous.slice(-31), route]);
     if (routes.size > 128) routes.delete(routes.keys().next().value!);
-    for (const listener of listeners) listener();
+    notify();
   };
   return {
     submit(command: LeadRoutingCommand, at = Date.now()) {

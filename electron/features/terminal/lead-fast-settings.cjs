@@ -36,6 +36,7 @@ function restore(file, before, target, writeFileAtomic) {
 
 function registerLeadFastSettings({ handle, getSession, findProject, claudeConfigDir, writeFileAtomic, now = Date.now }) {
   const pending = new Map();
+  const remoteSettings = (remote, request) => remote.request('claude-fast-settings', request, { timeout: 3000 });
   handle('terminal:leadFastSettings', (id, request) => {
     try {
       if (!request || typeof request !== 'object') throw unavailable();
@@ -45,13 +46,24 @@ function registerLeadFastSettings({ handle, getSession, findProject, claudeConfi
         const run = pending.get(request.token);
         if (!run || run.id !== id) throw unavailable();
         pending.delete(request.token);
+        if (run.remote) return remoteSettings(run.remote, { token: run.remoteToken, confirmed: request.confirmed }).catch(() => { throw unavailable(); });
         if (request.confirmed) restore(run.file, run.before, run.target, writeFileAtomic);
         return null;
       }
       const session = getSession(id);
       if (typeof request.sessionId !== 'string' || typeof request.target !== 'boolean' || session?.sessionId !== request.sessionId
-        || session.nativeStructured || session.status === 'exited' || !session.codexActive || session.agent !== 'claude'
-        || !session.usageEnv || findProject(id).kind === 'ssh') throw unavailable();
+        || session.nativeStructured || session.status === 'exited' || !session.codexActive || session.agent !== 'claude') throw unavailable();
+      if (findProject(id).kind === 'ssh') {
+        const remote = session.terminal;
+        if (!remote?.request || !remote.connected || remote.closed) throw unavailable();
+        return remoteSettings(remote, { target: request.target }).then(remoteToken => {
+          if (typeof remoteToken !== 'string' || !/^[a-f0-9]{32}$/.test(remoteToken)) throw unavailable();
+          const token = randomUUID();
+          pending.set(token, { id, remote, remoteToken, until: time + 90_000 });
+          return token;
+        }).catch(() => { throw unavailable(); });
+      }
+      if (!session.usageEnv) throw unavailable();
       const folder = session.usageEnv.CLAUDE_CONFIG_DIR;
       const file = path.join(folder ? path.resolve(session.usageCwd || process.cwd(), folder) : claudeConfigDir(), 'settings.json');
       const fileKey = process.platform === 'win32' ? file.toLowerCase() : file;

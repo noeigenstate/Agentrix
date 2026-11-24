@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
-const { EventEmitter } = require('node:events');
+const { EventEmitter, once } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
@@ -15,7 +15,7 @@ async function until(predicate) {
   throw new Error('Synthetic runtime timeout');
 }
 function fixture(t, mode = 'normal') {
-  const events = [], lifetime = resources(t), calls = [];
+  const events = [], lifetime = resources(t), calls = [], reported = new EventEmitter();
   const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', now: () => 1000,
     spawnProcess: (_file, args, options) => {
       calls.push({ args, options });
@@ -24,9 +24,9 @@ function fixture(t, mode = 'normal') {
     } });
   const spec = { projectId: 'project', terminalId: 'terminal', runtimeSessionId: 'runtime', cwd: os.tmpdir(),
     model: 'synthetic-model', effort: 'high', fast: true, env: { PATH: '', CODEX_HOME: path.join(os.tmpdir(), 'synthetic-codex-home') } };
-  const runtime = factory.create(spec, event => events.push(event));
+  const runtime = factory.create(spec, event => { events.push(event); if (event.type === 'turn.completed') reported.emit(event.type, event.payload); });
   lifetime.defer('close runtime', () => runtime.close());
-  return { events, factory, runtime, spec, calls };
+  return { events, factory, runtime, spec, calls, reported };
 }
 for (const mode of ['structured', 'spend-limit']) test(`G8 real app-server adapter forwards ${mode} structured turn data`, async t => {
   const f = fixture(t, mode); await f.runtime.start(); await f.runtime.send({ clientMessageId: 'structured-input', text: 'offline' });
@@ -46,6 +46,27 @@ for (const allowFreshResume of [false, true]) test(`F14 a missing empty thread s
     await f.runtime.resume(spec); assert.equal(f.runtime.threadResponse.thread.id, 'synthetic-thread');
     assert.equal(f.events.some(event => event.type === 'turn.started' || event.type === 'input.receipt'), false);
   }
+});
+
+test('Codex reports weekly quota without a rejection, shows a failed request and clears it after success', async t => {
+  const { events, runtime, reported } = fixture(t, 'weekly-limit');
+  await runtime.start();
+  const turn = async (id, status) => {
+    const done = once(reported, 'turn.completed');
+    assert.equal((await runtime.send({ clientMessageId: id, text: id })).status, 'delivered');
+    assert.equal((await done)[0].status, status);
+  };
+  const limits = () => events.findLast(event => event.type === 'limits.updated').payload;
+  await turn('allowed', 'completed');
+  assert.equal(limits().limitsById.codex.secondary.usedPercent, 100);
+  assert.equal(events.some(event => event.type === 'limits.updated' && event.payload.notice), false);
+  await turn('refused', 'failed');
+  assert.deepEqual(limits().notice, { code: 'rate_limited', message: 'Codex 请求受到限流。', resetsAtMs: 200000 });
+  const refusal = events.length;
+  await turn('recovered', 'completed');
+  assert.equal(limits().notice, null);
+  assert.equal(limits().limitsById.codex.secondary.usedPercent, 100);
+  assert.equal(events.slice(refusal).some(event => event.type === 'limits.updated' && event.payload.notice && event.payload.providerStatus !== 'rejected'), false);
 });
 
 test('native start, final snapshot replacement, completion dedup and limits are provider snapshots', async t => {

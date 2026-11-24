@@ -302,13 +302,16 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (!turn || typeof turn.id !== 'string' || finished.has(turn.id) || turn.id !== events.binding.turnId) return;
           finished.add(turn.id); active = false; requests.cancelAll();
           const outcome = turnCompletion(turn, currentUsage);
-          if (['usageLimitExceeded', 'rateLimitExceeded'].includes(outcome.terminalReason)) {
-            const scope = spec.scopeId || spec.runtimeSessionId, limit = restrictedLimits(scopes.get(scope), outcome.terminalReason === 'usageLimitExceeded' ? 'spend_limit' : 'rate_limited', scope, now());
+          const scope = spec.scopeId || spec.runtimeSessionId, previous = scopes.get(scope);
+          const limited = outcome.status === 'failed' && ['usageLimitExceeded', 'rateLimitExceeded'].includes(outcome.terminalReason);
+          if (limited || previous?.notice && outcome.status === 'completed' && !outcome.error && !manualCommand) {
+            const limit = limited ? restrictedLimits(previous, outcome.terminalReason === 'usageLimitExceeded' ? 'spend_limit' : 'rate_limited', scope, now())
+              : mergeLimits(previous, { ordinaryUsageAllowed: true }, scope, now());
             scopes.set(scope, limit); events.publish('limits.updated', limit);
           }
           events.finishTurn(outcome.status); events.publish('turn.completed', outcome);
           manualCommand = null; setState('idle');
-          if (outcome.terminalReason === 'usageLimitExceeded') {
+          if (limited && outcome.terminalReason === 'usageLimitExceeded') {
             const entry = receipts.get(clientMessageId);
             const safe = !executionSeen && !currentUsage && Array.isArray(turn.items) && turn.items.length === 0 && entry
               && ['queued', 'delivered'].includes(entry.status) && !entry.retried;

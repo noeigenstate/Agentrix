@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { CaretDown, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
 import type { CliState, ProjectTerminal, SeatsInfo } from '../../shared/types';
 import { currentLanguage, t } from '../../shared/i18n';
@@ -10,6 +10,7 @@ import { actionText } from './action-text';
 import { CALL_STATES, ModelHead } from './AgentCalls';
 import { resetTime } from './Metric';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
+import { leadRoutingFailure, leadRoutingScope, subscribeLeadRouting } from '../../shared/lead-routing-notices.ts';
 // A terminal's last worked prompt supplies its finished row when the Agent tab reopens.
 const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
 export function useMainTurn(terminal: ProjectTerminal | undefined) {
@@ -27,7 +28,9 @@ export function useMainTurn(terminal: ProjectTerminal | undefined) {
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
   const cli = cliStateFor(terminal.agent === 'claude' ? 'claude' : 'codex', frame, terminal, signal);
   const hasState = !!signal || !!frame && (cli.input || cli.waiting || cli.working);
-  const activity = cli.waiting ? 'waiting' : cli.working ? 'working' : hasState
+  const freshReady = terminal.agent === 'claude' && signal?.state === 'idle' && signal.phase === 'ready' && signal.turn === 0
+    && (!terminal.mainTurn || terminal.mainTurn.state === 'unknown');
+  const activity = cli.waiting ? 'waiting' : cli.working ? 'working' : freshReady ? 'ready' : hasState
     ? terminal.mainTurn?.state === 'interrupted' || terminal.mainTurn?.state === 'unknown' ? terminal.mainTurn.state : 'complete' : terminal.mainTurn?.state ?? terminal.codexActivity;
   const prompts = (terminal.prompts || []).filter(prompt => !hasState || prompt.state !== 'working' || cli.working || cli.waiting), working = prompts.find(prompt => prompt.state === 'working');
   const source = terminal.mainTurn?.background, background = activity === 'working' ? source : null;
@@ -83,6 +86,8 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   // In native mode the CLI's own /model and /effort decide, and the panel shows what it runs.
   const chosen = seats?.conductor ? seats.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model : null;
   const pending = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
+  const routingFailure = () => leadRoutingFailure(terminal.agent === 'claude' ? leadRoutingScope(terminal) : '');
+  const routeFailed = useSyncExternalStore(subscribeLeadRouting, routingFailure, routingFailure)?.targetModel === chosen;
   const now = useNow(Date.now);
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
   // Native turns distinguish a failure from an interruption only for their own runtime session.
@@ -94,7 +99,8 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   const expanded = fold === foldSession;
   const action = terminal.action, running = !!action && !action.done && activity === 'working';
   const endedAt = terminal.mainTurn?.updatedAt ?? terminal.lastCompletedAt;
-  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : unknownEnd ? t('本轮已结束，完成状态未知。') : failedEnd ? t('失败') : t('已中断');
+  const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : activity === 'ready' ? t('已就绪')
+    : unknownEnd ? t('本轮已结束，完成状态未知。') : failedEnd ? t('失败') : t('已中断');
   const step = running && <li key="step" className="is-step" title={action.detail || action.target}>
     <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
   </li>;
@@ -126,14 +132,17 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} ultracode={settings?.ultracode}
         provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
-      {pending && <li className="activity-call-note" role="status"><span /><p>{t('正在切换到 {model}', { model: pending })}</p><span /></li>}
+      {pending && <li className="activity-call-note" role="status"><span /><p>{routeFailed
+        ? t('未能切换到 {model}，可在终端里用 /model 手动切换。', { model: pending }) : t('正在切换到 {model}', { model: pending })}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>
       {expanded ? rows : rows.slice(0, 4)}
       {hidden > 0 && <li className="activity-task-fold"><button type="button" aria-expanded={expanded} onClick={() => setFold(expanded ? null : foldSession)}>
         <CaretDown size={14} aria-hidden="true" />{expanded ? t('收起') : t('还有 {count} 条', { count: hidden })}
       </button></li>}
-      {!prompts.length && !background && unknownEnd && <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>}
+      {!prompts.length && !background && (activity === 'ready' || unknownEnd) && <li className="is-idle">
+        <span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span />
+      </li>}
       {!prompts.length && !background && (activity === 'complete' || activity === 'interrupted') && (ended
         ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" />
           : failedEnd ? <WarningCircle size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />,

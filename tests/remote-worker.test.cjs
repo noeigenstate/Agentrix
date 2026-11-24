@@ -5,12 +5,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
+const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 const { seatRouting } = require('../integration/agent-event.cjs');
 const { specialtyCases } = require('./seat-auto.test.cjs');
 
-function pythonProbe(t, script) {
+function pythonProbe(t, script, timeout = 20_000) {
   const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
-    path.join(__dirname, '../integration/remote-worker.py')], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+    path.join(__dirname, '../integration/remote-worker.py')], { encoding: 'utf8', timeout, windowsHide: true });
   if (result.error?.code === 'ENOENT') { t.skip('Python missing'); return null; }
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   return result.stdout;
@@ -76,16 +77,16 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
     connection.worker.temp = directory
     file = pathlib.Path(directory) / 'claude-lead'
     seats = {'researcher': {'model':'sonnet', 'effort':'high'}}
-    first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True, 'seatsMap':seats}
+    first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True, 'ultracode':True, 'seatsMap':seats}
     current = {'model':'sonnet', 'effort':'medium'}
     connection.worker.write_claude_lead(first)
-    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\n{"researcher":{"model":"sonnet","effort":"high"}}\n'
+    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\n{"researcher":{"model":"sonnet","effort":"high"}}\nultracode\n'
     def update(lead, ok):
         connection.receive({'op':'claude-lead', 'id':len(messages)+1, 'claudeLead':lead})
         assert messages[-1]['type'] == 'response' and messages[-1]['ok'] is ok, messages
     update(current, True)
     for bad in [dict(current, model='bad&model'), dict(current, model='x'*161), dict(current, effort='High'),
-                dict(current, effort='x'*33), dict(current, fast='true'), dict(first, seatsMap={'padding':'x'*8192})]:
+                dict(current, effort='x'*33), dict(current, fast='true'), dict(current, ultracode=1), dict(first, seatsMap={'padding':'x'*8192})]:
         update(bad, False)
         assert file.read_bytes() == b'sonnet\nmedium\n0\nnull\n'
     update(None, True)
@@ -177,55 +178,102 @@ with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
 `);
 });
 
-test('SSH Bash reads four, six and three line lead files without exporting retired values', { skip: process.platform === 'win32' }, t => {
+test('SSH Bash applies Fast and Ultracode on conversation launches and reads legacy lead files', {
+  skip: process.platform === 'win32' && !process.env.AGENTRIX_TEST_BASH,
+}, t => {
   const output = pythonProbe(t, String.raw`
-import pathlib, runpy, shutil, subprocess, sys, tempfile
+import os, pathlib, runpy, shutil, subprocess, sys, tempfile
 module = runpy.run_path(sys.argv[1])
-bash = shutil.which('bash', path='/usr/bin:/bin')
+bash = os.environ.get('AGENTRIX_TEST_BASH') or shutil.which('bash', path='/usr/bin:/bin')
 if not bash:
     print('SKIP Bash missing')
     sys.exit(0)
 with tempfile.TemporaryDirectory(prefix='remote-lead-shell-') as directory:
     root = pathlib.Path(directory)
     stub = root / 'claude'
-    stub.write_text('''#!/bin/sh
+    stub.write_bytes('''#!/bin/sh
+IFS= read -r settings < "$2" || :
+fast=0
+ultra=0
+case $settings in *'"fastMode": true'*) fast=1;; esac
+case $settings in *'"ultracode": true'*) ultra=1;; esac
+printf 'settings=%s|%s\\n' "$fast" "$ultra"
 printf "values=%s|%s|%s" "$ANTHROPIC_DEFAULT_HAIKU_MODEL" "$CLAUDE_CODE_SUBAGENT_MODEL" "$AGENTRIX_SEATS"
 shift 2
 printf "|%s" "$@"
 printf "\\n"
-''')
+'''.encode('utf-8'))
     stub.chmod(0o700)
     worker = module['Worker'](lambda _event: None)
     worker.temp = directory
-    worker.write_claude_lead({'model':'sonnet', 'effort':'high', 'seatsMap':{}})
+    worker.write_claude_lead({'model':'sonnet', 'effort':'high', 'fast':True, 'ultracode':True, 'seatsMap':{}})
     rc = root / 'agentrix.bash'
-    rc.write_text(module['BASH_SOURCE'], encoding='utf-8')
+    rc.write_bytes(module['BASH_SOURCE'].encode('utf-8'))
     probe = '''
 source "$1"
-[[ $(type -P claude) -ef "$AGENTRIX_ROOT/claude" ]] || exit 87
+__pg_emit() { :; }
+PATH="$PWD:$PATH"
+[[ $(type -P claude) -ef ./claude ]] || exit 87
 claude --resume fixture
+claude
 claude --version
 printf '%s\\n' sonnet high 0 opus haiku '{}' > "$AGENTRIX_CLAUDE_LEAD_FILE"
 claude
 printf '%s\\n' sonnet high 0 > "$AGENTRIX_CLAUDE_LEAD_FILE"
 claude
+: > "$AGENTRIX_CLAUDE_LEAD_FILE"
+claude
 '''
-    env = {'HOME':directory, 'PATH':directory+':/usr/bin:/bin', 'AGENTRIX_ROOT':directory, 'AGENTRIX_PYTHON':sys.executable,
-           'AGENTRIX_NOTIFY_FILE':str(root/'notify'), 'AGENTRIX_READING_NOTE_FILE':str(root/'note'),
-           'AGENTRIX_CLAUDE_LEAD_FILE':str(root/'claude-lead'), 'AGENTRIX_CLAUDE_BACKGROUND_FILE':str(root/'policy')}
-    result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', str(rc)], env=env, text=True, capture_output=True, timeout=15)
+    env = {key: value for key, value in os.environ.items() if not key.startswith(('AGENTRIX_', 'CLAUDE_', 'ANTHROPIC_')) and key != 'BASH_ENV'}
+    env.update(HOME=root.as_posix(), AGENTRIX_ROOT=root.as_posix(), AGENTRIX_PYTHON=pathlib.Path(sys.executable).as_posix(),
+               AGENTRIX_NOTIFY_FILE=(root/'notify').as_posix(), AGENTRIX_READING_NOTE_FILE=(root/'note').as_posix(),
+               AGENTRIX_CLAUDE_LEAD_FILE=(root/'claude-lead').as_posix(), AGENTRIX_CLAUDE_BACKGROUND_FILE=(root/'policy').as_posix())
+    result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', rc.as_posix()], cwd=directory,
+                            env=env, encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
     assert result.returncode == 0, result.stderr
     notice = ('Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode. '
               'Work directly with Claude Code tools.')
     conversation = ['--append-system-prompt', notice, '--model', 'sonnet', '--effort', 'high']
     assert [line.split('|') for line in result.stdout.splitlines() if line.startswith('values=')] == [
         ['values=', '', '{}', *conversation, '--resume', 'fixture'],
+        ['values=', '', '{}', *conversation],
         ['values=', '', 'null', '--version'],
         ['values=', '', '{}', *conversation],
         ['values=', '', 'null', *conversation],
+        ['values=', '', 'null', *conversation[:2]],
     ], result.stdout
-`);
+    assert [line for line in result.stdout.splitlines() if line.startswith('settings=')] == [
+        'settings=1|1', 'settings=1|1', 'settings=0|0', 'settings=0|0', 'settings=0|0', 'settings=0|0',
+    ], result.stdout + result.stderr
+`, 50_000);
   if (output?.includes('SKIP Bash missing')) t.skip('Bash missing');
+});
+
+test('SSH transcript records deliver Ultracode attachments and effort echoes to agent settings', t => {
+  const output = pythonProbe(t, String.raw`
+import json, pathlib, runpy, sys, tempfile
+module = runpy.run_path(sys.argv[1])
+worker = module['Worker'](lambda _event: None)
+with tempfile.TemporaryDirectory() as directory:
+    worker.claude_home = directory
+    filename = pathlib.Path(directory, 'projects', 'fixture.jsonl')
+    filename.parent.mkdir()
+    records = [
+        {'type': 'attachment', 'isSidechain': True, 'attachment': {'type': 'ultra_effort_exit'}},
+        {'type': 'attachment', 'attachment': {'type': 'ultra_effort_enter', 'private': 'excluded'}},
+        {'type': 'user', 'message': {'content': [{'type': 'text', 'text': '<local-command-stdout>Ultracode off. Effort stays max.</local-command-stdout>'}]}},
+        {'type': 'user', 'message': {'content': '<local-command-stdout>Set effort level to max (for this session only) · Ultracode on</local-command-stdout>'}},
+        {'type': 'attachment', 'attachment': {'type': 'ultra_effort_exit'}},
+    ]
+    filename.write_text(''.join(json.dumps(row)+'\n' for row in records), encoding='utf-8')
+    print(json.dumps(worker.claude_status(str(filename), 1000)['records']))
+`);
+  if (output == null) return;
+  const records = JSON.parse(output);
+  assert.deepEqual(records[0].attachment, { type: 'ultra_effort_enter' });
+  let state = null;
+  assert.deepEqual(records.map(record => (state = agentSettings(state, 'claude', record)).ultracode), [true, false, true, false]);
+  assert.equal(state.effort, 'max');
 });
 
 test('SSH open carries the background switch and Claude seat, and changes use separate control messages', async t => {
@@ -240,7 +288,7 @@ test('SSH open carries the background switch and Claude seat, and changes use se
       module, testLink: link, require: name => name.endsWith('dispatch.cjs') ? { runtimeFiles: () => ({}) } : native(name),
       process, Buffer, setInterval, clearInterval, setTimeout, clearTimeout,
     });
-    const claudeLead = allow ? { model: 'opus', effort: 'high', fast: true } : null;
+    const claudeLead = allow ? { model: 'opus', effort: 'high', fast: true, ultracode: true } : null;
     remote = new module.exports.RemoteConnection({ path: '/fixture', id: 'fixture', ssh: {} }, {
       auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow, claudeLead });
     t.after(() => remote.close());

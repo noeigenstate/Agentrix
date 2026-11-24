@@ -407,7 +407,6 @@ class SkillsStore {
     if (!this.seatsInfo(projectId)?.conductor) return null;
     const seat = this.leadOptions(projectId, 'claude', { remote });
     if (!seat) return null;
-    if (remote) delete seat.ultracode;
     return { ...seat, seatsMap: this.dispatchSeats(projectId) };
   }
 

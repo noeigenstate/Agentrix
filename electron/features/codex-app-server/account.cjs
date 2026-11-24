@@ -30,14 +30,13 @@ function mergeLimits(previous, update, scopeId, now = Date.now()) {
   const resetCredits = 'rateLimitResetCredits' in update
     ? (update.rateLimitResetCredits ? { availableCount: count(update.rateLimitResetCredits.availableCount) } : null)
     : previous?.resetCredits ?? null;
-  const value = { scopeId, billingRoute: previous?.billingRoute || 'unknown', observedAtMs: now, state: previous?.ordinaryUsageAllowed === false ? 'unavailable' : 'ready', limitsById: buckets,
-    resetCredits, ordinaryUsageAllowed: 'ordinaryUsageAllowed' in update ? (typeof update.ordinaryUsageAllowed === 'boolean' ? update.ordinaryUsageAllowed : null) : previous?.ordinaryUsageAllowed ?? null,
-    source: 'codex-app-server', ...(previous?.notice ? { notice: previous.notice } : {}) };
-  const denied = Object.values(supplied).find(raw => raw?.spendControlReached === true || raw?.rateLimitReachedType);
-  if (denied) return restrictedLimits(value, /credits_depleted$/.test(denied.rateLimitReachedType || '') ? 'credits_required'
-    : denied.spendControlReached || /usage_limit_reached$/.test(denied.rateLimitReachedType || '') ? 'spend_limit' : 'rate_limited', scopeId, now);
-  if (update.ordinaryUsageAllowed === true) { value.state = 'ready'; value.notice = null; }
-  return value;
+  const ordinaryUsageAllowed = 'ordinaryUsageAllowed' in update
+    ? (typeof update.ordinaryUsageAllowed === 'boolean' ? update.ordinaryUsageAllowed : null) : previous?.ordinaryUsageAllowed ?? null;
+  // Quota snapshots describe windows and controls. Only a turn result can establish a request refusal.
+  const notice = ordinaryUsageAllowed === true ? null : previous?.notice ?? null;
+  return { scopeId, billingRoute: previous?.billingRoute || 'unknown', observedAtMs: now,
+    state: ordinaryUsageAllowed === false || notice ? 'unavailable' : 'ready', limitsById: buckets, resetCredits, ordinaryUsageAllowed,
+    source: 'codex-app-server', ...(notice ? { notice, providerStatus: 'rejected' } : { notice: null }) };
 }
 
 function tokenUsage(value, baseline = null) {

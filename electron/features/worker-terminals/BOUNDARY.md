@@ -8,8 +8,9 @@ current permission frame surface the owner wait even when the decision hook coul
 accept a late hook decision after that notification, so automatic deny keys wait out the hook budget. The wait stays
 visible until the CLI advances or clears its menu. Tests cover this with a fake clock and a captured permission screen.
 
-Read-only workers can run Bash commands and tests through dontAsk, with PowerShell also available on Windows. Both shells
-deny explicit Git commit, push and reset --hard. The role decides which tests the task needs and must leave project files untouched.
+Workers can run Bash commands and tests, with PowerShell also available on Windows. Both shells deny explicit Git
+commit, push and reset --hard. The role decides which tests the task needs. Read-only workers use dontAsk and leave
+project files untouched. Writable workers use acceptEdits and follow their assigned file scope.
 
 ## Owns
 - `electron/features/worker-terminals/**`

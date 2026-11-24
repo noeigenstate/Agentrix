@@ -38,6 +38,9 @@ PREFIX = "PGW1 "
 SKILL_STATE_LOCK = threading.Lock()
 SKILL_LEASE_SECONDS = 10 * 60
 SKILL_RETENTION_SECONDS = 30 * 24 * 60 * 60
+FAST_SETTINGS_LOCK = threading.Lock()
+FAST_SETTINGS_PENDING = {}
+FAST_SETTINGS_ERROR = "Could not read or restore the Claude Code fast mode default."
 IMAGE_TYPES = {".png": "image/png", ".apng": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg", ".jfif": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".avif": "image/avif", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 # The form of a picture Codex generated, as electron/generated-image-path.cjs gives it.
 GENERATED_IMAGE = re.compile(r"/generated_images/[^/]+/[^/]+\.(?:png|jpe?g|webp)$", re.I)
@@ -377,7 +380,8 @@ try:
         elif len(sys.argv)>2 and sys.argv[2]: event["command"]=sys.argv[2][:24]
     if event.get("agent")=="claude":
         home=os.path.expanduser("~")
-        event["accountRoute"]={"home":home,"configDir":os.environ.get("CLAUDE_CONFIG_DIR") or None,
+        config_dir=os.environ.get("CLAUDE_CONFIG_DIR")
+        event["accountRoute"]={"home":home,"configDir":os.path.abspath(config_dir) if config_dir else None,
             "secureDir":(os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR") or os.path.join(home,".claude")) if "CLAUDE_SECURESTORAGE_CONFIG_DIR" in os.environ else None,
             "overridden":any(name.upper() in CLAUDE_ROUTE_ENV for name in os.environ)}
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
@@ -429,23 +433,24 @@ function claude {
     done
     executable=$(type -P claude)
     if [ -z "$executable" ]; then printf 'Claude Code CLI was not found on this SSH host.\n'; return 127; fi
-    local model effort seat_fast seat_map legacy_seats fast=0
+    local model effort seat_fast seat_map ultracode legacy_seats fast=0 ultra=0
     local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
     local -a lead_args=()
     if [[ $conversation == 1 && -r ${AGENTRIX_CLAUDE_LEAD_FILE-} ]] &&
         { IFS= read -r model && IFS= read -r effort && IFS= read -r seat_fast && {
             # Old files put the seat map on line 6, after two retired fields.
             IFS= read -r seat_map || :
-            if IFS= read -r legacy_seats && IFS= read -r legacy_seats; then seat_map=$legacy_seats; fi
+            if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
         }; } < "$AGENTRIX_CLAUDE_LEAD_FILE" &&
         [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $seat_fast == 0 || $seat_fast == 1 ) ]]; then
         lead_args=(--model "$model" --effort "$effort")
         fast=$seat_fast
+        [[ $ultracode == ultracode ]] && ultra=1
     fi
     [[ ${seat_map-} == \{* ]] || seat_map=null
     __pg_emit codex-started "$(__pg_command "$@")" claude
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
-    settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" <<'PY'
+    settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" "$ultra" <<'PY'
 import json,shlex,sys
 command=" ".join(shlex.quote(word) for word in (sys.executable,sys.argv[1],"claude-hook"))
 hooks={name:[{"hooks":[{"type":"command","command":command+" "+kind}]}] for name,kind in
@@ -455,6 +460,7 @@ for name in ("PreToolUse", "PostToolUse"):
     hooks[name]=[{"matcher":"Agent|Task","hooks":[{"type":"command","command":seat_command,"timeout":5}]}]
 settings={"hooks":hooks}
 if sys.argv[2]=="1": settings["fastMode"]=True
+if sys.argv[3]=="1": settings["ultracode"]=True
 print(json.dumps(settings))
 PY
     )
@@ -510,6 +516,46 @@ def open_regular(name, folder=None):
         os.close(descriptor)
         raise NotRegularFile("只能读取普通文件。")
     return os.fdopen(descriptor, "rb")
+
+
+def read_fast_settings(filename):
+    def reject_constant(_value):
+        raise ValueError(FAST_SETTINGS_ERROR)
+
+    limit = 1024 * 1024
+    try:
+        with open_regular(filename) as source: content = source.read(limit + 1)
+    except FileNotFoundError:
+        return None, {}
+    if len(content) > limit: raise ValueError(FAST_SETTINGS_ERROR)
+    data = json.loads(content.decode("utf-8-sig"), parse_constant=reject_constant)
+    if not isinstance(data, dict): raise ValueError(FAST_SETTINGS_ERROR)
+    return content, data
+
+
+def restore_fast_settings(filename, before, target):
+    original, saved = before
+    absent = object()
+    expected = True if target else absent
+    for _ in range(2):
+        content, current = read_fast_settings(filename)
+        if content is None or current.get("fastMode", absent) is not expected or saved.get("fastMode", absent) is expected: return
+        if "fastMode" in saved: current["fastMode"] = saved["fastMode"]
+        else: current.pop("fastMode", None)
+        unchanged = original is not None and json.dumps(current, sort_keys=True) == json.dumps(saved, sort_keys=True)
+        data = original if unchanged else (json.dumps(current, allow_nan=False, indent=2) + "\n").encode("utf-8")
+        descriptor, temporary = tempfile.mkstemp(prefix=".agentrix-fast-", dir=os.path.dirname(filename))
+        try:
+            with os.fdopen(descriptor, "wb") as output:
+                os.fchmod(output.fileno(), 0o600)
+                output.write(data)
+            # A concurrent editor may have changed another key after the first read.
+            if read_fast_settings(filename)[0] == content:
+                os.replace(temporary, filename)
+                return
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+    raise ValueError(FAST_SETTINGS_ERROR)
 
 
 def file_digest(source):
@@ -621,7 +667,11 @@ def compact_claude_record(record):
         return kept
     if record.get("type") == "attachment":
         attachment = record.get("attachment") or {}
-        if not isinstance(attachment, dict) or attachment.get("type") != "queued_command" or attachment.get("commandMode") == "bash": return None
+        if not isinstance(attachment, dict): return None
+        kind = attachment.get("type")
+        if kind in ("ultra_effort_enter", "ultra_effort_exit"):
+            return {"type": "attachment", "uuid": record.get("uuid"), "timestamp": record.get("timestamp"), "attachment": {"type": kind}}
+        if kind != "queued_command" or attachment.get("commandMode") == "bash": return None
         prompt = attachment.get("prompt")
         if isinstance(prompt, list): prompt = [{"type": "text", "text": clip(block.get("text"))} for block in prompt if isinstance(block, dict) and block.get("type") == "text"]
         return {**provenance, "type": "attachment", "uuid": record.get("uuid"), "timestamp": record.get("timestamp"),
@@ -1182,6 +1232,7 @@ class Worker:
         self.codex_home = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
         self.claude_home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
         self.claude_route = None
+        self.claude_fast_home = None
         self.claude_accounts = accounts or RemoteClaudeAccounts()
         self.uploads = {}
         self.activity_reader = None
@@ -1286,6 +1337,27 @@ class Worker:
         if self.stopping: return {"state": "skipped", "reason": "cancelled"}
         result = self.claude_accounts.read(route, self.coding_root)
         return result if not self.stopping and route is self.claude_route else {"state": "skipped", "reason": "cancelled"}
+
+    def claude_fast_settings(self, message):
+        token, confirmed, target = message.get("token"), message.get("confirmed"), message.get("target")
+        with FAST_SETTINGS_LOCK:
+            now = time.monotonic()
+            for key, (_, _, _, _, until) in list(FAST_SETTINGS_PENDING.items()):
+                if until <= now: del FAST_SETTINGS_PENDING[key]
+            if isinstance(token, str) and type(confirmed) is bool:
+                run = FAST_SETTINGS_PENDING.get(token)
+                if run is None or run[0] is not self: raise ValueError(FAST_SETTINGS_ERROR)
+                del FAST_SETTINGS_PENDING[token]
+                _, filename, before, target, _ = run
+                if confirmed: restore_fast_settings(filename, before, target)
+                return None
+            folder = self.claude_fast_home
+            if type(target) is not bool or not folder or self.stopping: raise ValueError(FAST_SETTINGS_ERROR)
+            filename = os.path.join(os.path.realpath(folder), "settings.json")
+            if any(run[1] == filename for run in FAST_SETTINGS_PENDING.values()): raise ValueError(FAST_SETTINGS_ERROR)
+            before, token = read_fast_settings(filename), os.urandom(16).hex()
+            FAST_SETTINGS_PENDING[token] = (self, filename, before, target, now + 90)
+            return token
 
     def initialize(self, config):
         self.allow_background_tasks = config.get("allowBackgroundTasks") is True
@@ -1873,11 +1945,13 @@ class Worker:
         if len(encoded.encode("utf-8")) > 8192: raise ValueError("Routing seat snapshot too large.")
         if lead is not None and set(lead) - {"seatsMap", "launchSeatsMap"}:
             model, effort, fast = lead.get("model"), lead.get("effort"), lead.get("fast", False)
+            ultracode = lead.get("ultracode", False)
             model_pattern = r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}"
             if (not isinstance(model, str) or not re.fullmatch(model_pattern, model)
-                    or not isinstance(effort, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", effort) or type(fast) is not bool):
+                    or not isinstance(effort, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", effort)
+                    or type(fast) is not bool or type(ultracode) is not bool):
                 raise ValueError("Invalid Claude lead seat.")
-            text = "\n".join([model, effort, "1" if fast else "0", encoded, ""])
+            text = "\n".join([model, effort, "1" if fast else "0", encoded] + (["ultracode"] if ultracode else []) + [""])
         self.write_routing_file("claude-lead", text)
         self.write_routing_file("dispatch.json.seats", encoded)
 
@@ -1937,6 +2011,11 @@ class Worker:
                             if self.claude_route != route: self.claude_route = route
                             self.claude_home = route["configDir"] or os.path.join(route["home"], ".claude")
                         else: self.claude_route = None
+                        if event.get("type") == "codex-started":
+                            # Use the environment that launched Claude, even if a later hook runs elsewhere.
+                            self.claude_fast_home = self.claude_home if self.claude_route else None
+                        elif event.get("type") == "codex-exited":
+                            self.claude_fast_home = None
                     codex_home = event.pop("codexHome", None)
                     if event.get("type") in ("shell-prompt", "codex-started"):
                         if isinstance(codex_home, str) and os.path.isabs(codex_home): self.codex_home = codex_home
@@ -1990,6 +2069,9 @@ class Worker:
         with self.lock:
             if self.stopping: return
             self.stopping = True
+        with FAST_SETTINGS_LOCK:
+            for token, run in list(FAST_SETTINGS_PENDING.items()):
+                if run[0] is self: del FAST_SETTINGS_PENDING[token]
         for process_id in list(self.codex_processes): self.codex_close(process_id)
         for identity in list(self.uploads): self.cancel_upload(identity)
         if self.master is not None:
@@ -2069,6 +2151,9 @@ class Channel:
             elif op == "codex-status": value = worker.codex_status(message.get("since"), message.get("threadId"))
             elif op == "claude-status": value = worker.claude_status(message.get("path"), message.get("since"), message.get("subagents"))
             elif op == "claude-account": value = worker.claude_account()
+            elif op == "claude-fast-settings":
+                try: value = worker.claude_fast_settings(message)
+                except Exception: raise ValueError(FAST_SETTINGS_ERROR) from None
             elif op == "history": value = history_records(worker.coding_root, worker.codex_home, os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
             elif op == "write-handoff": value = worker.write_handoff(message.get("text"))
             elif op == "prompt-note": value = worker.update_prompt_note(message.get("note"))

@@ -425,11 +425,11 @@ test('a real read-only SDK worker runs Bash without asking', { skip, timeout: 60
   assert.equal(result.result, 'DONE');
 });
 
-test('a real read-only print worker runs tests, refuses forbidden Git and Write and exits', { skip, timeout: 60000 }, async t => {
+for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'writable'} print worker runs tests, refuses forbidden Git and exits`,
+  { skip, timeout: 60000 }, async t => {
   const shells = process.platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
   const commands = ['node --test probe.test.cjs', 'git commit -m probe', 'git push', 'git reset --hard'];
   const probes = shells.flatMap(shell => commands.map(command => [shell, { command, description: 'Check worker permissions' }]));
-  probes.push(['Write', { file_path: 'made.txt', content: 'blocked' }]);
   const results = [];
   let toolsOffered;
   const f = await harness(t, data => {
@@ -441,12 +441,16 @@ test('a real read-only print worker runs tests, refuses forbidden Git and Write 
     return useTool(...probes[tools.length])({ ...data, messages: [] });
   });
   fs.writeFileSync(path.join(f.cwd, 'probe.test.cjs'), 'require("node:test")("WORKER_TEST_OK", () => {});\n');
-  const args = commandOf({ agent: 'claude', model: 'claude-sonnet-4-5', effort: 'high', readOnly: true });
-  const env = workerToolEnvironment(f.env, true);
+  const written = path.join(f.cwd, 'made.txt');
+  probes.push(['Write', { file_path: written, content: 'WORKER_WRITE_OK' }]);
+  const args = commandOf({ agent: 'claude', model: 'claude-sonnet-4-5', effort: 'high', readOnly });
+  const env = workerToolEnvironment(f.env);
   const { stdout } = await promisify(execFile)(cli, [...args, 'Run the permission probes.'], { cwd: f.cwd, env, timeout: 30000, windowsHide: true });
   const result = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line)).find(record => record.type === 'result');
   assert.equal(result?.result, 'DONE');
   for (const shell of shells) assert.ok(toolsOffered.includes(shell));
+  assert.equal(toolsOffered.includes('Write'), !readOnly);
+  assert.ok(!toolsOffered.includes('EnterPlanMode'));
   for (const [index, [tool, input]] of probes.entries()) {
     const outcome = results[index];
     assert.ok(outcome, tool + ' ' + (input.command || ''));
@@ -454,12 +458,13 @@ test('a real read-only print worker runs tests, refuses forbidden Git and Write 
     if (input.command === commands[0]) {
       assert.notEqual(outcome.is_error, true, `${tool}: ${content}`);
       assert.match(content, /WORKER_TEST_OK/);
-    } else {
+    } else if (input.command || readOnly) {
       assert.equal(outcome.is_error, true, `${tool}: ${content}`);
       if (input.command) assert.match(content, /denied|permission|not allowed/i);
-    }
+    } else assert.notEqual(outcome.is_error, true, content);
   }
-  assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false);
+  if (readOnly) assert.equal(fs.existsSync(written), false);
+  else assert.equal(fs.readFileSync(written, 'utf8'), 'WORKER_WRITE_OK');
 });
 
 test('A7 product worker policy remains active on resume and a throwing hook blocks', { skip, timeout: 60000 }, async t => {

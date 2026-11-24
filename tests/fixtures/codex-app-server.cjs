@@ -50,6 +50,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     result = { turn: { id: turnId, status: 'inProgress', items: [] } };
     send({ id: request.id, result });
     notify('turn/started', result);
+    if (mode === 'weekly-limit') {
+      notify('account/rateLimits/updated', { rateLimits: { limitId: 'codex',
+        secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 200 },
+        rateLimitReachedType: 'rate_limit_reached' } });
+      if (turns === 2) {
+        notify('turn/completed', { turn: { id: turnId, status: 'failed', error: { codexErrorInfo: 'rateLimitExceeded' } } });
+        return;
+      }
+    }
     if (mode.startsWith('reset-') && (turns === 1 || mode === 'reset-repeat')) {
       const items = [];
       if (mode.startsWith('reset-notification')) notify('account/rateLimits/updated', { rateLimits: { rateLimitReachedType: 'rate_limit_reached' } });

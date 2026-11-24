@@ -119,7 +119,7 @@ async function roleTurn(t, session, prompt, inspect) {
 
 async function writableRole(t, conditions = {}) {
   const prompt = 'HOOK_PROMPT writable role', command = 'node --test tests/x.test.cjs';
-  await hooked(t, 'worker', { role: { readOnly: false, ...conditions },
+  await hooked(t, 'worker', { role: { readOnly: false, ask: `Bash(${command})`, ...conditions },
     respond: data => toolResult(data, 'Bash') ? plainAnswer(data)
       : callTool(data, 'Bash', { command, description: 'Run the probe test' }, toolId('Bash')),
     drive: session => roleTurn(t, session, prompt, async (requests, turn) => {
@@ -137,9 +137,9 @@ async function writableRole(t, conditions = {}) {
   });
 }
 
-test('a real writable role continues the same turn after the worker permission hook denies Bash', { skip, timeout: 240000 }, t => writableRole(t));
+test('a real writable role continues the same turn when an explicit Bash ask rule reaches the denial hook', { skip, timeout: 240000 }, t => writableRole(t));
 
-test('a real writable role still denies Bash with cold hook startup and the event endpoint down', { skip, timeout: 240000 }, t =>
+test('an explicit Bash ask rule still reaches the denial hook with cold startup and the event endpoint down', { skip, timeout: 240000 }, t =>
   writableRole(t, { permissionHookDelay: 3500, permissionPipeDown: true }));
 
 test('a real read-only role rejects Write and ExitPlanMode without an owner dialog', { skip, timeout: 240000 }, async t => {

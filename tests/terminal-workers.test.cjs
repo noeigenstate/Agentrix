@@ -408,7 +408,12 @@ test("billing follows the lead's mode and no client identity is set", async t =>
   const { args, options: { env } } = f.pty;
   for (const flag of ['-p', '--print', '--output-format', '--input-format']) assert.ok(!args.includes(flag), `no ${flag}`);
   assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), ['--permission-mode', 'acceptEdits']);
-  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'EnterPlanMode');
+  const shells = process.platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
+  assert.equal(args[args.indexOf('--allowedTools') + 1], shells.join(','));
+  assert.equal(args[args.indexOf('--disallowedTools') + 1], ['EnterPlanMode',
+    ...shells.flatMap(shell => [`${shell}(git commit *)`, `${shell}(git push *)`, `${shell}(git reset *--hard*)`])].join(','));
+  assert.ok(!args.includes('--tools'));
+  if (process.platform === 'win32') assert.equal(env.CLAUDE_CODE_USE_POWERSHELL_TOOL, '1');
   for (const name of [...PRIVATE_NAMES, 'AGENTRIX_SDK_PARENT', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) assert.equal(env[name], undefined, name);
   assert.equal(env.KEEP_ME, 'kept');
   assert.equal(env.AGENTRIX_SHIM_USER_ZDOTDIR, path.join(f.root, 'user-zdotdir'), 'the user\'s own zsh folder is back, behind the shims');

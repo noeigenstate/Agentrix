@@ -2,9 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { leadSteps } = require('../src/features/terminal/lead-steps.ts');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
+const { registerLeadFastSettings } = require('../electron/features/terminal/lead-fast-settings.cjs');
 const { applyLeadStep, pickerAction, pickerResult } = require('../src/features/terminal/lead-picker.ts');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
-const { leadRoutingScope, leadRoutingSnapshot, leadRoutingNotices, routingNotice, subscribeLeadRouting, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
+const { leadRoutingFailure, leadRoutingScope, leadRoutingSnapshot, leadRoutingNotices, routingNotice, subscribeLeadRouting, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
 
 // In conductor mode a changed lead seat reaches the running Claude Code as the commands the owner would type.
 test('a changed lead model reapplies its effort, while a matched or unknown seat types nothing', () => {
@@ -20,7 +21,7 @@ test('a changed lead model reapplies its effort, while a matched or unknown seat
   assert.deepEqual(leadSteps(null, running), []);
 });
 
-test('steps combine effort and Ultracode before fast and keep fast local and known', () => {
+test('steps combine effort and Ultracode before fast, which requires known state and a settings bridge', () => {
   const seat = { model: 'claude-fable-5-2', effort: 'max', ultracode: true, fast: true };
   const actual = { model: 'Fable 5.2', effort: 'high', fast: false, ultracode: null };
   assert.deepEqual(leadSteps(seat, actual), [
@@ -383,13 +384,20 @@ test('lead sync returns to old targets and retries a failure only after its inpu
   observed({ effort: 'medium' });
   fail = true;
   await change(() => route('max'), true);
+  const failure = leadRoutingFailure(scope);
+  assert.equal(failure.targetModel, 'claude-fable-5-2');
+  assert.equal(failure.notice, leadRoutingSnapshot(scope).at(-1).outcome);
   frame(); frame(); reload();
   await Promise.resolve();
   assert.deepEqual(attempts, ['medium', 'high', 'medium', 'medium', 'max']);
+  assert.equal(leadRoutingFailure(scope), failure);
   await change(() => observed({ fast: true }), true);
   await change(() => route('xhigh'), true);
   await change(() => route('max'), true);
   assert.deepEqual(attempts, ['medium', 'high', 'medium', 'medium', 'max', 'max', 'xhigh', 'max']);
+  assert.notEqual(leadRoutingFailure(scope), failure);
+  observed({ effort: 'max' });
+  assert.equal(leadRoutingFailure(scope), null);
 });
 
 test('a fast refusal is the same message in the routing notice and the terminal error', async t => {
@@ -412,4 +420,44 @@ test('a fast refusal is the same message in the routing notice and the terminal 
   assert.equal(message, `快速模式未开启：${reason}`);
   assert.equal(message, routingNotice(leadRoutingSnapshot(leadRoutingScope(terminal)).at(-1).outcome, translate));
   assert.deepEqual(calls, [{ sessionId: 'pty', target: true }, { token: 'token', confirmed: false }]);
+});
+
+test('SSH conductor applies Ultracode alongside effort before preparing and confirming fast mode', async t => {
+  const terminal = { id: 'ssh-lead', sessionId: 'pty', agent: 'claude', codexActive: true,
+    agentSettings: { model: 'Fable 5.2', effort: 'high', fast: false, ultracode: false } };
+  const leads = { claude: { model: 'claude-fable-5-2', effort: 'max', fast: true, ultracode: true } };
+  const calls = [], native = Promise.resolve({ conductor: false, leads });
+  const remote = { connected: true, async request(_op, data) { calls.push(data); return data.token ? null : 'a'.repeat(32); } };
+  let handle, reload, seats = native;
+  registerLeadFastSettings({ handle: (_channel, fn) => { handle = fn; }, findProject: () => ({ kind: 'ssh' }),
+    getSession: () => ({ ...terminal, terminal: remote }) });
+  const previous = global.window;
+  global.window = { agentrix: { skillSeats: () => seats, onSkills: load => { reload = load; }, answerTerminal() {},
+    leadFastSettings: async (...args) => ({ ok: true, value: await handle(...args) }) } };
+  const harness = hookHarness('src/features/terminal/lead-sync.ts', {
+    './i18n': { t: text => text },
+    './terminal-screen': { readScreen: () => ({ sessionId: terminal.sessionId, rows: [] }), canPasteScreen: () => true, subscribeScreen: () => () => {} },
+    './lead-picker.ts': { async applyLeadStep(step, _picker, hooks) {
+      calls.push(step);
+      const patch = step.kind === 'effort' ? { effort: step.target, ultracode: step.ultracode } : { fast: step.target };
+      hooks.submitted(step.kind === 'effort' ? '/effort' : '/fast on');
+      hooks.observed(patch, patch);
+      return true;
+    } },
+  });
+  t.after(() => { harness.dispose(); global.window = previous; });
+  harness.render('LeadSync', { projectId: 'ssh-project', terminal });
+  await native;
+  assert.deepEqual(calls, []);
+  const completed = new Promise(resolve => {
+    const off = subscribeLeadRouting(() => {
+      const outcome = leadRoutingSnapshot(leadRoutingScope(terminal)).at(-1)?.outcome;
+      if (outcome) { off(); resolve(outcome); }
+    });
+  });
+  seats = Promise.resolve({ conductor: true, leads });
+  reload();
+  assert.deepEqual(await completed, { effort: 'max', ultracode: true, fast: true, incomplete: false });
+  assert.deepEqual(calls, [{ kind: 'effort', target: 'max', ultracode: true }, { target: true },
+    { kind: 'fast', target: true, model: leads.claude.model }, { token: 'a'.repeat(32), confirmed: true }]);
 });

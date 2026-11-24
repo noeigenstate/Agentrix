@@ -8,7 +8,7 @@ const { registerMacTitlebar } = require('./app/mac-titlebar.cjs');
 const { minWidth, minHeight } = require('./window-zoom.json');
 const { createImageTools, registerImageIpc } = require('./app/images.cjs');
 const { createProjectHandoff } = require('./app/project-handoff.cjs');
-const { createCloseGuards, restoreTerminals } = require('./app/terminal-lifecycle.cjs');
+const { createCloseGuards, restoreTerminals, launchAfterPrompt: launchAgentAfterPrompt } = require('./app/terminal-lifecycle.cjs');
 const { registerClipboardIpc } = require('./shared/clipboard-ipc.cjs');
 const { registerTerminalIpc } = require('./features/terminal/ipc.cjs');
 const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-guard.cjs');
@@ -1074,16 +1074,7 @@ function onEvent(event) {
 // The agent chosen on a new project's card, typed at its terminal's first prompt (see agent:launch).
 const launchPlans = new Map();
 function launchAfterPrompt(project, session) {
-  const plan = launchPlans.get(session.terminalId);
-  if (!plan || !session.ready || session.inputDirty || session.codexActive) return;
-  launchPlans.delete(session.terminalId);
-  if (!session.claudeAvailable) {
-    session.error = t('没有找到 {agent}，请在设置 › 编码助手中安装。', { agent: 'Claude Code' }); broadcast(); return;
-  }
-  session.ready = false;
-  if (plan.threadId) { session.claudeResumeId = plan.threadId; void followClaudeSession(project, session, plan.threadId); }
-  if (project.kind === 'ssh') session.gate.input(plan.command); else session.gate.afterPrompt(plan.command);
-  broadcast();
+  launchAgentAfterPrompt(project, session, { launchPlans, t, broadcast, followClaudeSession });
 }
 
 async function resumeAfterPrompt(project, session) {

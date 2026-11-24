@@ -172,6 +172,24 @@ test('with routing off the lead panel is the main model and names no routing mod
   assert.match(markup(null), /<h4>总指挥<\/h4>/, 'the heading is unchanged until the routing is known');
 });
 
+test('the lead panel replaces pending with the failure of the current seat and conversation', t => {
+  const { MainModel, useMainTurn } = loadAgentsFile('MainModel.tsx');
+  const { leadRoutingScope, setLeadRoutingFailure } = require('../src/shared/lead-routing-notices.ts');
+  const terminal = { id: 'lead-failure', sessionId: 'pty', agent: 'claude', codexActive: true, agentUsage: { model: 'claude-fable-5-2' } };
+  const scope = leadRoutingScope(terminal);
+  const render = (model, sessionId = terminal.sessionId) => renderToStaticMarkup(React.createElement(() => React.createElement(MainModel, {
+    turn: useMainTurn({ ...terminal, sessionId }), seats: { conductor: true, leads: { claude: { model, effort: 'medium' } } },
+  })));
+  t.after(() => setLeadRoutingFailure(scope, null));
+  setLeadRoutingFailure(scope, { targetModel: 'opus', notice: { incomplete: true } });
+  assert.match(render('opus'), /未能切换到 Opus，可在终端里用 \/model 手动切换/);
+  assert.doesNotMatch(render('opus'), /正在切换到/);
+  assert.match(render('sonnet'), /正在切换到 Sonnet/);
+  assert.match(render('opus', 'another-pty'), /正在切换到 Opus/);
+  setLeadRoutingFailure(scope, null);
+  assert.match(render('opus'), /正在切换到 Opus/);
+});
+
 test('the Agent tab leads with the selected terminal’s Orchestrator above calls from every terminal', () => {
   const { AgentSidebar } = loadAgentsFile('AgentSidebar.tsx');
   const call = { agent: 'Claude Code', model: 'claude-sonnet-5-5', items: [{ id: 'one', state: 'running', role: '执行', title: 'First terminal’s worker' }] };
@@ -908,6 +926,18 @@ test('the main card tells a round that ended unknown quietly: no check, not comp
   assert.match(unknown, /本轮已结束，完成状态未知。/); assert.doesNotMatch(unknown, /本轮已完成|已中断|is-done|data-icon="CheckCircle"/);
   assert.match(complete, /本轮已完成/); assert.doesNotMatch(complete, /完成状态未知/);
   assert.doesNotMatch(main(mainMarkup([], 'zh', { codexActive: true })), /完成状态未知/, 'a session that has not ended a round says nothing of one');
+});
+
+test('a ready Claude terminal before its first turn is idle despite unknown completion history', () => {
+  for (const codexActivity of ['unknown', 'working']) {
+    const cliState = { sessionId: 'pty', state: 'idle', revision: 1, updatedAt: 100, phase: 'ready', turn: 0 };
+    const terminal = { sessionId: 'pty', codexActivity, cliState, mainTurn: { state: 'unknown', updatedAt: 100, background: null } };
+    const html = mainMarkup([], 'zh', terminal);
+    assert.match(html, />已就绪</);
+    assert.doesNotMatch(html, /完成状态未知|本轮已完成|正在处理/);
+    assert.match(mainMarkup([], 'zh', { ...terminal, mainTurn: null }), />已就绪</);
+    assert.match(mainMarkup([], 'zh', { ...terminal, cliState: { ...cliState, turn: 1 } }), /本轮已结束，完成状态未知。/);
+  }
 });
 
 test('the main card says 失败 for a round that failed (a /compact that compacted nothing), as the conversation’s card does, and 已中断 for a real interruption or another session', () => {

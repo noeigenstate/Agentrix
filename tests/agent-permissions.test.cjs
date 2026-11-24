@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const { spawn } = require('node:child_process');
 const { createEventServer } = require('../electron/events.cjs');
 const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
+const { launchAfterPrompt: launchAgentAfterPrompt } = require('../electron/app/terminal-lifecycle.cjs');
 
 const { defineMain } = require('./helpers/main-modules.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
@@ -16,6 +17,7 @@ function handlers() {
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
   const context = vm.createContext({ dispatchedOnly: () => null, readingHistory: { close() {} },
+    launchAgentAfterPrompt, followClaudeSession: () => assert.fail('no Claude launch was requested'),
     sessions: new Map([['t', session]]), store: { projects: [project], setRestore() { calls.restore++; },
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,
     broadcast() { calls.broadcast++; }, followClaude() { calls.follow++; }, applyActivity(_project, s, event) { calls.activity++; s.codexActivity = event.state; },

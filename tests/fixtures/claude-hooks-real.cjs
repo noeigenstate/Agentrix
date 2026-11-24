@@ -12,7 +12,7 @@ const { occupyHookPipe, powershell } = require('./busy-hook-pipe.cjs');
 const { startHookReceiver } = require('../helpers/claude-hook-client.cjs');
 const { createEventServer } = require('../../electron/events.cjs');
 const { terminalHooks } = require('../../electron/features/terminal-events/hook-channel.cjs');
-const { READ_ONLY_MODE, workerToolArgs } = require('../../electron/features/claude-runtime/decide.cjs');
+const { READ_ONLY_MODE, workerToolArgs, workerToolEnvironment } = require('../../electron/features/claude-runtime/decide.cjs');
 const { workerHookSettings } = require('../../electron/features/worker-terminals/worker-terminals.cjs');
 
 // The events Agentrix hooks over HTTP (contract C-2); SessionStart stays the command hook and is not part of these tests.
@@ -140,6 +140,7 @@ async function startMcpProbe(t) {
 }
 
 async function workerHooks(t, f, observer, role) {
+  Object.assign(f.env, workerToolEnvironment(f.env));
   const terminalId = 'worker-role', sessionKey = 'offline-role-key';
   const eventServer = await createEventServer(event => {
     if (event.projectId === terminalId && event.sessionKey === sessionKey) {
@@ -179,7 +180,9 @@ async function workerHooks(t, f, observer, role) {
 }`);
     f.env.NODE_OPTIONS = `--require "${slashes(preload)}"`;
   }
-  return { receiver, settings: workerHookSettings(hooks), trustedFolders: [briefs], debugFile, channel: hooks.channel,
+  const settings = JSON.parse(workerHookSettings(hooks));
+  if (role.ask) settings.permissions = { ask: [role.ask] };
+  return { receiver, settings: JSON.stringify(settings), trustedFolders: [briefs], debugFile, channel: hooks.channel,
     args: [...tools, '--permission-mode', role.readOnly ? READ_ONLY_MODE : 'acceptEdits', '--add-dir', briefs, '--debug-file', debugFile, ...(role.args || [])] };
 }
 

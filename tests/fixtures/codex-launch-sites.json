@@ -16,6 +16,14 @@
     "id": "electron/app/platform-startup.cjs:49ddd8fb24835a8236eeaec1"
   },
   {
+    "text": "session.gate.input(plan.command)",
+    "id": "electron/app/terminal-lifecycle.cjs:514c91a5cd929ecb641a75d3"
+  },
+  {
+    "text": "session.gate.afterPrompt(plan.command)",
+    "id": "electron/app/terminal-lifecycle.cjs:28c8f91ea04265f555e74efd"
+  },
+  {
     "text": "execFileSync('git', args, { cwd, encoding: 'buffer', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true })",
     "id": "electron/boundaries.cjs:2b6717ccfd671609ac733286"
   },
@@ -298,14 +306,6 @@
   {
     "text": "pty.spawn(file, args, options)",
     "id": "electron/main.cjs:46faab512efeac4c01131a13"
-  },
-  {
-    "text": "session.gate.input(plan.command)",
-    "id": "electron/main.cjs:514c91a5cd929ecb641a75d3"
-  },
-  {
-    "text": "session.gate.afterPrompt(plan.command)",
-    "id": "electron/main.cjs:28c8f91ea04265f555e74efd"
   },
   {
     "text": "session.gate.input(command)",

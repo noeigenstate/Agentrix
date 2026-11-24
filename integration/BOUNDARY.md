@@ -8,15 +8,17 @@ Scoped builds register alongside overlapping runs. Removed roundtable commands f
 Legacy events retain their role and meeting metadata for call history.
 The Codex shell wrappers request native launch. The local and SSH native launches keep a separate baseline next to the live sidecar so the helper can identify flags copied from the original routing table even when the seat environment variable is absent.
 Local and SSH Claude wrappers read the lead file at launch. It carries model, effort, fast flag and seat-map JSON.
-Local conductor conversations also read an optional fifth line, `ultracode`, and add the setting to the selected hook JSON.
+Local and SSH conductor conversations also read an optional fifth line, `ultracode`, and add the setting to the selected hook JSON.
 Six-line legacy files still take the seat map from line six.
 The local Claude wrappers give the conversation they start the role tools (the Intercept boundary's `--role-tools`). The SSH wrapper tells Claude that the tools are unavailable there.
 Readers also accept the legacy three-line and six-line forms. Hooks and the helper read accepted seats from the private sidecar at invocation.
 The helper puts one standing-rules section before every brief and tells roles to skip absent skills. Normal briefs inline the
 code standards when the base and extensions fit the 8 KiB source budget. Small or oversized briefs keep the path references.
-Read-only Claude roles can run commands and tests. They decide whether to run tests and which ones the task needs.
-They must leave project files untouched. The CLI permission rules and SDK worker policy deny explicit Git commit, push and reset --hard operations.
-Both CLI paths use dontAsk and allow Bash, plus PowerShell on Windows. Editing, planning, questions and MCP tools remain disabled. The legacy plan argument selects this read-only behavior.
+Claude roles can run commands and tests. They decide whether to run tests and which ones the task needs.
+The CLI permission rules and SDK worker policy deny explicit Git commit, push and reset --hard operations.
+Both CLI paths allow Bash, plus PowerShell on Windows. Writable roles use acceptEdits and follow their assigned file scope.
+Read-only roles leave project files untouched and use dontAsk with editing, planning, questions and MCP tools disabled.
+The legacy plan argument selects this read-only behavior.
 Read-only runs check the Git working tree after execution even with no allow globs. Changes are reported with unknown authorship and do not trigger restoration, quarantine or failure.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"

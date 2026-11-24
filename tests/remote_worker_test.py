@@ -393,7 +393,7 @@ class RemoteFilesTest(unittest.TestCase):
         python, notify = "/opt/python's tools/python3", "/tmp/agent's path/notify.py"
         source = remote.BASH_SOURCE.split("import json,shlex,sys\n", 1)[1].split("\nPY\n", 1)[0]
         output = io.StringIO()
-        with mock.patch("sys.executable", python), mock.patch("sys.argv", ["-", notify, "0"]), contextlib.redirect_stdout(output):
+        with mock.patch("sys.executable", python), mock.patch("sys.argv", ["-", notify, "0", "0"]), contextlib.redirect_stdout(output):
             exec("import json,shlex,sys\n" + source, {})
         hooks = json.loads(output.getvalue())["hooks"]
         for name, kind in (("UserPromptSubmit", "start"), ("Stop", "stop"), ("Notification", "notify"), ("SessionStart", "session")):
@@ -1366,6 +1366,116 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
             server.join(5)
             self.assertFalse(server.is_alive())
             self.assertTrue(second.stopping)
+
+class RemoteClaudeFastSettingsTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.file = Path(directory.name, "settings.json")
+        self.messages = []
+        self.channel = remote.Channel(1, self.messages.append)
+        self.addCleanup(self.channel.close)
+        self.worker = self.channel.worker
+        self.worker.claude_fast_home = directory.name
+        if os.name != "posix":
+            for patch in (mock.patch.object(remote, "open_regular", lambda filename: open(filename, "rb")),
+                          mock.patch.object(os, "fchmod", create=True)):
+                patch.start()
+                self.addCleanup(patch.stop)
+
+    def request(self, **fields):
+        identity = len(self.messages) + 1
+        self.channel.dispatch(dict(fields, op="claude-fast-settings", id=identity))
+        response = self.messages[-1]
+        self.assertEqual((response["channel"], response["id"]), (1, identity))
+        return response
+
+    def test_fast_default_restores_original_bytes_for_both_switch_directions(self):
+        for target, before, after in (
+            (True, b'\xef\xbb\xbf{ "theme" : "dark" }\r\n', b'{"theme":"dark","fastMode":true}'),
+            (False, b'{ "fastMode": true, "theme": "dark" }\r\n', b'{"theme":"dark"}'),
+        ):
+            self.file.write_bytes(before)
+            reply = self.request(target=target)
+            token = reply["value"]
+            self.assertRegex(token, r"^[a-f0-9]{32}$")
+            self.assertNotIn("dark", json.dumps(reply))
+            self.file.write_bytes(after)
+            self.assertIsNone(self.request(token=token, confirmed=True)["value"])
+            self.assertEqual(self.file.read_bytes(), before)
+            if os.name == "posix": self.assertEqual(self.file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(self.file.parent.iterdir()), [self.file])
+            self.assertFalse(self.request(token=token, confirmed=True)["ok"])
+
+    def test_fast_default_preserves_unconfirmed_conflicting_and_concurrent_edits(self):
+        self.file.write_text('{"theme":"dark","fastMode":false}', encoding="utf-8")
+        token = self.request(target=True)["value"]
+        other = remote.Worker(lambda _: None)
+        other.claude_fast_home = self.worker.claude_fast_home
+        with self.assertRaises(ValueError): other.claude_fast_settings({"target": True})
+        with self.assertRaises(ValueError): other.claude_fast_settings({"token": token, "confirmed": True})
+        self.file.write_text('{"theme":"light","fastMode":true}', encoding="utf-8")
+        self.assertTrue(self.request(token=token, confirmed=False)["ok"])
+        self.assertEqual(json.loads(self.file.read_bytes()), {"theme": "light", "fastMode": True})
+        token = self.request(target=False)["value"]
+        self.file.write_text('{"theme":"light","fastMode":false}', encoding="utf-8")
+        self.assertTrue(self.request(token=token, confirmed=True)["ok"])
+        self.assertEqual(json.loads(self.file.read_bytes()), {"theme": "light", "fastMode": False})
+        token = self.request(target=True)["value"]
+        self.file.write_text('{"theme":"blue","fastMode":true}', encoding="utf-8")
+        read = remote.read_fast_settings
+        def read_while_edited(filename):
+            if list(self.file.parent.glob(".agentrix-fast-*")):
+                self.file.write_text('{"theme":"blue","fastMode":true,"effortLevel":"max"}', encoding="utf-8")
+            return read(filename)
+        with mock.patch.object(remote, "read_fast_settings", side_effect=read_while_edited):
+            self.assertTrue(self.request(token=token, confirmed=True)["ok"])
+        self.assertEqual(json.loads(self.file.read_bytes()), {"theme": "blue", "fastMode": False, "effortLevel": "max"})
+
+    def test_fast_default_masks_read_and_restore_failures_and_requires_a_launch(self):
+        folder = self.worker.claude_fast_home
+        self.worker.claude_fast_home = None
+        self.assertFalse(self.request(target=True)["ok"])
+        self.worker.claude_fast_home = folder
+        for invalid in ('broken JSON', '{"fastMode":NaN}'):
+            self.file.write_text(invalid, encoding="utf-8")
+            self.assertFalse(self.request(target=True)["ok"])
+        self.file.unlink()
+        token = self.request(target=True)["value"]
+        self.file.write_text('{"fastMode":true}', encoding="utf-8")
+        with mock.patch.object(os, "replace", side_effect=OSError(str(self.file))):
+            reply = self.request(token=token, confirmed=True)
+        self.assertFalse(reply["ok"])
+        self.assertEqual(reply["error"], remote.FAST_SETTINGS_ERROR)
+        self.assertEqual(list(self.file.parent.iterdir()), [self.file])
+        token = self.request(target=False)["value"]
+        self.file.write_text('{"theme":"dark"}', encoding="utf-8")
+        self.request(token=token, confirmed=True)
+        self.assertEqual(json.loads(self.file.read_bytes()), {"theme": "dark", "fastMode": True})
+
+    def test_fast_settings_home_follows_the_authenticated_launch_until_exit(self):
+        worker, folder = self.worker, self.file.parent
+        worker.token, worker.project_id = "fixture-key", "fixture-project"
+        worker.skill_note_ready = mock.Mock()
+        route = {"home": str(folder), "configDir": str(folder / "custom"), "secureDir": None, "overridden": False}
+        events = [("codex-started", route), ("agent-activity", dict(route, configDir=None)), ("codex-exited", route)]
+        clients = []
+        for kind, config in events:
+            client = mock.MagicMock()
+            client.__enter__.return_value = client
+            event = dict(type=kind, agent="claude", token=worker.token, accountRoute=config)
+            client.recv.return_value = (json.dumps(event) + "\n").encode("utf-8")
+            clients.append((client, None))
+        worker.listener = mock.Mock()
+        worker.listener.accept.side_effect = clients + [OSError("closed")]
+        homes = []
+        def emit(message):
+            self.assertNotIn("accountRoute", message["event"])
+            homes.append(worker.claude_fast_home)
+        worker.emit = emit
+        worker.events_loop()
+        self.assertEqual(homes, [route["configDir"], route["configDir"], None])
+
 
 class RemoteCodexShellNotifyTest(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash")), "needs Bash")

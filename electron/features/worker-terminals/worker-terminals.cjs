@@ -242,7 +242,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const brief = path.join(w.briefs, 'brief.md'), settings = path.join(w.folder, 'settings.json');
     const readOnly = w.spec.readOnly;
     w.env = workerToolEnvironment(workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey,
-      claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() }), readOnly, platform);
+      claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() }), platform);
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
     fs.writeFileSync(settings, workerHookSettings(w.hooks, w.spec.fast), { mode: 0o600 });
     const args = [...workerToolArgs(readOnly, platform), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,

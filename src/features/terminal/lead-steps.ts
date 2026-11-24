@@ -16,7 +16,7 @@ export const sameModel = (chosen: string, actual: string) => {
 };
 
 // What to type so the running lead matches the seat; empty when it already does or what it runs is not known yet.
-export function leadSteps(seat: LeadSeat | null | undefined, actual: AgentSettings | null | undefined, remote = false): LeadStep[] {
+export function leadSteps(seat: LeadSeat | null | undefined, actual: AgentSettings | null | undefined, skipFast = false): LeadStep[] {
   if (!seat || !actual?.model) return [];
   const steps: LeadStep[] = [];
   const changeModel = !sameModel(seat.model, actual.model);
@@ -27,6 +27,6 @@ export function leadSteps(seat: LeadSeat | null | undefined, actual: AgentSettin
     steps.push({ kind: 'effort', target: effort, ...((changeUltra || ultracode) ? { ultracode } : {}) });
   }
   const fast = seat.fast === true;
-  if (!remote && typeof actual.fast === 'boolean' && actual.fast !== fast) steps.push({ kind: 'fast', target: fast, model: seat.model });
+  if (!skipFast && typeof actual.fast === 'boolean' && actual.fast !== fast) steps.push({ kind: 'fast', target: fast, model: seat.model });
   return steps;
 }

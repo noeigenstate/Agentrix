@@ -410,7 +410,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "0e49149a0ea64f017629333b9927c3386350cf99341d625d59af0056ec354308",
+      "digest": "2b0d7e420cfefdb5bd7ca869dade5aed1172e82ad1cd5cb730baf95f95d82295",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -472,7 +472,7 @@
       "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "8b3bc5d3a6062cb78263a88ccc0b3b77c2be4c410602971cd7037313e79bb012",
+      "digest": "4fc05a43e691b2111d7f385c150ff12f2b24f88e8f4b5e4778b5d2a5e72d053b",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

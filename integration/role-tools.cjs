@@ -26,8 +26,8 @@ const text = description => ({ type: 'string', description });
 const TOOLS = [
   { name: 'start_role',
     description: 'Start a role with its seat settings. Returns a run id and any worktree base and source, or instructions when dispatch is unavailable. '
-      + 'Read-only Claude roles can run commands and decide whether to run tests and which task-related tests to run. '
-      + 'They must leave project files untouched and must never commit, push, or run git reset --hard.',
+      + 'Claude roles can run commands and decide whether to run tests and which task-related tests to run. '
+      + 'They must never commit, push, or run git reset --hard. Read-only roles must leave project files untouched.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),

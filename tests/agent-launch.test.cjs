@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { folderHistory, latestCodexSession, launchCommand } = require('../electron/features/agents/launch.cjs');
 const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
+const { launchAfterPrompt } = require('../electron/app/terminal-lifecycle.cjs');
 
 test('a new project starts each agent fresh, or resumes the conversation found for its folder', () => {
   assert.equal(launchCommand('claude', null), 'claude\r');
@@ -18,6 +19,24 @@ test('Claude launch commands leave all seat flags to the terminal wrappers', () 
   const seat = { model: 'sonnet', effort: 'xhigh' };
   assert.equal(launchCommand('claude', null, seat), 'claude\r');
   assert.equal(launchCommand('claude', { id: 'saved' }, seat), 'claude --resume saved\r');
+});
+
+test('missing Claude at the first prompt points to the machine that runs it', () => {
+  const t = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key]);
+  for (const [kind, message] of [
+    ['local', '没有找到 Claude Code，请在设置 › 编码助手中安装。'],
+    ['ssh', '远端主机上没有找到 Claude Code。请在该主机上安装，并确保它在 PATH 中。'],
+  ]) {
+    const session = { terminalId: 'terminal', ready: true, claudeAvailable: false };
+    const launchPlans = new Map([['terminal', { command: 'claude\r' }]]);
+    let broadcasts = 0;
+    launchAfterPrompt({ kind }, session, { launchPlans, t, broadcast: () => { broadcasts++; },
+      followClaudeSession: () => assert.fail('unavailable Claude has no conversation to follow') });
+    assert.equal(session.error, message, kind);
+    assert.equal(broadcasts, 1);
+    assert.equal(launchPlans.size, 0);
+    assert.equal(session.ready, true);
+  }
 });
 
 test('bootstrap writes and refreshes four lead lines for fresh and resumed terminal launches', t => {

@@ -292,8 +292,8 @@ function inlineStandards(options, files) {
 
 function standingRules(options) {
   const readOnly = isReadOnly(options), files = codeStandardFiles(options.cwd), inline = inlineStandards(options, files);
-  const claudeReview = readOnly && options.agent === 'claude';
-  const scope = claudeReview ? 'This task is read-only: do not change, create, or delete project files.'
+  const claude = options.agent === 'claude';
+  const scope = readOnly && claude ? 'This task is read-only: do not change, create, or delete project files.'
     : readOnly ? 'This task is read-only: change, create and delete no file.'
     : options.allow.length ? 'Change only the paths under "Files you may change"; stay inside the task.'
       : 'Change only what the task needs.';
@@ -302,10 +302,10 @@ function standingRules(options) {
   return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
     inline ? 'Follow the Code standards below in any code you write or review.' : `Code standard: ${standard} in any code you write or review.`,
     `Scope: ${scope}`,
-    claudeReview ? 'Do not commit, push, or run git reset --hard. Do not start another worker or agent.'
+    claude ? 'Do not commit, push, or run git reset --hard. Do not start another worker or agent.'
       : 'Do not commit or push, and do not start another worker or agent.',
     'Run no GUI smoke test and never read or write the system clipboard.',
-    ...(claudeReview ? ['You may run commands and tests. Decide whether to run tests and which to run based on the task.'] : []),
+    ...(claude ? ['You may run commands and tests. Decide whether to run tests and which to run based on the task.'] : []),
     'Run only the tests the task touches, never the whole suite.',
     'Skip a named skill only if it is neither installed nor present under the repository\'s skills/ folder. Do not search elsewhere.',
     'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
@@ -314,7 +314,7 @@ function standingRules(options) {
       'Decide implementation details and explain your choice in one line. Take the smaller viable approach and note the other.',
       'Stop before scope changes, irreversible actions, or changes to UI or behavior. Under ## Needs decision give the lead options, consequences and a recommendation.',
     ]),
-    ...(options.agent === 'claude' ? ['End with a plain text answer. Never call ExitPlanMode.'] : []),
+    ...(claude ? ['End with a plain text answer. Never call ExitPlanMode.'] : []),
     `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
     'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
   ].map((line, index) => index ? `- ${line}` : line).join('\n') + (inline ? `\n\n# Code standards\n\n${inline}` : '');
@@ -1716,7 +1716,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       if (!started) workerStartedAt = Date.now();
-      workerEnv = workerToolEnvironment(workerEnv, isReadOnly(effective));
+      workerEnv = workerToolEnvironment(workerEnv);
       child = trackWorker(launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
         detached: process.platform !== 'win32' }));
       if (killed) stop('SIGTERM');

@@ -48,7 +48,7 @@ function decide(facts = [], settings = {}, { agent = 'claude', owner = 'gui', tr
   return answer(mode === 'api-only' ? null : 'terminal', first);
 }
 
-// Read-only worker policy for the terminal, print-mode CLI and SDK.
+// Worker tool policy shared by the terminal, print-mode CLI and SDK.
 const READ_ONLY_MODE = 'dontAsk';
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'LS'];
 const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
@@ -59,19 +59,19 @@ const forbiddenGit = new RegExp('\\bgit\\b[^\\n;&|]*(?:' + FORBIDDEN_GIT_OPERATI
   .map(operation => '\\b' + operation.replace(' ', '\\b[^\\n;&|]*') + '\\b').join('|') + ')', 'i');
 
 function workerToolArgs(readOnly, platform = process.platform) {
-  if (!readOnly) return ['--disallowedTools', WORKER_DENIED.join(',')];
   const shells = platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
   const gitRules = shells.flatMap(shell => FORBIDDEN_GIT_OPERATIONS.map(operation => {
     const command = operation.includes(' ') ? operation.replace(' ', ' *') + '*' : operation + ' *';
     return `${shell}(git ${command})`;
   }));
-  return ['--tools', [...READ_TOOLS, ...shells].join(','), '--allowedTools', shells.join(','),
-    '--disallowedTools', [...READ_ONLY_DENIED, ...gitRules].join(',')];
+  const tools = readOnly ? ['--tools', [...READ_TOOLS, ...shells].join(',')] : [];
+  const denied = readOnly ? READ_ONLY_DENIED : WORKER_DENIED;
+  return [...tools, '--allowedTools', shells.join(','), '--disallowedTools', [...denied, ...gitRules].join(',')];
 }
 const readOnlyArgs = () => workerToolArgs(true);
-function workerToolEnvironment(env, readOnly, platform = process.platform) {
+function workerToolEnvironment(env, platform = process.platform) {
   const key = 'CLAUDE_CODE_USE_POWERSHELL_TOOL';
-  if (!readOnly || platform !== 'win32' || Object.keys(env).some(name => name.toUpperCase() === key)) return env;
+  if (platform !== 'win32' || Object.keys(env).some(name => name.toUpperCase() === key)) return env;
   return { ...env, [key]: '1' };
 }
 

@@ -83,7 +83,7 @@ test('Ultracode saves and reloads as an opt-in, and appears in both lead seat ta
   assert.deepEqual(info.config, saved);
   assert.deepEqual(info.effective.orchestrator, orchestrator);
   assert.equal(store.terminalLead(project.id).ultracode, true);
-  assert.equal(store.terminalLead(project.id, { remote: true }).ultracode, undefined);
+  assert.equal(store.terminalLead(project.id, { remote: true }).ultracode, true);
   assert.match(store.seatTable(project.id), /\(orchestrator\): opus · high · ultracode;/);
   const skill = store.delivery(project, false, 'ultracode', { agent: 'claude' }).rendered['builtin:model-routing'].text;
   assert.match(skill, /^summary: .*opus · high · ultracode/m);

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { AgentSettings, ProjectTerminal, SeatsInfo } from '../../shared/types';
-import { leadRoutingScope, routingNotice, trackLeadRouting, type LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
+import { leadRoutingScope, routingNotice, setLeadRoutingFailure, trackLeadRouting, type LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
 import { t } from '../../shared/i18n';
 import { claudeInputMatches, claudeWorking } from '../agents/agent-screen-input.ts';
 import { applyLeadStep } from './lead-picker.ts';
@@ -80,18 +80,22 @@ async function switchLead(steps: LeadStep[], terminal: Terminal, scope: string, 
     }
     incomplete = false;
     return { observed, notice, incomplete };
-  } finally { route.finish(incomplete || Object.keys(notice).length ? { ...notice, incomplete } : null); }
+  } finally {
+    const report = incomplete || Object.keys(notice).length;
+    notice.incomplete = incomplete;
+    route.finish(report ? notice : null);
+  }
 }
 
 // Mounted once per terminal split; it draws nothing.
-export function LeadSync({ projectId, terminal, remote = false, onError }: {
-  projectId: string; terminal: ProjectTerminal; remote?: boolean; onError?: (message: string) => void;
+export function LeadSync({ projectId, terminal, onError }: {
+  projectId: string; terminal: ProjectTerminal; onError?: (message: string) => void;
 }) {
-  useLeadSync(projectId, terminal, remote, onError);
+  useLeadSync(projectId, terminal, onError);
   return null;
 }
 
-function useLeadSync(projectId: string, terminal: ProjectTerminal, remote: boolean, onError?: (message: string) => void) {
+function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (message: string) => void) {
   const current = useRef(terminal); current.current = terminal;
   const error = useRef(onError); error.current = onError;
   const wake = useRef<(() => void) | null>(null);
@@ -101,6 +105,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, remote: boole
     if (!claude || !session || !api?.skillSeats || !api.answerTerminal) return;
     let active = true, running = false, loading = false, seats: SeatsInfo | null = null, reads = 0;
     let failed = '', scope = '', previous: AgentSettings | null = null, observed: Partial<AgentSettings> = {};
+    const clearFailure = () => { if (failed) { failed = ''; setLeadRoutingFailure(scope, null); } };
     const target = () => seats?.conductor ? seats.leads?.claude : null;
     const conversation = () => leadRoutingScope(current.current);
     const frame = (): Screen | null => {
@@ -119,13 +124,13 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, remote: boole
       const thread = conversation(), seat = target(), choice = targetKey(seat);
       const bound = () => active && current.current.codexActive && current.current.agent === 'claude' && conversation() === thread;
       const live = () => bound() && targetKey(target()) === choice;
-      if (scope !== thread) { scope = thread; failed = ''; previous = null; observed = {}; }
+      if (scope !== thread) { clearFailure(); scope = thread; previous = null; observed = {}; }
       const settings = actual();
-      if (!seat || !settings) { failed = ''; return; }
+      if (!seat || !settings) { clearFailure(); return; }
       const key = state(seat, settings);
-      if (failed !== key) failed = '';
+      if (failed !== key) clearFailure();
       if (failed || !live() || !ready()) return;
-      const steps = leadSteps(seat, settings, remote || !api.leadFastSettings);
+      const steps = leadSteps(seat, settings, !api.leadFastSettings);
       if (!steps.length) return;
       running = true;
       const rows = () => frame()?.rows ?? [];
@@ -137,7 +142,10 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, remote: boole
         if (bound()) {
           for (const field of fields) if (result.observed[field] !== undefined) Object.assign(observed, { [field]: result.observed[field] });
           previous = before;
-          if (result.incomplete && live()) failed = state(seat, actual() ?? settings);
+          if (result.incomplete && live()) {
+            failed = state(seat, actual() ?? settings);
+            setLeadRoutingFailure(thread, { targetModel: seat.model, notice: result.notice });
+          }
           if (result.notice.fastError) error.current?.(routingNotice(result.notice, t));
         }
       } finally { running = false; }
@@ -159,7 +167,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, remote: boole
     load();
     const off = api.onSkills?.(load);
     const unsubscribe = subscribeScreen(id, wake.current);
-    return () => { active = false; wake.current = null; off?.(); unsubscribe(); };
-  }, [claude, projectId, terminal.id, terminal.sessionId, remote]);
+    return () => { active = false; clearFailure(); wake.current = null; off?.(); unsubscribe(); };
+  }, [claude, projectId, terminal.id, terminal.sessionId]);
   useEffect(() => { wake.current?.(); }, [terminal.agentSettings, terminal.readingHistory?.threadId, terminal.agentStartedAt]);
 }

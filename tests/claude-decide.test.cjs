@@ -10,7 +10,7 @@ const { codesOf } = require('../electron/shared/reason.cjs');
 
 const root = path.join(__dirname, '..');
 const of = (name, code, fields) => fact(name, code, { source: 'test', observedAt: 1, ...fields });
-test('read-only CLI roles allow shells and deny three Git operations on each shell', () => {
+test('CLI roles at both access levels allow shells and deny three Git operations on each shell', () => {
   const denied = 'Edit,Write,MultiEdit,NotebookEdit,EnterPlanMode,ExitPlanMode,AskUserQuestion,mcp__*';
   const bash = 'Bash(git commit *),Bash(git push *),Bash(git reset *--hard*)';
   const powershell = 'PowerShell(git commit *),PowerShell(git push *),PowerShell(git reset *--hard*)';
@@ -18,16 +18,17 @@ test('read-only CLI roles allow shells and deny three Git operations on each she
     '--allowedTools', 'Bash,PowerShell', '--disallowedTools', [denied, bash, powershell].join(',')]);
   assert.deepEqual(workerToolArgs(true, 'linux'), ['--tools', 'Read,Glob,Grep,LS,Bash',
     '--allowedTools', 'Bash', '--disallowedTools', [denied, bash].join(',')]);
-  assert.deepEqual(workerToolArgs(false, 'win32'), ['--disallowedTools', 'EnterPlanMode']);
+  assert.deepEqual(workerToolArgs(false, 'win32'), ['--allowedTools', 'Bash,PowerShell',
+    '--disallowedTools', ['EnterPlanMode', bash, powershell].join(',')]);
+  assert.deepEqual(workerToolArgs(false, 'linux'), ['--allowedTools', 'Bash', '--disallowedTools', ['EnterPlanMode', bash].join(',')]);
 });
 
-test('PowerShell defaults on for Windows read-only CLI workers when the environment has no preference', () => {
+test('PowerShell defaults on for Windows CLI workers when the environment has no preference', () => {
   const env = {}, optedOut = { claude_code_use_powershell_tool: '0' };
-  assert.deepEqual(workerToolEnvironment(env, true, 'win32'), { CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' });
+  assert.deepEqual(workerToolEnvironment(env, 'win32'), { CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' });
   assert.deepEqual(env, {});
-  assert.equal(workerToolEnvironment(optedOut, true, 'win32'), optedOut);
-  assert.equal(workerToolEnvironment(env, false, 'win32'), env);
-  assert.equal(workerToolEnvironment(env, true, 'linux'), env);
+  assert.equal(workerToolEnvironment(optedOut, 'win32'), optedOut);
+  assert.equal(workerToolEnvironment(env, 'linux'), env);
 });
 
 // Each fact decide() reads, in the order it explains a refusal.
