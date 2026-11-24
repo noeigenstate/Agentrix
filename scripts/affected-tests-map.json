@@ -411,7 +411,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "b601bb4f678be623bc2dbbda4b85d553e87c234ca6f389d9962375a469e3e8dd",
+      "digest": "0f51f712d7ef0c767843314db236f268b902a7c82fdc9b3378c609dd4529d925",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -433,7 +433,7 @@
         "electron/features/agents/dispatch-events.cjs",
         "integration/dispatch-outbox.cjs",
         "integration/shims/intercept.cjs",
-        "electron/features/claude-runtime/decide.cjs"
+        "electron/features/cli-adapters/workers.cjs"
       ],
       "reason": "Loads the same carried electron modules, outbox and intercept implementation beside the source or packaged helper."
     },
@@ -473,19 +473,20 @@
       "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "4fc05a43e691b2111d7f385c150ff12f2b24f88e8f4b5e4778b5d2a5e72d053b",
+      "digest": "34a9382544afc8938835529ed794dcf603e881839303afa0275e280c325bb4d6",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "d7ac5aada02e97e62452ba055872d95c4948f4a64a443631518d7d125ecb220f",
+      "digest": "06e7450b845b233f21de526d5bff8fd1743d6f121b0d31faf02ed0fc2d4c7a69",
       "targets": [
         "electron/features/agents/call-seat.cjs",
-        "electron/features/agents/dispatch-events.cjs"
+        "electron/features/agents/dispatch-events.cjs",
+        "electron/features/cli-adapters/workers.cjs"
       ],
-      "reason": "The role tools load the carried seat rules and dispatch event validators beside the source or packaged engine."
+      "reason": "The role tools load the carried seat readers, worker facets and dispatch event validators beside the source or packaged engine."
     }
   },
   "unresolvedImports": {

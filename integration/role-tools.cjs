@@ -7,11 +7,12 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { validateSmallScope, localWindowsCodex, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole } = require('./dispatch.cjs');
+const { validateSmallScope, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole } = require('./dispatch.cjs');
 const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
-const { familyOf, launchSeat, liveSeatMap, claudeLeadSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { workerOf, agentOfModel } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
 const { validRefusals } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
@@ -203,22 +204,16 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     return readiness.result;
   }
   async function sandboxRoute(agent, seat) {
-    if (!['claude', 'codex'].includes(leadAgent) || !(ssh ? agent === 'codex' : localWindowsCodex(agent, env, platform))) return {};
-    const lead = leadAgent === 'claude' ? leadSeat ?? claudeLeadSeat(env.AGENTRIX_BOOTSTRAP) : null;
-    const claudeSeat = lead && familyOf(lead.model) === 'claude';
-    if (!ssh && leadAgent === 'claude' && !claudeSeat) return {};
+    const leadWorker = workerOf(leadAgent);
+    if (!leadWorker || !workerOf(agent).needsSandbox?.({ ssh, env, platform })) return {};
+    const lead = leadWorker.leadSeat && (leadSeat ?? leadWorker.leadSeat(env.AGENTRIX_BOOTSTRAP));
+    const matchingLead = lead && agentOfModel(lead.model) === leadAgent ? lead : null;
+    if (!ssh && leadWorker.leadSeat && !matchingLead) return {};
     const status = await sandboxStatus();
     if (ssh ? status === 'ready' : status !== 'notConfigured' && status !== 'updateRequired') return {};
     const reason = !ssh ? null : status === 'missing' ? '远端未找到 Codex。请在远端登录 shell 中安装 Codex。'
       : '远端 Codex Linux 沙箱不可用。请管理员用 sysctl user.max_user_namespaces 检查，设为合适的正数后重试，例如 sudo sysctl -w user.max_user_namespaces=1024。';
-    if (leadAgent === 'codex') {
-      if (ssh) return { instruction: `${reason} 请用 Codex 内置的子代理完成这个席位的工作。` };
-      const instruction = '这台电脑尚未完成 Codex 角色沙箱设置。请用 Codex 内置的子代理完成这个席位的工作。';
-      return { instruction: instruction + ' ' + elevatedSetupMessage(env) };
-    }
-    if (!claudeSeat) return { instruction: `${reason} 请在模型路由中为 Claude 总指挥选择 Claude 模型后重试。` };
-    return { roleFallback: { configured: seat.model, model: lead.model,
-      effort: ['low', 'medium', 'high'].includes(seat.effort) ? seat.effort : lead.effort, fast: false }, reason };
+    return leadWorker.sandboxFallback({ ssh, env, reason, lead: matchingLead, seat, elevatedSetupMessage });
   }
   const call = async (args, options) => {
     let output = '';
@@ -313,11 +308,11 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
-      const configuredAgent = familyOf(seats[id].model);
+      const configuredAgent = agentOfModel(seats[id].model);
       const { instruction, roleFallback, reason } = await sandboxRoute(configuredAgent, seats[id]);
       if (ssh && !conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
       if (instruction) return { instruction };
-      const agent = roleFallback ? 'claude' : configuredAgent;
+      const agent = roleFallback ? leadAgent : configuredAgent;
       const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree, folder, from, lastRoleCwd);
       let waitingId;
       try {
@@ -329,7 +324,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
         const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
           ...(small ? ['--small'] : []),
-          ...(agent === 'claude' ? ['--permission', readOnly ? 'dontAsk' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
+          ...workerOf(agent).roleArgs(readOnly),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
           roleArtifacts: artifacts, ...(roleFallback && { roleFallback }),
           onTiming: status => {

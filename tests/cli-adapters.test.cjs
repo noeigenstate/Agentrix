@@ -3,13 +3,34 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter, bindNativeAdapters } = require('../electron/features/cli-adapters/registry.cjs');
 const shared = require('../electron/features/cli-adapters/registry.mjs');
+
+const projectionFile = path.join(__dirname, '../electron/features/cli-adapters/manifests/worker.cjs');
+if (process.argv.includes('--write-worker-manifests')) {
+  const rows = shared.adapters().map(({ manifest: { id, install, models } }) =>
+    `  { id: ${JSON.stringify(id)}, install: { minVersion: ${JSON.stringify(install.minVersion)} }, models: { match: ${models.match} } },`);
+  fs.writeFileSync(projectionFile, '// Generated from registry.mjs by node tests/cli-adapters.test.cjs --write-worker-manifests.\n' +
+    'module.exports = [\n' + rows.join('\n') + '\n];\n');
+}
+
+const { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter, bindNativeAdapters } = require('../electron/features/cli-adapters/registry.cjs');
 const { CAPABILITY_KEYS, UNSUPPORTED, UNVERIFIED_VERSION, support } = require('../electron/features/cli-adapters/capabilities.mjs');
 const claudeRuntime = require('../electron/features/claude-runtime/adapter.cjs');
 const codexRuntime = require('../electron/features/codex-runtime/adapter.cjs');
 const { allowsUltracode } = require('../electron/features/skills/seat-rules.mjs');
 const en = require('../electron/locales/en.json');
+
+test('carried workers use the shared manifest projection', () => {
+  const carried = require(projectionFile);
+  const { workerOf } = require('../electron/features/cli-adapters/workers.cjs');
+  assert.deepEqual(carried, shared.adapters().map(({ manifest: { id, install: { minVersion }, models: { match } } }) =>
+    ({ id, install: { minVersion }, models: { match } })));
+  assert.equal(require('../electron/features/claude-runtime/locator.cjs').REQUIRED, shared.adapterOf('claude').manifest.install.minVersion);
+  for (const { id } of carried) assert.equal(adapterOf(id).worker, workerOf(id));
+  assert.equal(workerOf('codex').command({}), 'native');
+  assert.deepEqual(workerOf('codex').policy(true), { sandbox: 'read-only', approvalPolicy: 'never' });
+  assert.deepEqual(workerOf('codex').policy(false), { sandbox: 'workspace-write', approvalPolicy: 'never' });
+});
 
 test('both registry entry points expose complete capability manifests', () => {
   assert.deepEqual(shared.adapters().map(({ manifest }) => manifest), adapters().map(({ manifest }) => manifest));

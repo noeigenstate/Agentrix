@@ -5,6 +5,7 @@ const codex = require('../codex-runtime/adapter.cjs');
 const claudeSdk = require('../claude-sdk/adapter.cjs');
 const codexAppServer = require('../codex-app-server/adapter.cjs');
 const { support } = require('./capabilities.mjs');
+const { workerOf } = require('./workers.cjs');
 
 // Bind the locators main already owns for its terminal and native sessions.
 function runtimeInstall(createInstall, callbacks) {
@@ -25,7 +26,8 @@ const runtimes = new Map([
 
 function createAdapter(manifest, runtime, pathOptions) {
   const defaultInstall = () => createPathInstall(manifest, pathOptions);
-  return Object.freeze({ manifest, ...(runtime ?? { install: defaultInstall(), settingsInstall: defaultInstall }) });
+  const worker = workerOf(manifest.id);
+  return Object.freeze({ manifest, ...(runtime ?? { install: defaultInstall(), settingsInstall: defaultInstall }), ...(worker && { worker }) });
 }
 
 const registered = Object.freeze(declarations().map(({ manifest }) => createAdapter(manifest, runtimes.get(manifest.id))));

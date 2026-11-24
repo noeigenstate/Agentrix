@@ -2,6 +2,9 @@
 // Codex session takes, and why. Pure: no clock, files or credentials, so every caller (a new session, a running one,
 // the connection test, the usage panel, the dispatcher's worker) gets the same answer for the same facts.
 const { reason } = require('../../shared/reason.cjs');
+const { workerOf, READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED,
+  workerToolArgs, workerToolEnvironment, forbiddenGit } = require('../cli-adapters/workers.cjs');
+const { REQUIRED } = require('./locator.cjs');
 
 // Which fact explains a refusal first: a key that is missing or refused, then the CLI, then billing, then the limits.
 const RANK = { key: 0, cli: 1, billing: 2, limit: 3, rate: 4 };
@@ -9,7 +12,7 @@ const PROVIDER_LIMITS = new Set(['credits_exhausted', 'account_limit', 'rate_lim
 // What the windows were told for these codes before reasons were codes; every other code is told by its name.
 const SAID = {
   key_forbidden: 'API 密钥没有调用权限。', api_unreachable: '无法连接 Anthropic API。', key_check_failed: '无法完成 API 连接检查。',
-  cli_too_old: 'Claude Code 版本过低，请升级到 2.1.317 或更高',
+  cli_too_old: 'Claude Code 版本过低，请升级到 ' + REQUIRED + ' 或更高',
 };
 // The sentence a refused start says for a CLI that cannot run, as the session's own start said it before; the path's
 // reason keeps the bare names.
@@ -48,32 +51,7 @@ function decide(facts = [], settings = {}, { agent = 'claude', owner = 'gui', tr
   return answer(mode === 'api-only' ? null : 'terminal', first);
 }
 
-// Worker tool policy shared by the terminal, print-mode CLI and SDK.
-const READ_ONLY_MODE = 'dontAsk';
-const READ_TOOLS = ['Read', 'Glob', 'Grep', 'LS'];
-const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
-const WORKER_DENIED = ['EnterPlanMode'];
-const READ_ONLY_DENIED = [...EDIT_TOOLS, ...WORKER_DENIED, 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
-const FORBIDDEN_GIT_OPERATIONS = ['commit', 'push', 'reset --hard'];
-const forbiddenGit = new RegExp('\\bgit\\b[^\\n;&|]*(?:' + FORBIDDEN_GIT_OPERATIONS
-  .map(operation => '\\b' + operation.replace(' ', '\\b[^\\n;&|]*') + '\\b').join('|') + ')', 'i');
-
-function workerToolArgs(readOnly, platform = process.platform) {
-  const shells = platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
-  const gitRules = shells.flatMap(shell => FORBIDDEN_GIT_OPERATIONS.map(operation => {
-    const command = operation.includes(' ') ? operation.replace(' ', ' *') + '*' : operation + ' *';
-    return `${shell}(git ${command})`;
-  }));
-  const tools = readOnly ? ['--tools', [...READ_TOOLS, ...shells].join(',')] : [];
-  const denied = readOnly ? READ_ONLY_DENIED : WORKER_DENIED;
-  return [...tools, '--allowedTools', shells.join(','), '--disallowedTools', [...denied, ...gitRules].join(',')];
-}
+const workerPolicy = workerOf('claude').policy;
 const readOnlyArgs = () => workerToolArgs(true);
-function workerToolEnvironment(env, platform = process.platform) {
-  const key = 'CLAUDE_CODE_USE_POWERSHELL_TOOL';
-  if (platform !== 'win32' || Object.keys(env).some(name => name.toUpperCase() === key)) return env;
-  return { ...env, [key]: '1' };
-}
-
 module.exports = { decide, nameOf, READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED,
-  workerToolArgs, workerToolEnvironment, readOnlyArgs, forbiddenGit };
+  workerPolicy, workerToolArgs, workerToolEnvironment, readOnlyArgs, forbiddenGit };

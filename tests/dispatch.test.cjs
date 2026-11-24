@@ -43,10 +43,7 @@ test('Claude fast constructs one JSON settings argv element and aliases follow f
     '--permission', 'plan', '--cwd', __dirname, '--brief', 'synthetic.md', '--out', 'synthetic.out']);
   const command = commandOf(options);
   assert.deepEqual(command.slice(command.indexOf('--settings'), command.indexOf('--settings') + 2), ['--settings', '{"fastMode":true}']);
-  const source = require('node:fs').readFileSync(require.resolve('../integration/dispatch.cjs'), 'utf8');
-  const verdict = require('node:vm').runInNewContext(`(${source.slice(source.indexOf('function routingVerdict('), source.indexOf('function commandOf('))})`, {
-    strictRoutingVerdict: require('../electron/features/dashboard/records-routing.cjs').routingVerdict,
-  });
+  const verdict = require('../electron/features/cli-adapters/workers.cjs').workerOf('claude').routingVerdict;
   for (const alias of ['opus', 'sonnet', 'haiku']) {
     const declared = { model: alias, effort: 'high', fast: true };
     for (const suffix of ['', '-20261117', '[1m][fast]', '-20261117[1m][fast]']) {

@@ -4,7 +4,9 @@ const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { mergePath, readStoredPath, variable } = require('./path-env.cjs');
-const REQUIRED = '2.1.317', MINIMUM = REQUIRED.split('.').map(Number), VERSION_TIMEOUT_MS = 10000, CLOSE_GRACE_MS = 1500;
+const manifests = require('../cli-adapters/manifests/worker.cjs');
+const REQUIRED = manifests.find(({ id }) => id === 'claude').install.minVersion;
+const MINIMUM = REQUIRED.split('.').map(Number), VERSION_TIMEOUT_MS = 10000, CLOSE_GRACE_MS = 1500;
 // Every `via` a found CLI can have (claude-runtime/BOUNDARY.md).
 const VIAS = Object.freeze(['path', 'npm', 'platform-package', 'local-bin', 'claude-local', 'winget', 'registry-path', 'system']);
 // A throttled refresh (window focus) searches with the stored Windows PATH at most this often; a check that printed no

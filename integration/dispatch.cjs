@@ -18,16 +18,16 @@ const { imageMetadata } = require(path.join(runtime, 'oversized-record.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
 const { projectTeam, recordFindings, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
 const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team/inbox.cjs'));
-const { DISPATCH_TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
+const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment, elevatedSetupMessage, readiness } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/sandbox-refresh.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { READ_ONLY_MODE, workerToolArgs, workerToolEnvironment } = require(path.join(runtime, 'features/claude-runtime/decide.cjs'));
+const { workerOf, agentOfModel, defaultWorkerRules, isReadOnly, word, count } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
-const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
+const { launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const { commandPhrase } = require(path.join(runtime, 'command-phrase.cjs'));
 const { diagnosticLine } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
@@ -44,18 +44,16 @@ const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
   'features/codex-app-server/sandbox-refresh.cjs',
-  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs', 'features/claude-runtime/decide.cjs',
+  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
+  'features/cli-adapters/workers.cjs', 'features/cli-adapters/manifests/worker.cjs',
   'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
 const runtimeFiles = () => {
-  // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
-  const routing = 'features/native-session/routing.cjs';
-  const files = fs.existsSync(path.join(runtime, routing)) ? [...RUNTIME_FILES, routing] : RUNTIME_FILES;
-  return { ...Object.fromEntries(files.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
+  return { ...Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
     'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'), ...shimRuntimeFiles() };
 };
 
 const START_TIMEOUT = 30000;
-const localWindowsCodex = (agent, env, platform = process.platform) => agent === 'codex' && platform === 'win32' && !env.SSH_CONNECTION;
+const localWindowsCodex = (agent, env, platform = process.platform) => workerOf(agent)?.localWindows?.(env, platform) === true;
 const RATE_INTERVAL = 5000;
 const PINNED_SEATS = Symbol('pinned dispatch seats');
 // How long a Codex worker's blocking request (a question, a form, an approval) waits for an answer before it is declined.
@@ -64,8 +62,6 @@ const REQUEST_TIMEOUT = 600000;
 // take to arrive after it exits before the helper decides from what it has.
 const POLL_INTERVAL = 250, EXIT_SETTLE = 500;
 const LIMIT = 4 * 1024 * 1024;
-const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
-const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
@@ -98,9 +94,9 @@ function applySeatDefaults(options, env, pinnedLive, explicitFast) {
   const choice = live ? seatChoice(live, options.seat) : launch;
   if (!choice) return;
   options.expectedSeat = { model: choice.model, effort: choice.effort, fast: choice.fast === true };
-  const agent = familyOf(choice.model);
+  const agent = agentOfModel(choice.model);
   if (agent !== options.agent) {
-    if (live && (!options.model || familyOf(options.model) !== options.agent || options.model === launch?.model)) {
+    if (live && (!options.model || agentOfModel(options.model) !== options.agent || options.model === launch?.model)) {
       throw new Error(`[${options.seat}] uses ${agent}. Run the dispatch helper with ${agent}.`);
     }
     return;
@@ -168,7 +164,8 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
   const [agent, ...flags] = argv;
   if (agent === 'wait') return waitOptions(flags);
   if (agent === 'stop') return stopOptions(flags);
-  if (!['codex', 'claude'].includes(agent)) throw new Error('Expected codex or claude');
+  const worker = workerOf(agent);
+  if (!worker) throw new Error('Expected codex or claude');
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
   const keys = ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'kind', 'seat'];
   const names = new Map(keys.map(key => [`--${key}`, key]));
@@ -198,7 +195,7 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
   if (roleFallback) {
     const { configured, ...choice } = roleFallback, expected = seatExpectation(choice);
     if (!expected || !seatExpectation({ model: configured, effort: 'low' }) || !validSeat(options.seat)
-      || agent !== 'claude' || familyOf(expected.model) !== 'claude' || familyOf(configured) !== 'codex' || expected.fast) {
+      || !worker.leadSeat || agentOfModel(expected.model) !== agent || !workerOf(agentOfModel(configured)).needsSandbox || expected.fast) {
       throw new Error('Invalid role fallback');
     }
     Object.assign(options, expected, { expectedSeat: expected, fastFromSeat: true, fallbackFrom: configured });
@@ -212,11 +209,7 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
   // Each of these reaches a CLI as an option's value: none may start with a dash and become an option of its own.
   if (!/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(options.model)) throw new Error('Expected a model name for --model');
   if (!/^[A-Za-z][\w-]*$/.test(options.effort)) throw new Error('Expected an effort level for --effort');
-  if (agent === 'claude' && (options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
-  if (agent === 'claude' && !['plan', READ_ONLY_MODE, 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission dontAsk or acceptEdits');
-  if (options.permission === 'plan') options.permission = READ_ONLY_MODE; // Legacy CLI invocations and detached receipts.
-  if (options.permission === READ_ONLY_MODE) options.readOnly = true;
-  if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
+  worker.validate(options);
   if (options.small) validateSmallScope(options.readOnly, options.allow);
   if (options.resume && !/^[A-Za-z0-9][\w-]{0,159}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
   options.cwd = path.resolve(options.cwd);
@@ -226,24 +219,10 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
   return options;
 }
 
-function routingVerdict(actual, declared, fallback = false) {
-  // Bundled alias floor (major, minor): bump this one line with a supported release. Older versions stay mismatches.
-  const CLAUDE_ALIAS_FLOOR = [5, 5];
-  const target = fallback ? declared?.model?.replace(/\[(?:1m|fast)\]$/gi, '') : declared?.model;
-  const current = /^(opus|sonnet|haiku)$/.test(target) && CLAUDE_ALIAS_FLOOR;
-  const model = actual.model?.replace(/(?:\[(?:1m|fast)\]|-\d{8})+$/gi, '');
-  const resolved = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:[.-](\d+))?(?:[.-]\d+)*$/.exec(model || '');
-  const follows = current && resolved?.[1] === target && (Number(resolved[2]) > current[0]
-    || Number(resolved[2]) === current[0] && Number(resolved[3] || 0) >= current[1]);
-  const sameFallback = fallback && (target === model || target === 'fable' && resolved?.[1] === 'fable');
-  return strictRoutingVerdict(actual, follows || sameFallback ? { ...declared, model: actual.model } : declared);
-}
 function commandOf(options) {
-  const settings = options.fast || options.fastFromSeat ? ['--settings', JSON.stringify({ fastMode: options.fast })] : [];
-  const readOnly = isReadOnly(options);
-  if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
-    '--effort', options.effort, ...settings, '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
-    ...workerToolArgs(readOnly), '--output-format', 'stream-json', '--verbose'];
+  const command = workerOf(options.agent)?.command(options) ?? 'native';
+  if (command !== 'native') return command;
+  // The Lab rewrites the app-server credential-store arguments in its private helper copy.
   return ['app-server', '--listen', 'stdio://'];
 }
 
@@ -262,7 +241,6 @@ function reportChangedFiles(event, changed) {
   return { ...event, filesChangedCount: changed.length, filesChanged };
 }
 
-const isReadOnly = options => options.readOnly || ['plan', READ_ONLY_MODE].includes(options.permission);
 
 // The code-standard skill files in the worker's folder: the system skill's source and the project's extensions of it.
 function codeStandardFiles(cwd) {
@@ -292,33 +270,9 @@ function inlineStandards(options, files) {
 }
 
 function standingRules(options) {
-  const readOnly = isReadOnly(options), files = codeStandardFiles(options.cwd), inline = inlineStandards(options, files);
-  const claude = options.agent === 'claude';
-  const scope = readOnly && claude ? 'This task is read-only: do not change, create, or delete project files.'
-    : readOnly ? 'This task is read-only: change, create and delete no file.'
-    : options.allow.length ? 'Change only the paths under "Files you may change"; stay inside the task.'
-      : 'Change only what the task needs.';
-  const standard = files.length ? `read ${files.map(file => `\`${file}\``).join(' and ')} and follow them`
-    : 'follow the code-standard skill this session was given and the project\'s conventions';
-  return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
-    inline ? 'Follow the Code standards below in any code you write or review.' : `Code standard: ${standard} in any code you write or review.`,
-    `Scope: ${scope}`,
-    claude ? 'Do not commit, push, or run git reset --hard. Do not start another worker or agent.'
-      : 'Do not commit or push, and do not start another worker or agent.',
-    'Run no GUI smoke test and never read or write the system clipboard.',
-    ...(claude ? ['You may run commands and tests. Decide whether to run tests and which to run based on the task.'] : []),
-    'Run only the tests the task touches, never the whole suite.',
-    'Skip a named skill only if it is neither installed nor present under the repository\'s skills/ folder. Do not search elsewhere.',
-    'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
-    ...(options.small ? ['Decide implementation (one line with why), take the smaller viable approach (note the other), '
-      + 'and defer scope changes, irreversible actions, or changes to UI or behavior to the lead under ## Needs decision (options, effects, recommendation).'] : [
-      'Decide implementation details and explain your choice in one line. Take the smaller viable approach and note the other.',
-      'Stop before scope changes, irreversible actions, or changes to UI or behavior. Under ## Needs decision give the lead options, consequences and a recommendation.',
-    ]),
-    ...(claude ? ['End with a plain text answer. Never call ExitPlanMode.'] : []),
-    `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
-    'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
-  ].map((line, index) => index ? `- ${line}` : line).join('\n') + (inline ? `\n\n# Code standards\n\n${inline}` : '');
+  const files = codeStandardFiles(options.cwd);
+  const rules = workerOf(options.agent)?.rules ?? defaultWorkerRules;
+  return rules({ ...options, files, inline: inlineStandards(options, files) });
 }
 
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
@@ -424,7 +378,7 @@ function eventSink(filename) {
 // Claude's effort comes from launch. Other settings come from worker records; missing values stay unreported.
 class WorkerOutput {
   constructor(agent, changed = () => {}, launchEffort = null) {
-    this.agent = agent; this.changed = changed; this.meter = new TokenRates(agent);
+    this.worker = workerOf(agent); this.changed = changed; this.meter = new TokenRates(agent);
     this.launchEffort = launchEffort;
     this.model = null; this.effort = launchEffort; this.fast = null; this.sessionId = null;
     this.outputTokens = null; this.activeMs = null; this.failed = false; this.capacity = false; this.confirmed = false;
@@ -488,79 +442,24 @@ class WorkerOutput {
       activeMs: this.activeMs, reportedCostUsd: this.reportedCostUsd };
   }
   nativeUsage(value, resumed) {
-    // Native usage is cumulative; a resumed query without an invocation baseline cannot report its history as new cost.
+    // Native usage is cumulative. A resumed query cannot report its history as new cost.
     if (resumed) return;
-    const input = count(value.input), cached = count(value.cachedInput), creation = count(value.cacheWrite);
-    this.stdoutUsage = { inputTokens: this.agent === 'claude' ? (input !== null && creation !== null ? count(input + creation) : null)
-      : input !== null && cached !== null && input >= cached ? input - cached : null,
-      cachedTokens: cached, outputTokens: count(value.output) };
-    const micros = count(value.costUsdMicros);
-    if (this.agent === 'claude' && micros !== null && (this.reportedCostUsd === null || micros / 1e6 >= this.reportedCostUsd)) this.reportedCostUsd = micros / 1e6;
+    const { usage, cost } = this.worker.nativeUsage(value);
+    this.stdoutUsage = usage;
+    if (cost !== null && (this.reportedCostUsd === null || cost >= this.reportedCostUsd)) this.reportedCostUsd = cost;
   }
-  line(line) {
-    const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
-    let record;
-    try { record = JSON.parse(clean, imageMetadata); } catch {
-      if (/\bat capacity\b|overloaded|capacity exceeded/i.test(clean)) this.capacity = true;
-      const header = /^(model|reasoning effort|service tier|speed|session id):\s*(.+)$/i.exec(clean);
-      if (header) {
-        const [, key, value] = header;
-        if (key.toLowerCase() === 'session id') this.sessionId = word(value);
-        else this.settings({ [key.toLowerCase().replace('reasoning effort', 'effort').replace('service tier', 'service_tier')]: value });
-        this.changed();
-      }
-      return;
-    }
-    this.record(record);
-  }
-  record(record) {
-    if (Array.isArray(record)) { for (const entry of record) this.record(entry); return; }
-    if (!record || typeof record !== 'object') return;
-    if (this.agent === 'claude' && (record.parent_tool_use_id || record.isSidechain)) return;
-    const type = record.type;
-    if (this.agent === 'claude' && type === 'user' && typeof record.uuid === 'string'
-      && (typeof record.message?.content === 'string' || record.message?.content?.some(part => part.type === 'text'))) this.onInput?.(record.uuid);
-    if (['error', 'turn.failed'].includes(type) || record.is_error === true || type === 'result' && /^error_/.test(record.subtype || '')) {
-      this.failed = true;
-      if (/\bat capacity\b|overloaded|capacity exceeded/i.test(JSON.stringify(record))) this.capacity = true;
-    }
-    if (this.agent === 'codex') {
-      if (type === 'thread.started') this.sessionId = word(record.thread_id);
-      if (type === 'turn.completed') {
-        this.failed = false; this.capacity = false; this.completed = true;
-        const input = count(record.usage?.input_tokens), cached = count(record.usage?.cached_input_tokens);
-        this.stdoutUsage = { inputTokens: input !== null && cached !== null && input >= cached ? input - cached : null,
-          cachedTokens: cached, outputTokens: count(record.usage?.output_tokens) };
-      }
-    } else {
-      if (type === 'system' && record.subtype === 'init') {
-        this.sessionId = word(record.session_id); this.settings(record); this.confirmed = true;
-      }
-      if (type === 'assistant') {
-        this.settings(record);
-        this.settings(record.message || {});
-      }
-      if (type === 'assistant' || type === 'user') this.measure(record);
-      if (type === 'result') {
-        this.sessionId = word(record.session_id) || this.sessionId;
-        this.confirmed ||= !!this.sessionId;
-        this.settings(record);
-        const models = Object.keys(record.modelUsage || {});
-        if (models.length === 1) this.settings({ model: models[0] });
-        this.result = typeof record.result === 'string' ? record.result : null;
-        const input = count(record.usage?.input_tokens), creation = count(record.usage?.cache_creation_input_tokens);
-        this.stdoutUsage = { inputTokens: input !== null && creation !== null ? input + creation : null,
-          cachedTokens: count(record.usage?.cache_read_input_tokens), outputTokens: count(record.usage?.output_tokens) };
-        this.reportedCostUsd = Number.isFinite(record.total_cost_usd) && record.total_cost_usd >= 0 ? record.total_cost_usd : null;
-        if (!record.is_error && !/^error_/.test(record.subtype || '')) { this.failed = false; this.capacity = false; }
-        // JSON-only/older CLIs may expose only these final API totals. Never time a whole process as a response.
-        if (count(record.usage?.output_tokens) !== null) {
-          this.outputTokens = record.usage.output_tokens;
-          this.activeMs = Number.isFinite(record.duration_api_ms) && record.duration_api_ms > 0 ? record.duration_api_ms : null;
-        }
-      }
-    }
-    this.changed();
+  line(line) { for (const event of this.worker.output(line)) this.applyOutput(event); }
+  record(record) { for (const event of this.worker.records(record)) this.applyOutput(event); }
+  applyOutput({ settings, measure, inputId, failure, capacity, confirmSession, resetFailure, silent, ...fields }) {
+    if (inputId != null) this.onInput?.(inputId);
+    if (failure) this.failed = true;
+    if (failure?.capacity || capacity) this.capacity = true;
+    Object.assign(this, fields);
+    if (confirmSession) this.confirmed ||= !!this.sessionId;
+    if (settings) for (const value of settings) this.settings(value);
+    if (measure) this.measure(measure);
+    if (resetFailure) { this.failed = false; this.capacity = false; }
+    if (!silent) this.changed();
   }
   routing() { return { model: this.model || 'unreported', effort: this.effort, fast: this.fast }; }
 }
@@ -654,14 +553,14 @@ const locateClaude = async env => (await helperClaudeLocator.locate({ env })).te
 // CLI lookup belongs to the shared locators. Never resolve a bare Claude against the worker's shim-prefixed PATH.
 function executable(agent, args, _env, file) { return { file: file || agent, args }; }
 
-function readWorkerOutput(child, agent, log, output) {
+function readWorkerOutput(child, log, output) {
   const tails = [];
   for (const stream of [child.stdout, child.stderr]) {
     const decoder = new StringDecoder('utf8');
     let buffer = '', skipping = false, json = '';
     const parseLine = line => {
       // Claude's JSON result can be a pretty-printed array, or older builds can emit JSON lines.
-      if (agent !== 'claude' || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
+      if (!output.worker.multilineOutput || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
       json += line + '\n';
       if (json.length > LIMIT) { json = ''; return; }
       try { const record = JSON.parse(json, imageMetadata); json = ''; output.record(record); } catch {}
@@ -968,7 +867,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   let workerEnv = workerEnvironment(env);
   for (const name of Object.keys(workerEnv)) if (name.toUpperCase() === 'AGENTRIX_SEATS') delete workerEnv[name];
-  let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
+  let finalize, options, worker, usesAppServer, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let workerStartedAt;
   let team = null, registered = false, teamFinished = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
@@ -1104,8 +1003,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const route = unconfirmed ? declared() : output.routing();
     return `${options.agent} model ${route.model} effort ${route.effort || 'unreported'} fast ${route.fast === null ? 'unreported' : route.fast ? 'on' : 'off'}`;
   };
-  const routeVerdict = () => routingVerdict(output, declared(), options.fallbackFrom);
-  const roleRouting = () => options.agent === 'claude' && output.model !== null
+  const routeVerdict = () => workerOf(agentOfModel(options.model)).routingVerdict(output, declared(), options.fallbackFrom);
+  const roleRouting = () => worker.pinEffort && output.model !== null
     ? { ...output.routing(), verdict: routeVerdict() } : null;
   // A start is confirmed only by the worker's own records: its session, and Codex's turn context in that session's file.
   // While it runs, every new record is checked at once. A worker that has exited is judged once, on everything it left
@@ -1113,7 +1012,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   const confirm = (final = false) => {
     if (segmentConfirmed || unconfirmed || spawnError || !child?.pid || !output.sessionId || !final && (exited || child.exitCode !== null)) return;
     if (resumeSession && output.sessionId !== resumeSession) { spawnError = new Error('Resumed worker reported a different session'); stop('SIGTERM', false); return; }
-    if (!output.confirmed) { if (!final && options.agent === 'codex') void rollout.read(); return; }
+    if (!output.confirmed) { if (!final && usesAppServer) void rollout.read(); return; }
     segmentConfirmed = true; clearTimeout(startTimer);
     if (!activeRuntime) for (const messageId of resumeControlIds) void recordReceipt(messageId, 'delivered').catch(() => {});
     const actual = output.routing(), requested = declared();
@@ -1166,7 +1065,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   }
   const changed = () => { confirm(); reroute(); };
   const workerOutput = () => {
-    const segment = new WorkerOutput(options.agent, changed, options.agent === 'claude' ? options.effort : null);
+    const segment = new WorkerOutput(options.agent, changed, worker.pinEffort ? options.effort : null);
     segment.onInput = cliInput;
     return segment;
   };
@@ -1178,7 +1077,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (stoppingRuntime === runtime) return;
       stoppingRuntime = runtime;
       treeStop = Promise.resolve().then(() => runtime.interrupt()).catch(error => {
-        if (options.agent === 'claude') {
+        if (worker.brokerMethod) {
           nativeStopUnconfirmed = true;
           recordTreeStopFailure(error);
         }
@@ -1277,6 +1176,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
     options = argumentsOf(argv, env, env[PINNED_SEATS], roleFallback);
+    worker = workerOf(options.agent); usesAppServer = worker.command(options) === 'native';
     output = workerOutput();
     rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
     if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
@@ -1339,7 +1239,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       inbox = new RunInbox(team, id); await inbox.open();
       inboxTimer = setInterval(() => {
         void readInbox().catch(() => {});
-        if (activeRuntime && options.agent === 'codex' && controlClient?.connected === false && Date.now() - controlAttemptAt >= 1000) void openControl();
+        if (activeRuntime && usesAppServer && controlClient?.connected === false && Date.now() - controlAttemptAt >= 1000) void openControl();
       }, POLL_INTERVAL);
     }
     if (killed) throw new Error('Dispatch interrupted before launch');
@@ -1447,14 +1347,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           lastControlNotice = notice;
           send({ type: 'dispatch-notice', id, controlFailure: notice, at: Date.now() });
         }
-        if (options.agent === 'codex' && !controlClient && lastControlFailure !== controlFailure) {
+        if (usesAppServer && !controlClient && lastControlFailure !== controlFailure) {
           lastControlFailure = controlFailure;
           signal(`transport ${id} app-server: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
         } else if (controlClient) lastControlFailure = null;
       }
     }
     await openControl();
-    if (options.agent === 'claude' && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
+    if (worker.brokerMethod && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
     function requestOpened({ itemId, payload: { requestId, kind, blocking, preview, questions } }) {
       const text = detached ? '' : (preview || questions?.[0]?.question || '').slice(0, 160);
       signal(`request ${id} ${requestId} ${kind} opened${text ? ': ' + JSON.stringify(text).slice(1, -1) : ''}`);
@@ -1476,13 +1376,13 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     function observePermission(event) {
       if (event.replay) return;
       const { type, payload, itemId } = event;
-      if (type === 'worker.refused' && options.agent === 'claude') recordRefusal(payload);
+      if (type === 'worker.refused' && worker.brokerMethod) recordRefusal(payload);
       else if (type === 'worker.awaiting-owner' && nativeBilling === 'subscription') {
         detached?.ownerWaiting?.(diagnosticLine(payload.detail) || null);
       } else if (type === 'worker.menu' && nativeBilling === 'subscription') {
         detached?.ownerWaiting?.(null, payload.menu);
-      } else if (options.agent === 'codex' && type === 'request.opened') requestOpened(event);
-      else if (options.agent === 'codex' && type === 'item.upsert' && payload.providerStatus === 'declined') {
+      } else if (usesAppServer && type === 'request.opened') requestOpened(event);
+      else if (usesAppServer && type === 'item.upsert' && payload.providerStatus === 'declined') {
         const detail = payload.kind === 'command' ? payload.content?.phrase : payload.content?.tool;
         const action = diagnosticLine(detail ? payload.kind + ': ' + detail : payload.kind);
         recordRefusal({ action, reason: 'provider_declined' }, itemId);
@@ -1493,7 +1393,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (event.providerSessionId) output.sessionId = event.providerSessionId;
       if (event.type === 'turn.started') {
         nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true;
-        if (options.agent === 'codex') void rollout.read().then(() => confirm()); else confirm();
+        if (usesAppServer) void rollout.read().then(() => confirm()); else confirm();
         if (resumeControlIds.length) resumeInputId = event.payload.clientMessageId;
       } else if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && !event.replay) {
         const fact = workerInput(event, controlInputs, resumeControlIds, resumeInputId);
@@ -1507,7 +1407,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         for (const id of resumeControlIds) void recordReceipt(id, event.payload.status).catch(() => {});
       }
       else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!(options.resume || resumeSession));
-      else if (event.type === 'limits.updated' && !event.replay && options.agent === 'codex') reportAccount(event.payload);
+      else if (event.type === 'limits.updated' && !event.replay && usesAppServer) reportAccount(event.payload);
       else if (event.type === 'error' && (event.payload.code === 'billing_identity_mismatch' || event.payload.stage === 'startup'
         && ['sdk_initialization_timeout', 'sdk_startup_failed', 'native_cli_required', 'native_cli_outdated'].includes(event.payload.code))) signal(`transport ${id} claude-sdk: ${event.payload.message}`);
       else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
@@ -1533,7 +1433,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         clearTimeout(requestTimers.get(event.payload.requestId)); requestTimers.delete(event.payload.requestId);
         signal(`request ${id} ${event.payload.requestId} ${event.payload.resolution}`);
       }
-      if (event.providerSessionId && output.confirmed && options.agent !== 'codex') confirm();
+      if (event.providerSessionId && output.confirmed && !usesAppServer) confirm();
       log.write(JSON.stringify(event) + '\n');
     }
     finalize = async result => {
@@ -1584,7 +1484,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       endSent = true;
       signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
         + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`
-        + `${options.agent === 'claude' && !unconfirmed ? ' · routing ' + routeVerdict() : ''}${needsDecision ? ' · needs decision' : ''}`);
+        + `${worker.brokerMethod && !unconfirmed ? ' · routing ' + routeVerdict() : ''}${needsDecision ? ' · needs decision' : ''}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1597,7 +1497,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (resumeSession) {
         const nextOutput = workerOutput();
         const nextRollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), nextOutput);
-        if (options.agent === 'codex') await nextRollout.prepare(resumeSession);
+        if (usesAppServer) await nextRollout.prepare(resumeSession);
         await readInbox();
         if (noResume || killed || spawnError) break;
         completedUsage = usage(); output = nextOutput; rollout = nextRollout;
@@ -1608,15 +1508,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         brief = briefOf(options, Buffer.from(messages.splice(0).map(text => `业主插话：${text}`).join('\n\n') + '\n\n继续执行当前任务。'), team,
           { id, repo, before: checking ? before : undefined });
       }
-      if (controlClient || options.agent === 'codex') {
+      if (controlClient || usesAppServer) {
         if (killed) throw new Error('Dispatch interrupted before launch');
+        const readOnly = options.readOnly || ['审查', '调查'].includes(options.role);
         const spec = { owner: 'dispatch', projectId: bootstrap?.projectId || id, terminalId: bootstrap?.projectId || id, runtimeSessionId: id, runId: id,
           cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
-          readOnly: options.readOnly || ['审查', '调查'].includes(options.role), allow: options.allow, env: workerEnv,
-          policy: { approvalPolicy: 'never' },
+          readOnly, allow: options.allow, env: workerEnv,
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
-        if (options.agent === 'codex') {
+        if (usesAppServer) {
           let sandboxWaitReported = false;
           codexAccountKey = controlClient?.accountKey || null;
           // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none (a test injecting only `launch` names its `locate`).
@@ -1631,7 +1531,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
               if (!started) workerStartedAt = Date.now();
               return trackWorker(launch(command.file, command.args, spawnOptions));
             },
-          }).create({ ...spec, onSandboxWait: message => {
+          }).create({ ...spec, policy: worker.policy(readOnly), onSandboxWait: message => {
             sandboxWaitReported = true;
             signal(`waiting ${id}: ${message}`);
             log.write(message + '\n');
@@ -1671,7 +1571,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           // Main's broker owns this process. It supplies execution evidence in the streamed events.
           child = { pid: 'broker', exitCode: null };
           if (!started) workerStartedAt = Date.now();
-          const remote = controlClient.request('claude-sdk.run', { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
+          const remote = controlClient.request(worker.brokerMethod, { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
             fast: options.fast, resume: effective.resume || null, out: options.out, permission: options.permission }).then(value => {
             nativeRunning = false;
             const result = value?.status ? { code: value.status === 'completed' ? 0 : 1, killedBy: value.status === 'interrupted' ? 'SIGTERM' : null } : undefined;
@@ -1694,7 +1594,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         for (;;) {
           await readInbox(true); await inboxRead;
           if (!nativeRunning) {
-            if (options.agent === 'claude' && !segmentStopped && !killed && result.code === 0) {
+            if (worker.brokerMethod && !segmentStopped && !killed && result.code === 0) {
               const receipt = await controlClient.request('control.finish', {}).catch(() => ({ status: 'unknown' }));
               if (receipt?.status === 'queued') { result = await new Promise(resolve => { settleNative = resolve; }); continue; }
             }
@@ -1702,7 +1602,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           }
           result = await new Promise(resolve => { settleNative = resolve; });
         }
-        if (options.agent === 'codex') { await rollout.pending; await rollout.read(); }
+        if (usesAppServer) { await rollout.pending; await rollout.read(); }
         confirm(true);
         if (typeof output.result === 'string') fs.writeFileSync(options.out, output.result);
         const remoteResult = await activeRuntime.finished;
@@ -1716,7 +1616,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           resumeSession = output.sessionId; controlClient?.close(); controlClient = null;
           // The rejected correction is known not to have executed; resume only that input, on the same billing path.
           await new Promise(resolve => setTimeout(resolve, 20)); await openControl();
-          if (!controlClient && options.agent !== 'codex') throw new Error('native_resume_control_unavailable');
+          if (!controlClient && !usesAppServer) throw new Error('native_resume_control_unavailable');
           signal(`resuming ${id}: native worker ended before correction`);
           continue;
         }
@@ -1729,7 +1629,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       if (!started) workerStartedAt = Date.now();
-      workerEnv = workerToolEnvironment(workerEnv);
+      workerEnv = worker.cliEnvironment(workerEnv);
       child = trackWorker(launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
         detached: process.platform !== 'win32' }));
       if (killed) stop('SIGTERM');
@@ -1752,7 +1652,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           if (!started) failed(output.capacity ? 'at capacity' : 'worker exited without a confirmed session', code === 0 ? 1 : code);
         });
       });
-      const flushOutput = readWorkerOutput(child, options.agent, log, output);
+      const flushOutput = readWorkerOutput(child, log, output);
       child.stdin.on('error', error => { if (error.code !== 'EPIPE') spawnError = error; });
       child.stdin.end(brief);
       result = await new Promise(resolve => {
@@ -1766,7 +1666,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
       if (resumeSession && !segmentConfirmed) { spawnError ||= new Error('Resumed worker exited without a confirmed session'); result.code = result.code || 1; }
       if (resumeSession && spawnError) signal(`resume failed ${id}: ${String(spawnError.message).replace(/[\r\n]+/g, ' ')}`);
-      if (options.agent === 'claude' && output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
+      if (output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
       // A confirmed successful CLI continuation has processed its stdin brief;
       // launch confirmation alone is only delivery, never consumption.
       if (result.code === 0 && segmentConfirmed && (output.completed || typeof output.result === 'string' && output.result.trim())) {
