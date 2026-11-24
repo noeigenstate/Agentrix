@@ -1,17 +1,23 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { adapters, adapterOf, adapterOfModel, agentOfModel } = require('../electron/features/cli-adapters/registry.cjs');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter } = require('../electron/features/cli-adapters/registry.cjs');
 const shared = require('../electron/features/cli-adapters/registry.mjs');
 const { CAPABILITY_KEYS, UNSUPPORTED, UNVERIFIED_VERSION, support } = require('../electron/features/cli-adapters/capabilities.mjs');
+const claudeRuntime = require('../electron/features/claude-runtime/adapter.cjs');
+const codexRuntime = require('../electron/features/codex-runtime/adapter.cjs');
 const { allowsUltracode } = require('../electron/features/skills/seat-rules.mjs');
 const en = require('../electron/locales/en.json');
 
 test('both registry entry points expose complete capability manifests', () => {
-  assert.equal(shared.adapters(), adapters());
+  assert.deepEqual(shared.adapters().map(({ manifest }) => manifest), adapters().map(({ manifest }) => manifest));
   assert.deepEqual(adapters().map(({ manifest }) => manifest.id), ['claude', 'codex']);
   for (const adapter of adapters()) {
     const { manifest } = adapter;
     assert.equal(adapterOf(manifest.id), adapter);
+    assert.equal(shared.adapterOf(manifest.id).manifest, manifest);
     assert.deepEqual(Object.keys(manifest.supports).sort(), [...CAPABILITY_KEYS].sort());
     for (const key of CAPABILITY_KEYS) {
       const capability = manifest.supports[key];
@@ -23,6 +29,57 @@ test('both registry entry points expose complete capability manifests', () => {
   for (const reason of [...Object.values(UNSUPPORTED), UNVERIFIED_VERSION]) assert.equal(typeof en[reason], 'string', reason);
   assert.match('2.1.331 (Claude Code)', adapterOf('claude').manifest.install.versionPattern);
   assert.match('codex-cli 0.166.0', adapterOf('codex').manifest.install.versionPattern);
+});
+
+test('registry adapters expose dedicated install facets and native version floors', () => {
+  for (const [id, floor] of [['claude', '2.1.317'], ['codex', '0.166.0']]) {
+    const { manifest, install } = adapterOf(id);
+    assert.equal(manifest.install.minVersion, floor);
+    assert.equal(typeof install.locate, 'function');
+    assert.equal(typeof install.refresh, 'function');
+  }
+});
+
+test('install facets forward the environment and retain the locator outcomes', async () => {
+  const env = { PATH: '' }, file = '/tools/cli', reason = { code: 'codex.unreadable' };
+  const old = { terminal: { file, version: '2.1.300' }, reason: 'too_old' };
+  const split = { ...old, native: { file: '/tools/native', version: '2.1.317' }, reason: 'cli_split_versions' };
+  const stub = (initial, refreshed) => ({
+    locate: async input => { assert.equal(input.env, env); return initial; },
+    refresh: async () => refreshed,
+  });
+  const claude = claudeRuntime.createInstall(stub(old, split));
+  assert.deepEqual(await claude.locate(env), { installed: true, version: '2.1.300', file, reason: 'too_old' });
+  assert.deepEqual(await claude.refresh(), { installed: true, version: '2.1.300', file, reason: 'cli_split_versions' });
+  const codex = codexRuntime.createInstall(stub({ file, version: null, reason }, { file, version: '0.165.0', reason: null }));
+  assert.deepEqual(await codex.locate(env), { installed: true, version: null, file, reason });
+  assert.deepEqual(await codex.refresh(), { installed: true, version: '0.165.0', file, reason: null });
+});
+
+test('a manifest supplies a PATH install facet when there is no dedicated locator', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-cli-install-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const command = 'example-cli', env = { Path: `"${dir}"` }, windows = process.platform === 'win32';
+  const file = path.join(dir, command + (windows ? '.exe' : ''));
+  const manifest = { id: 'example', command, install: { versionPattern: /\d+\.\d+\.\d+/, minVersion: '1.2.10' } };
+  let stdout = 'Example CLI 1.2.9', error = null;
+  const run = (executable, args, options, callback) => {
+    assert.deepEqual([executable, args, options.env], [file, ['--version'], env]);
+    callback(error, stdout);
+  };
+  const { install, settingsInstall } = createAdapter(manifest, undefined, { run });
+  assert.deepEqual(await install.locate(env), { installed: false, version: null, file: null, reason: 'not_found' });
+  fs.writeFileSync(file, '', { mode: 0o755 });
+  assert.deepEqual(await install.locate(env), { installed: true, version: '1.2.9', file, reason: 'too_old' });
+  stdout = 'Example CLI 1.2.10';
+  const settings = settingsInstall();
+  assert.equal(settings.peek(), null);
+  assert.deepEqual(await settings.refresh(env), { installed: true, version: '1.2.10', file, reason: null });
+  assert.equal(settings.peek().version, '1.2.10');
+  stdout = 'Usage';
+  assert.deepEqual(await install.refresh(env), { installed: true, version: null, file, reason: 'unreadable' });
+  error = { killed: true };
+  assert.deepEqual(await install.refresh(env), { installed: true, version: null, file, reason: 'timeout' });
 });
 
 test('the first matching model rule preserves existing seat ownership', () => {
@@ -37,7 +94,7 @@ test('model defaults preserve effort order and restrict Ultracode to eligible le
   ]) {
     const adapter = adapterOfModel(model);
     assert.equal(adapter, adapterOf(agent));
-    assert.equal(adapter, shared.adapterOfModel(model));
+    assert.equal(adapter.manifest, shared.adapterOfModel(model).manifest);
     assert.deepEqual(adapter.manifest.models.efforts, efforts);
     assert.equal(allowsUltracode(model, true), ultracode);
     assert.equal(allowsUltracode(model, false), false);

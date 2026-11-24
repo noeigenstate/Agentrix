@@ -1,55 +1,21 @@
-const fs = require('node:fs');
-const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
-const { adapters } = require('./features/cli-adapters/registry.cjs');
+const { adapters, adapterOf, onPath } = require('./features/cli-adapters/registry.cjs');
 
 const AGENT_PACKAGES = Object.freeze(Object.fromEntries(adapters().flatMap(({ manifest: { id, install } }) => install.npm ? [[id, install.npm]] : [])));
-// Command Prompt and agent detection must agree without running a CLI that could open a session.
-// Windows finds a command by its extension; macOS and Linux by a file without one that may be executed.
-function onPath(name, env, platform = process.platform) {
-  const windows = platform === 'win32';
-  const folders = String(Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '').split(windows ? ';' : ':').filter(Boolean);
-  return folders.some(folder => (windows ? ['.exe', '.cmd', '.bat', '.ps1'] : ['']).some(extension => {
-    try { const stat = fs.statSync(path.join(folder.replace(/"/g, ''), name + extension)); return stat.isFile() && (windows || (stat.mode & 0o111) !== 0); } catch { return false; }
-  }));
-}
-
-// The agents' word on Claude Code from claude-runtime's locate: installed whenever one was found, also one that cannot
-// run natively (`reason`: too old, or its check timed out, failed or printed no version) and an npm install whose native
-// program is missing (`incomplete`); a version split names the copy the native path runs.
-const found = candidate => ({ version: candidate.version, via: candidate.via, fileShown: candidate.fileShown });
-function claudeState({ terminal, native, reason, version, failure, incomplete }) {
-  const state = { installed: !!terminal || !!failure?.found || reason === 'too_old' || !!incomplete, ...(terminal ? found(terminal) : {}) };
-  if (reason === 'too_old') Object.assign(state, { reason, version: state.version ?? version ?? null });
-  if (failure) state.reason = failure.reason;
-  if (incomplete) state.incomplete = true;
-  if (reason === 'cli_split_versions') Object.assign(state, { notice: reason, native: found(native) });
-  return state;
-}
-
-// The agents' word on Codex from codex-runtime's locate: installed when a file was found, with its version (null when
-// its check printed none, `reason` then says why) and how it was found; nothing found keeps the reason, which says
-// where the search looked, and `scan` whether the local drives are being searched ('running'), were ('done') or were
-// only in part ('partial').
-function codexState({ file, version, via, fileShown, reason, scan }) {
-  return file ? { installed: true, version, via, fileShown, ...(reason ? { reason } : {}) } : { installed: false, reason, ...(scan ? { scan } : {}) };
-}
 
 class AgentsManager {
-  // `claude` and `codex` give claude-runtime's and codex-runtime's last locate (locator.peek()), never running a
-  // search: the program the terminal runs, its version and where it was found. Before the first search the PATH check
-  // stands in. `refreshClaude` and `refreshCodex` search again after an install.
-  constructor({ env = process.env, platform = process.platform, detect = onPath, claude = () => null, refreshClaude = async () => {},
-    codex = () => null, refreshCodex = async () => {}, launch = spawn, onChange = () => {}, translate = text => text, timeout = 10 * 60 * 1000 } = {}) {
-    Object.assign(this, { env, platform, detect, located: claude, refreshClaude, locatedCodex: codex, refreshCodex, launch, onChange, t: translate, timeout });
+  constructor(options = {}) {
+    const { env = process.env, platform = process.platform, detect = onPath, launch = spawn, onChange = () => {}, translate = text => text, timeout = 10 * 60 * 1000 } = options;
+    Object.assign(this, { env, platform, detect, launch, onChange, t: translate, timeout });
+    this.installers = new Map(adapters().map(({ manifest, settingsInstall }) => [manifest.id, settingsInstall(options)]));
     this.installing = null; this.message = ''; this.error = '';
   }
   getState() {
     // Existing isolated desktop checks should not depend on tools installed on the test host.
     const isolated = !!this.env.AGENTRIX_DATA_DIR && this.env.AGENTRIX_TEST_AGENTS !== '1';
-    const located = isolated ? null : this.located(), codex = isolated ? null : this.locatedCodex();
-    const claude = located ? claudeState(located) : { installed: isolated || this.detect('claude', this.env) };
-    return { codex: codex ? codexState(codex) : { installed: isolated || this.detect('codex', this.env) }, claude, npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
+    const states = adapters().map(({ manifest: { id, command } }) => [id, isolated ? { installed: true }
+      : this.installers.get(id).peek() ?? { installed: this.detect(command, this.env) }]);
+    return { ...Object.fromEntries(states), npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
   }
   changed() { const state = this.getState(); this.onChange(state); return state; }
   install(agent) {
@@ -66,7 +32,7 @@ class AgentsManager {
         this.error = error ? `${error}${output ? '\n' + output : ''}` : '';
         this.message = error ? '' : this.t('安装完成，请重启项目的终端；新终端会识别新命令。');
         // An agent just installed is searched for before the state is told, so it reads as installed.
-        Promise.resolve(error ? null : agent === 'claude' ? this.refreshClaude() : this.refreshCodex()).catch(() => {}).then(() => resolve(this.changed()));
+        Promise.resolve().then(() => error || this.installers.get(agent).refresh?.(this.env)).catch(() => {}).then(() => resolve(this.changed()));
       };
       try {
         // Only the fixed map reaches cmd.exe; renderer input is never part of a shell command.
@@ -89,4 +55,5 @@ class AgentsManager {
   }
 }
 
-module.exports = { AGENT_PACKAGES, AgentsManager, claudeState, codexState, onPath };
+// Main also compares these snapshots to publish changes when its locators refresh independently of npm.
+module.exports = { AGENT_PACKAGES, AgentsManager, onPath, claudeState: adapterOf('claude').install.stateOf, codexState: adapterOf('codex').install.stateOf };

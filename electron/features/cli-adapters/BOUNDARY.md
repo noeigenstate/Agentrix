@@ -12,16 +12,19 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - `electron/features/cli-adapters/**`
 
 ## Interface
-- `adapters` (`electron/features/cli-adapters/registry.cjs`) — main's registry. Exposes `adapterOf(id)`, `adapterOfModel(model)` and `agentOfModel(model)`.
-- `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared registry and renderer entry point with the same exports.
+- `adapters` (`electron/features/cli-adapters/registry.cjs`) — main's registry. `adapterOf(id)` and `adapterOfModel(model)` expose the manifest and install facet. `settingsInstall` binds main's existing locator snapshots and refreshes.
+- `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared declarations for both processes. `agentOfModel(model)` uses the first matching manifest in either entry point.
 - `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version must be within the capability's verification interval when set.
 
 ## May import
+- `electron/features/claude-runtime/adapter.cjs` (Claude Code install facet)
+- `electron/features/codex-runtime/adapter.cjs` (Codex install facet)
 - `src/shared/agent-events.ts` (the provider ID type for the renderer declaration)
 
 ## Invariants
 - Both entry points share the manifests. Each capability names its channel or an unsupported reason — test: `tests/cli-adapters.test.cjs` › "expose complete capability manifests"
 - Screen verification uses inclusive numeric bounds per capability — test: `tests/cli-adapters.test.cjs` › "support honors inclusive numeric verification bounds"
+- A CLI without a dedicated install facet uses its manifest for PATH detection and version checks — test: `tests/cli-adapters.test.cjs` › "a manifest supplies a PATH install facet when there is no dedicated locator"
 - Each generic file matches its branch count during migration — test: `tests/cli-branch-guard.test.cjs` › "generic code matches its per-file CLI branch baseline"
 
 ## Not ours

@@ -1,6 +1,5 @@
 {
   "electron/agent-commands.cjs": 5,
-  "electron/agents.cjs": 1,
   "electron/claude-sessions.cjs": 1,
   "electron/completion-work.cjs": 2,
   "electron/features/agents/agent-command.cjs": 1,

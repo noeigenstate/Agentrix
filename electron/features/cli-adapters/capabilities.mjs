@@ -36,6 +36,11 @@ function compareVersion(a, b) {
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
+export function belowMinimum(version, minimum) {
+  const actual = versionParts(version.split('-')[0]), lower = versionParts(minimum);
+  return !!(actual && lower && compareVersion(actual, lower) < 0);
+}
+
 function verifiedVersion(version, [min, max]) {
   const actual = versionParts(version), lower = versionParts(min), upper = versionParts(max);
   return !!(actual && lower && upper && compareVersion(actual, lower) >= 0 && compareVersion(actual, upper) <= 0);
