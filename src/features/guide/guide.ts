@@ -3,9 +3,9 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "统一接口", text: "每种 CLI 的差异收进一份能力清单和适配接口；以后接入新的 CLI 不必改通用代码，它不支持的功能会明确说明原因。", group: "new" },
-  { title: "干活标记", text: "路由栏里，有角色正在干活的座位会在模型名右侧显示一把敲打的小锤子。", group: "new" },
-  { title: "版本提示", text: "Claude Code 版本过旧时，运行中切换模型、深度、快速模式和 Ultracode 的控件会置灰并说明原因，不再悄悄失败。", group: "new" },
+  { title: "统一接口", text: "每种 CLI 的差异收进一份能力清单和适配接口；以后接入新的 CLI 不必改通用代码，它不支持的功能会明确说明原因。" },
+  { title: "干活标记", text: "路由栏里，有角色正在干活的座位会在模型名右侧显示一把敲打的小锤子。" },
+  { title: "版本提示", text: "Claude Code 版本过旧时，运行中切换模型、深度、快速模式和 Ultracode 的控件会置灰并说明原因，不再悄悄失败。" },
   { title: "远端角色", text: "SSH 项目的总指挥现在可以调用角色：角色在远端主机的项目目录里运行，状态显示在活动栏。需要远端有 Node 20.3 和 Git 2.11 以上。" },
   { title: "远端同步", text: "指挥家模式下，SSH 远端的 Claude Code 也跟随总指挥座位的快速模式和 Ultracode。" },
   { title: "切换说明", text: "自动切换没能完成时，左栏和阅读视图会说明并提示手动切换，不再一直显示“正在切换”；新会话在第一轮之前显示“已就绪”。" },
