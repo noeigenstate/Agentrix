@@ -165,7 +165,8 @@ function codexFailed(payload) {
     if (depth > 8 || output == null) return false;
     if (typeof output === 'string') {
       try { return failed(JSON.parse(output), depth + 1); } catch { }
-      return [...output.matchAll(/^(?:Exit code:\s*|Process exited with code\s+)(-?\d+)\b/gm)].some(match => Number(match[1]) !== 0);
+      const status = /^(?:Chunk ID:[^\r\n]*\r?\nWall time:[^\r\n]*\r?\n)?(?:Exit code:[ \t]*|Process exited with code[ \t]+)(-?\d+)\b/.exec(output);
+      return !!status && Number(status[1]) !== 0;
     }
     if (Array.isArray(output)) return output.some(item => failed(item, depth + 1));
     if (typeof output !== 'object') return false;

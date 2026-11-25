@@ -6,9 +6,12 @@ const { CODEX_PERMISSIONS } = require('./codex-permissions.cjs');
 const { sanitizeProjectSvg } = require('./project-svg.cjs');
 const { MODELS: VOICE_MODELS, DEFAULT_MODEL: DEFAULT_VOICE_MODEL } = require('./voice.cjs');
 const { steps: UI_ZOOM_STEPS } = require('./window-zoom.json');
+const { retryFileOperation } = require('./file-retry.cjs');
+const { writeFileAtomic } = require('./atomic-write.cjs');
 
 // Local folders once opened as projects, newest first, so a removed project can be added again in one click.
 const HISTORY_LIMIT = 30;
+const WORKSPACE_VERSION = 2;
 const folderKey = folder => process.platform === 'win32' ? folder.toLowerCase() : folder;
 function cleanHistory(input) {
   const seen = new Set();
@@ -128,68 +131,115 @@ function cleanSettings(input = {}) {
   };
 }
 
+function readWorkspace(filename, warn) {
+  let content;
+  try { content = retryFileOperation(() => fs.readFileSync(filename), { read: true }); }
+  catch (error) {
+    if (error.code !== 'ENOENT') warn(`工作区配置无法读取（${error.code || 'IO'}），本次启动不会写入：${filename}`);
+    return undefined;
+  }
+  let value;
+  try { value = JSON.parse(content.toString('utf8').replace(/^\uFEFF/, '')); }
+  catch {
+    const backup = `${filename}.unreadable-${Date.now()}-${randomUUID()}`;
+    try {
+      writeFileAtomic(backup, content, undefined, { flush: true });
+      warn(`工作区配置损坏，本次启动不会写入。备份已保存到：${backup}`);
+    } catch (error) {
+      warn(`工作区配置损坏，备份失败（${error.code || 'IO'}）。本次启动会保留原文件：${filename}`);
+    }
+    return undefined;
+  }
+  if (value?.version !== WORKSPACE_VERSION || !Array.isArray(value.projects)) {
+    warn(Number.isSafeInteger(value?.version) && value.version > WORKSPACE_VERSION
+      ? `工作区配置版本 ${value.version} 比当前程序支持的版本更新，本次启动不会写入：${filename}`
+      : `工作区配置格式不受支持，本次启动不会写入：${filename}`);
+    return undefined;
+  }
+  return value;
+}
+
 class WorkspaceStore {
   // systemTheme is the OS appearance ('light' or 'dark'), read by the caller because Electron is not available here.
-  constructor(filename, { systemTheme } = {}) {
+  constructor(filename, { systemTheme, report = console.error } = {}) {
     this.filename = filename;
     this.projects = [];
     this.history = [];
     this.sshHistory = [];
     this.claudeFastMode = null;
     this.settings = { ...defaults, codexSandboxPromptDismissed: false };
-    this.warning = null;
+    this.warnings = [];
+    this.readOnly = false;
+    this.report = report;
+    const refuseWrite = warning => { this.readOnly = true; this.warnings.push(warning); };
+    const value = readWorkspace(filename, refuseWrite);
     // Only a profile with no workspace file follows the system; an existing file keeps its saved theme, or the first.
-    if (!fs.existsSync(filename)) {
-      if (systemTheme === 'light') this.settings.theme = 'light';
+    if (!value) {
+      if (!this.readOnly && systemTheme === 'light') this.settings.theme = 'light';
       return;
     }
-    try {
-      const value = JSON.parse(fs.readFileSync(filename, 'utf8'));
-      if (value.version !== 2 || !Array.isArray(value.projects)) throw new Error('Unsupported workspace format');
-      const ids = new Set();
-      this.projects = value.projects.filter(p => {
-        if (!p || typeof p.id !== 'string' || typeof p.path !== 'string' || ids.has(p.id)) return false;
-        if (p.kind === 'ssh') { try { normalizeSSH({ ...p.ssh, path: p.path }); } catch { return false; } }
-        else if (!path.isAbsolute(p.path)) return false;
-        ids.add(p.id); return true;
-      }).map(p => {
-        const image = validProjectImage(p.image) ? p.image : '';
-        const imageMode = PROJECT_IMAGE_MODES.has(p.imageMode) && (p.imageMode !== 'custom' || image) ? p.imageMode : null;
-        return {
-          id: p.id, name: String(p.name || path.basename(p.path)).slice(0, 120), path: p.path,
-          kind: p.kind === 'ssh' ? 'ssh' : 'local',
-          ...(image && imageMode !== 'number' ? { image } : {}),
-          ...(imageMode ? { imageMode } : {}),
-          ...(p.kind === 'ssh' ? { ssh: { host: p.ssh.host, configFile: p.ssh.configFile || null } } : {}),
-          primaryTerminalClosed: p.primaryTerminalClosed === true,
-          restore: p.restore && typeof p.restore === 'object' ? cleanRestore(p.restore, p.kind) : null,
-          terminals: Array.isArray(p.terminals) ? p.terminals.filter(item => item && /^[a-f\d-]{36}$/i.test(item.id || '')).map(item => ({ id: item.id, restore: cleanRestore(item.restore, p.kind) })) : [],
-          unread: Number.isSafeInteger(p.unread) && p.unread > 0 ? p.unread : 0,
-          lastCompletedAt: typeof p.lastCompletedAt === 'number' ? p.lastCompletedAt : null,
-          completionArmed: p.completionArmed === true,
-          seenEvents: Array.isArray(p.seenEvents) ? p.seenEvents.filter(x => typeof x === 'string').slice(-128) : [],
-          // The order its terminals were dragged into, when they were (ids it no longer has are ignored).
-          ...(Array.isArray(p.terminalOrder) ? { terminalOrder: p.terminalOrder.filter(id => typeof id === 'string' && /^[a-f\d-]{36}$/i.test(id)).slice(0, 64) } : {}),
-        };
-      });
-      this.settings = cleanSettings(value.settings);
-      this.claudeFastMode = cleanClaudeFastMode(value.claudeFastMode);
-      this.history = cleanHistory(value.history);
-      this.sshHistory = cleanSSHHistory(value.sshHistory);
-      const terminalIds = new Set(this.projects.map(project => project.id));
-      for (const project of this.projects) project.terminals = project.terminals.filter(item => { if (terminalIds.has(item.id)) return false; terminalIds.add(item.id); return true; });
-    } catch {
-      const backup = `${filename}.unreadable-${Date.now()}`;
-      fs.copyFileSync(filename, backup);
-      this.warning = `工作区配置无法读取，原文件已保留在 ${backup}`;
-    }
+    try { this.load(value); }
+    catch { refuseWrite(`工作区配置格式不受支持，本次启动不会写入：${filename}`); }
+  }
+
+  load(value) {
+    const ids = new Set();
+    const projects = value.projects.filter(p => {
+      if (!p || typeof p.id !== 'string' || typeof p.path !== 'string' || ids.has(p.id)) return false;
+      if (p.kind === 'ssh') { try { normalizeSSH({ ...p.ssh, path: p.path }); } catch { return false; } }
+      else if (!path.isAbsolute(p.path)) return false;
+      ids.add(p.id); return true;
+    }).map(p => {
+      const image = validProjectImage(p.image) ? p.image : '';
+      const imageMode = PROJECT_IMAGE_MODES.has(p.imageMode) && (p.imageMode !== 'custom' || image) ? p.imageMode : null;
+      return {
+        id: p.id, name: String(p.name || path.basename(p.path)).slice(0, 120), path: p.path,
+        kind: p.kind === 'ssh' ? 'ssh' : 'local',
+        ...(image && imageMode !== 'number' ? { image } : {}),
+        ...(imageMode ? { imageMode } : {}),
+        ...(p.kind === 'ssh' ? { ssh: { host: p.ssh.host, configFile: p.ssh.configFile || null } } : {}),
+        primaryTerminalClosed: p.primaryTerminalClosed === true,
+        restore: p.restore && typeof p.restore === 'object' ? cleanRestore(p.restore, p.kind) : null,
+        terminals: Array.isArray(p.terminals)
+          ? p.terminals.filter(item => item && /^[a-f\d-]{36}$/i.test(item.id || '')).map(item => ({ id: item.id, restore: cleanRestore(item.restore, p.kind) }))
+          : [],
+        unread: Number.isSafeInteger(p.unread) && p.unread > 0 ? p.unread : 0,
+        lastCompletedAt: typeof p.lastCompletedAt === 'number' ? p.lastCompletedAt : null,
+        completionArmed: p.completionArmed === true,
+        seenEvents: Array.isArray(p.seenEvents) ? p.seenEvents.filter(x => typeof x === 'string').slice(-128) : [],
+        // The order its terminals were dragged into, when they were (ids it no longer has are ignored).
+        ...(Array.isArray(p.terminalOrder) ? { terminalOrder: p.terminalOrder.filter(id => typeof id === 'string' && /^[a-f\d-]{36}$/i.test(id)).slice(0, 64) } : {}),
+      };
+    });
+    const settings = cleanSettings(value.settings ?? {});
+    const claudeFastMode = cleanClaudeFastMode(value.claudeFastMode);
+    const history = cleanHistory(value.history), sshHistory = cleanSSHHistory(value.sshHistory);
+    const terminalIds = new Set(projects.map(project => project.id));
+    for (const project of projects) project.terminals = project.terminals.filter(item => { if (terminalIds.has(item.id)) return false; terminalIds.add(item.id); return true; });
+    Object.assign(this, { projects, settings, claudeFastMode, history, sshHistory });
+  }
+
+  // Terminal events report the outdated-CLI warning through this existing field.
+  get warning() { return this.warnings.join(' ') || null; }
+  set warning(message) {
+    if (typeof message === 'string' && message && !this.warnings.includes(message)) this.warnings.push(message);
   }
 
   add(folder, name) {
-    const canonical = fs.realpathSync(folder);
-    if (!fs.statSync(canonical).isDirectory()) throw new Error('请选择项目文件夹。');
+    const canonical = fs.realpathSync.native(folder);
+    const stat = fs.statSync(canonical);
+    if (!stat.isDirectory()) throw new Error('请选择项目文件夹。');
     const key = folderKey(canonical);
-    const existing = this.projects.find(p => p.kind !== 'ssh' && folderKey(p.path) === key);
+    const existing = this.projects.find(p => {
+      if (p.kind === 'ssh') return false;
+      if (folderKey(p.path) === key) return true;
+      if (process.platform !== 'darwin' || p.path.toLowerCase() !== key.toLowerCase()) return false;
+      // Older profiles can retain a different spelling. A case-sensitive volume can also contain both names.
+      try {
+        const saved = fs.statSync(p.path);
+        return saved.dev === stat.dev && saved.ino === stat.ino;
+      } catch { return false; }
+    });
     if (existing) return { project: existing, added: false };
     const project = { id: randomUUID(), name: String(name || path.basename(canonical) || canonical).slice(0, 120), path: canonical, kind: 'local', primaryTerminalClosed: false, restore: { terminal: false, codex: false }, unread: 0, lastCompletedAt: null, completionArmed: false, seenEvents: [] };
     this.projects.push(project);
@@ -263,6 +313,7 @@ class WorkspaceStore {
     const next = { terminal: record.restore?.terminal === true, codex: record.restore?.codex === true, cwd: record.restore?.cwd || null, ...(record.restore?.threadId ? { threadId: record.restore.threadId } : {}), ...agentFields(record.restore) };
     if (typeof patch.terminal === 'boolean') next.terminal = patch.terminal;
     if (typeof patch.codex === 'boolean') next.codex = patch.codex;
+    if (patch.cwd === null) next.cwd = null;
     if (typeof patch.cwd === 'string' && patch.cwd.length <= 4096 && !/[\0\r\n]/.test(patch.cwd) && (project.kind === 'ssh' ? patch.cwd.startsWith('/') : path.isAbsolute(patch.cwd))) next.cwd = patch.cwd;
     if (patch.threadId === null) delete next.threadId;
     else if (/^[a-f\d-]{36}$/i.test(patch.threadId || '')) next.threadId = patch.threadId;
@@ -277,7 +328,17 @@ class WorkspaceStore {
     }
     if (JSON.stringify(next) === JSON.stringify(record.restore) && wasClosed === project.primaryTerminalClosed) return;
     record.restore = next;
-    this.save();
+    try { this.save(); }
+    catch (error) {
+      if (this.restoreRetry) return;
+      this.restoreDirty = true;
+      this.report(error);
+      this.restoreRetry = setTimeout(() => {
+        this.restoreRetry = null;
+        this.flushRestore();
+      }, 500);
+      this.restoreRetry.unref?.();
+    }
   }
 
   findTerminal(id) {
@@ -358,19 +419,18 @@ class WorkspaceStore {
     catch (error) { this.claudeFastMode = previous; throw error; }
   }
   save() {
-    fs.mkdirSync(path.dirname(this.filename), { recursive: true });
-    const tmp = `${this.filename}.tmp`;
+    if (this.readOnly) return;
     const { projects, settings, history, sshHistory, claudeFastMode } = this;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 2, projects, settings, history, sshHistory, ...(claudeFastMode && { claudeFastMode }) }, null, 2));
-    for (let attempt = 0; ; attempt++) {
-      try { fs.renameSync(tmp, this.filename); break; }
-      catch (error) {
-        if (process.platform !== 'win32' || !['EBUSY', 'EPERM', 'EACCES'].includes(error.code) || attempt >= 4) throw error;
-        // Brief Windows reader/indexer locks must not lose a newly captured
-        // session ID. Retain atomic replacement and stop after 100ms total.
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, (attempt + 1) * 10);
-      }
-    }
+    const data = { version: WORKSPACE_VERSION, projects, settings, history, sshHistory, ...(claudeFastMode && { claudeFastMode }) };
+    writeFileAtomic(this.filename, JSON.stringify(data, null, 2), undefined, { flush: true });
+    this.restoreDirty = false;
+    clearTimeout(this.restoreRetry);
+    this.restoreRetry = null;
+  }
+
+  flushRestore() {
+    if (!this.restoreDirty) return;
+    try { this.save(); } catch (error) { this.report(error); }
   }
 }
 

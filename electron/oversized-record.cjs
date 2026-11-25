@@ -1,13 +1,17 @@
-// Large user-image records are parsed with bounded pixel strings. Other oversized Codex records are skipped,
-// except generated pictures: their id/state/prompt and saved path survive in the record's start and end.
-const HEAD = 64 * 1024, TAIL = 8 * 1024;
+// Large user images and generated pictures are parsed with bounded pixel strings.
+const HEAD = 64 * 1024;
 const IMAGE_LIMIT = 2_800_000, RECORD_LIMIT = 16 * 1024 * 1024;
 const IMAGE_OMITTED = Object.freeze({ omitted: true });
 
 // Claude puts pasted screenshots between the prompt's text blocks. Keep small images intact and replace larger
 // base64 strings with a small marker before parsing, so the reading view can explain why the picture is absent.
 class ClaudeImageLine {
-  constructor(start, keys = /"data"\s*:\s*"/) { this.keys = new RegExp(keys.source, 'g'); this.quoted = false; this.escaped = false; this.parts = []; this.size = 0; this.buffer = Buffer.alloc(0); this.data = null; this.add(start); }
+  constructor(start, keys = /"data"\s*:\s*"/, { recordLimit = RECORD_LIMIT, imageLimit = IMAGE_LIMIT } = {}) {
+    this.keys = new RegExp(keys.source, 'g');
+    this.recordLimit = recordLimit; this.imageLimit = imageLimit;
+    this.quoted = false; this.escaped = false; this.parts = []; this.size = 0; this.buffer = Buffer.alloc(0); this.data = null;
+    this.add(start);
+  }
   scan(end, state = this, start = 0) {
     for (let at = start; at < end; at++) {
       const byte = this.buffer[at];
@@ -31,12 +35,12 @@ class ClaudeImageLine {
   keep(part) {
     if (!part.length) return;
     this.size += part.length;
-    if (this.size > RECORD_LIMIT) { this.discarded = true; this.parts = []; this.data = null; this.buffer = Buffer.alloc(0); }
+    if (this.size > this.recordLimit) { this.discarded = true; this.parts = []; this.data = null; this.buffer = Buffer.alloc(0); }
     else this.parts.push(part);
   }
   pixels(part) {
     this.dataSize += part.length;
-    if (this.dataSize > IMAGE_LIMIT) { this.omitted = true; this.data = []; }
+    if (this.dataSize > this.imageLimit) { this.omitted = true; this.data = []; }
     else if (!this.omitted) this.data.push(part);
   }
   add(chunk) {
@@ -77,21 +81,14 @@ class ClaudeImageLine {
   }
 }
 
-const field = (text, name) => {
-  const match = new RegExp(`"${name}":"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
-  if (!match) return null;
-  try { return JSON.parse(`"${match[1]}"`); } catch { return null; }
-};
-
-function oversizedRecord(head, tail) {
-  const start = head.toString('utf8'), end = tail.toString('utf8');
-  const item = start.indexOf('"item":');
-  if (item < 0 || !/"kind":"image_gen\.generation"|"type":"imageGeneration"/.test(start.slice(item))) return null;
-  const savedPath = field(end, 'savedPath') || field(start, 'savedPath');
-  if (!savedPath) return null;
-  const body = start.slice(item);
-  return { timestamp: field(start, 'timestamp'), type: 'event_msg', payload: { type: 'item_completed', item: {
-    type: 'Extension', kind: 'image_gen.generation', id: field(body, 'id') || field(end, 'id'), status: field(body, 'status') || field(end, 'status'), revisedPrompt: field(body, 'revisedPrompt') || field(end, 'revisedPrompt'), savedPath,
+function generatedPictureRecord(record) {
+  const item = record?.payload?.item;
+  if (record?.type !== 'event_msg' || record.payload?.type !== 'item_completed' || !item) return null;
+  if (item.kind !== 'image_gen.generation' && item.type !== 'imageGeneration') return null;
+  const { id, status, revisedPrompt, savedPath } = item;
+  if (typeof savedPath !== 'string' || !savedPath) return null;
+  return { timestamp: record.timestamp, type: 'event_msg', payload: { type: 'item_completed', item: {
+    type: 'Extension', kind: 'image_gen.generation', id: id ?? null, status: status ?? null, revisedPrompt: revisedPrompt ?? null, savedPath,
   } } };
 }
 
@@ -102,21 +99,21 @@ const userImageRecord = head => {
     || /"type"\s*:\s*"event_msg"/.test(text) && /"type"\s*:\s*"(?:UserMessage|user_message)"/.test(text);
 };
 
-// A user image may live inside an old input_image response item or an event's images array. Feed those lines
-// through the same bounded parser as Claude; generated-image records still need only their two ends.
+// Both user images and generated pictures can leave their metadata after the large pixel string.
 class OversizedLine {
   constructor(start) {
-    this.head = Buffer.from(start.subarray(0, HEAD)); this.tail = Buffer.from(start.subarray(-TAIL));
-    this.images = userImageRecord(this.head) ? new ClaudeImageLine(start, CODEX_IMAGE_KEYS) : null;
+    if (start.length) this.add(start);
   }
   add(chunk) {
-    if (!this.head.length) {
-      this.head = Buffer.from(chunk.subarray(0, HEAD));
-      if (userImageRecord(this.head)) { this.images = new ClaudeImageLine(chunk, CODEX_IMAGE_KEYS); return; }
-    } else if (this.images) { this.images.add(chunk); return; }
-    this.tail = Buffer.concat([this.tail, chunk]).subarray(-TAIL);
+    if (this.line) { this.line.add(chunk); return; }
+    this.userImage = userImageRecord(chunk.subarray(0, HEAD));
+    this.line = this.userImage ? new ClaudeImageLine(chunk, CODEX_IMAGE_KEYS)
+      : new ClaudeImageLine(chunk, /"result"\s*:\s*"/, { imageLimit: 0, recordLimit: 2 * HEAD });
   }
-  record() { return this.images ? this.images.record() : oversizedRecord(this.head, this.tail); }
+  record() {
+    const record = this.line?.record();
+    return this.userImage ? record : generatedPictureRecord(record);
+  }
 }
 
 // Both live readers retain the same byte boundary state; only their oversized record format differs.
@@ -221,4 +218,4 @@ function jsonFrames(receive, dropped, invalid, limit = MAX_FRAME) {
   return read;
 }
 
-module.exports = { OversizedLine, oversizedRecord, ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED, readTranscriptChunk, MAX_FRAME, jsonFrames, imageMetadata };
+module.exports = { OversizedLine, ClaudeImageLine, IMAGE_LIMIT, IMAGE_OMITTED, readTranscriptChunk, MAX_FRAME, jsonFrames, imageMetadata };

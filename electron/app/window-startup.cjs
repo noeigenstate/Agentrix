@@ -51,7 +51,7 @@ function openMainWindow(host, shellIcon) {
     registerWindowContents({ window, Menu, clipboard, previewResources, pictureFrom, devUrl, t,
       getActiveTerminal: () => host.activeTerminal, getActiveFileTree: () => host.activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => host.quitting, hasTray: () => !!host.tray,
-      requestQuit, report, send, updateIndicators, clearAttention: () => clearTimeout(host.attentionTimer) });
+      requestQuit, report, send, updateIndicators, showRendererFailure: host.showRendererFailure, clearAttention: () => clearTimeout(host.attentionTimer) });
   }
 }
 

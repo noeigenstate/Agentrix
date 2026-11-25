@@ -24,3 +24,18 @@ test('a generated picture record over 1 MB comes through without its pixels; oth
   readTranscriptChunk(reader, Buffer.from(JSON.stringify(picture) + '\n'), record => oneRead.push(record));
   assert.deepEqual(oneRead, [read[0]], 'generated pictures survive a complete oversized line in a single read too');
 });
+
+test('D3 oversized image metadata is taken from the completed item and never from nested objects', () => {
+  const picture = { type: 'event_msg', payload: { type: 'item_completed', item: {
+    origin: { id: 'nested', status: 'failed', savedPath: 'wrong.png' },
+    type: 'imageGeneration', result: 'A'.repeat(2_300_000),
+    id: 'image-1', status: 'completed', revisedPrompt: 'Use a small image', savedPath: 'saved.png',
+  } } };
+  const bytes = Buffer.from(JSON.stringify(picture) + '\n'), read = [], reader = { buffer: Buffer.alloc(0) };
+  for (let offset = 0; offset < bytes.length; offset += 65_536) {
+    readTranscriptChunk(reader, bytes.subarray(offset, offset + 65_536), record => read.push(record));
+  }
+  assert.deepEqual(read.map(record => record.payload.item), [{
+    type: 'Extension', kind: 'image_gen.generation', id: 'image-1', status: 'completed', revisedPrompt: 'Use a small image', savedPath: 'saved.png',
+  }]);
+});

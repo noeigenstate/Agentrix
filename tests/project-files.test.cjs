@@ -23,6 +23,23 @@ async function writeMentionFile(project, name) {
   await fs.writeFile(path.join(project.path, name), '');
 }
 
+test('C4 project file cache entries are actually released when their timer expires', async t => {
+  const { project } = await fixture(t);
+  const timers = [];
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+    if (ms === 20_000) { timers.push(callback); return { unref() {} }; }
+    return schedule(callback, ms, ...args);
+  });
+  await writeMentionFile(project, 'before.txt');
+  assert.deepEqual(await findFiles(project), [{ path: 'before.txt', kind: 'file' }]);
+  await writeMentionFile(project, 'later.txt');
+  assert.deepEqual(await findFiles(project, 'later'), []);
+  assert.equal(timers.length, 1);
+  timers[0]();
+  assert.deepEqual(await findFiles(project, 'later'), [{ path: 'later.txt', kind: 'file' }]);
+});
+
 test('mentions walk plain folders, derive directories, skip generated trees and limit results', async t => {
   const { project } = await fixture(t);
   await writeMentionFile(project, 'src/deep/中文 file.ts');

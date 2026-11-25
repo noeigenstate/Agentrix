@@ -11,6 +11,15 @@ const { omitted: IMAGE_OMITTED } = require('../electron/picture-values.json');
 const image = data => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } });
 const user = (content, extra = {}) => ({ type: 'user', uuid: 'prompt', timestamp: '2026-10-12T08:00:00.000Z', message: { content }, ...extra });
 const tool = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'read', name: 'Read', input: { file_path: 'a.txt' } }] } };
+
+test('G4 legacy Codex messages with the same timestamp and length get separate reading entries', () => {
+  const timestamp = '2026-10-12T08:00:00.000Z', log = new ConversationLog();
+  for (const message of ['one', 'two']) codexConversation(log, { type: 'event_msg', timestamp, payload: { type: 'agent_message', message } });
+  assert.deepEqual(log.snapshot().map(entry => entry.original), ['one', 'two']);
+  assert.equal(new Set(log.snapshot().map(entry => entry.id)).size, 2);
+  for (const message of ['sun', 'sea']) codexConversation(log, { type: 'event_msg', timestamp, payload: { type: 'user_message', message } });
+  assert.deepEqual(log.snapshot().filter(entry => entry.role === 'user').map(entry => entry.original), ['sun', 'sea']);
+});
 async function transcript(t) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-records-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
@@ -102,6 +111,8 @@ test('all Codex output types report exit failures in both activity and reading l
     ['Exit code: 0\nOutput:\nok', false],
     ['Process exited with code 0', false],
     ['Exit code: unknown', false],
+    ['Program printed a log\nExit code: 71\n', false],
+    ['Chunk ID: x\nWall time: 1 seconds\nProcess exited with code 0\nOutput:\nExit code: 71', false],
     ['Tool returned an unfamiliar shape', false],
     [[], false], [null, false],
   ];

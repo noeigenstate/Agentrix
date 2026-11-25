@@ -58,9 +58,10 @@ function changedBetween(before, after) {
 
 // A BOUNDARY.md's Owns globs (the full format is checked by the project's own tests).
 function ownsOf(text) {
-  const start = text.indexOf('\n## Owns');
-  if (start < 0) return [];
-  const end = text.indexOf('\n## ', start + 1);
+  const heading = /^## Owns[ \t]*\r?$/m.exec(text);
+  if (!heading) return [];
+  const start = heading.index + heading[0].length;
+  const end = text.indexOf('\n## ', start);
   return [...text.slice(start, end < 0 ? undefined : end).matchAll(/^- `([^`]+)`/gm)].map(match => match[1]);
 }
 

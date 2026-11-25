@@ -57,7 +57,29 @@ function registerWindowContents({ window, Menu, clipboard, previewResources, pic
   contents.session.setPermissionCheckHandler((source, permission, _origin, details) => allowPlayerFullscreen(source, permission, details) || permission === 'media' && isAppFrame(source, details) && details.mediaType === 'audio');
 }
 
-function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, requestQuit, report, send, updateIndicators, clearAttention, platform = process.platform }) {
+function registerRendererRecovery({ window, getSettings, isQuitting, showRendererFailure }) {
+  let attempts = 0, lastCrash = 0, timer, stopped = false;
+  window.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`Window renderer gone: ${JSON.stringify({ reason: details.reason, exitCode: details.exitCode, terminalRenderer: getSettings().terminalRenderer })}`);
+    if (isQuitting() || window.isDestroyed() || details.reason === 'clean-exit' || stopped || timer) return;
+    const now = Date.now();
+    if (now - lastCrash >= 60_000) attempts = 0;
+    lastCrash = now;
+    if (attempts === 3) {
+      stopped = true;
+      showRendererFailure();
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      if (!isQuitting() && !window.isDestroyed()) window.reload();
+    }, 250 * 2 ** attempts++);
+  });
+  window.once('closed', () => clearTimeout(timer));
+}
+
+function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, requestQuit, report, send, updateIndicators, clearAttention,
+  showRendererFailure, platform = process.platform }) {
   // Native fullscreen can temporarily mark a visible window as occluded.
   // Keep its live terminals and zoom painting; throttle only after hiding it.
   for (const event of ['hide', 'minimize']) window.on(event, () => window.webContents.setBackgroundThrottling(true));
@@ -70,11 +92,7 @@ function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, req
     updateIndicators();
     send('window:fullscreen-changed', fullscreen);
   });
-  // The reason (crashed, oom, killed…) and exit code are kept in the log before the window loads again.
-  window.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`Window renderer gone: ${JSON.stringify({ reason: details.reason, exitCode: details.exitCode, terminalRenderer: getSettings().terminalRenderer })}`);
-    if (!isQuitting() && details.reason !== 'clean-exit') window.reload();
-  });
+  registerRendererRecovery({ window, getSettings, isQuitting, showRendererFailure });
   window.on('close', event => {
     if (isQuitting()) return;
     event.preventDefault();

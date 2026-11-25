@@ -146,8 +146,12 @@ function registerAgentLaunch(host, handle) {
     // Claude Code on another computer keeps its own conversations: it is asked to continue, never searched for here.
     const history = mode === 'continue' && project.kind !== 'ssh' ? (await host.folderHistory(folderOf(id)))[agent] : null;
     const command = project.kind === 'ssh' && mode === 'continue' && adapter.terminal?.resumeLine ? adapter.terminal.resumeLine() : launchCommand(agent, history);
+    const existing = host.sessions?.get(id);
+    if (existing && existing.status !== 'exited') return false;
     launchPlans.set(id, { agent, command, threadId: history?.id || null });
-    host.startTerminal(id, true); broadcast(); return true;
+    try { host.startTerminal(id, true); }
+    catch (error) { launchPlans.delete(id); throw error; }
+    broadcast(); return true;
   });
 }
 

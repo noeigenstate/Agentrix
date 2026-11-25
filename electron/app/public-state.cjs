@@ -79,7 +79,7 @@ function createPublicState(host) {
       desktopGlass: { supported: !!desktopGlassBackend, compatibility: desktopGlassBackend === 'windows-compat', active: desktopGlassActive,
         restart: store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend && !desktopGlassWindow,
         failed: desktopGlassWindow && !desktopGlassActive },
-      warning: store.warning,
+      warning: store.warnings?.map(message => t(message)).join(' ') || null,
       platform: process.platform,
       nativeTitlebar: macTitlebar?.attached === true,
       // macOS and Linux: the shell new local terminals use and whether zsh is installed, for Settings.

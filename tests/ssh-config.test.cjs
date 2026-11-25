@@ -28,3 +28,14 @@ test('host discovery follows includes, skips wildcards and never executes Match 
   await fs.writeFile(settings, '{ // VS Code allows comments\n "remote.SSH.configFile": "~/.ssh/config",\n}');
   assert.equal(readSSHSettings({ home, settingsFile: settings }).configFile, config);
 });
+
+test('E4 macOS reads Remote SSH configuration from VS Code Application Support', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-ssh-mac-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const user = path.join(home, 'Library/Application Support/Code/User');
+  await fs.mkdir(user, { recursive: true });
+  await fs.writeFile(path.join(user, 'settings.json'), JSON.stringify({ 'remote.SSH.configFile': '~/.ssh/custom', 'remote.SSH.path': '~/bin/ssh' }));
+  assert.deepEqual(readSSHSettings({ home, platform: 'darwin' }), {
+    configFile: path.join(home, '.ssh/custom'), sshPath: home + '/bin/ssh', source: 'vscode',
+  });
+});

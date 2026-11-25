@@ -95,7 +95,7 @@ function createWindowHost(host) {
 
   function notifyCompletion(project) {
     const { window, store, Notification, t, path, root } = host;
-    if (!window.isFocused()) {
+      if (window && !window.isDestroyed() && !window.isFocused()) {
       window.flashFrame(true); clearTimeout(host.attentionTimer);
       host.attentionTimer = setTimeout(() => { if (host.window && !host.window.isDestroyed()) host.window.flashFrame(false); }, 9000);
       host.attentionTimer.unref?.();

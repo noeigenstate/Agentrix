@@ -53,9 +53,9 @@ async function readGitRaw(directory, action, value) {
       return { repository: true, prefix, output: '' };
     }
     if (action === 'history') {
-      let output;
-      try { output = await run(['log', '--topo-order', '-z', `--format=${FORMAT}`, `--max-count=${PAGE_SIZE + 1}`, `--skip=${value}`, ...(prefix ? ['--full-history', '--', '.'] : ['--'])]); }
-      catch (error) { if (/does not have any commits yet|your current branch.*does not have/i.test(error.message)) output = ''; else throw error; }
+      const head = await run(['rev-parse', '--verify', '--quiet', 'HEAD'], { exitCodes: [1] });
+      const output = head.trim() ? await run(['log', '--topo-order', '-z', `--format=${FORMAT}`, `--max-count=${PAGE_SIZE + 1}`, `--skip=${value}`,
+        ...(prefix ? ['--full-history', '--', '.'] : ['--'])]) : '';
       return { repository: true, prefix, output };
     }
     const parents = (await run(['show', '-s', '--format=%P', `${value}^{commit}`, '--'])).trim().split(/\s+/).filter(Boolean);

@@ -4,7 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { repoFiles, snapshot, changedBetween, boundariesFor } = require('../electron/boundaries.cjs');
+const { repoFiles, snapshot, changedBetween, boundariesFor, ownsOf } = require('../electron/boundaries.cjs');
+
+test('D2 Owns can be the first heading and does not match Ownership', () => {
+  assert.deepEqual(ownsOf('## Owns\r\n- `src/**`\r\n## Interface\r\n- `ignored`'), ['src/**']);
+  assert.deepEqual(ownsOf('# Boundary\n## Ownership\n- `ignored`'), []);
+});
 
 function repository(t) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-boundaries-')));

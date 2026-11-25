@@ -99,6 +99,10 @@ function linkFor(ssh, options) {
 class RemoteConnection {
   constructor(project, options, connect = linkFor) {
     const { auth, sessionKey, onEvent, onReady, codingPath, readingNote = '', skills = null } = options;
+    const dispatchFile = path.join(options.integrationDir, 'dispatch.cjs');
+    const { runtimeFiles, dispatchCompanions } = require(dispatchFile);
+    const dispatchHelper = fs.readFileSync(dispatchFile, 'utf8'), dispatchModules = runtimeFiles();
+    const companions = Object.fromEntries(dispatchCompanions.map(name => [name, fs.readFileSync(path.join(options.integrationDir, name), 'utf8')]));
     this.project = project; this.events = new EventEmitter();
     this.pending = new Map(); this.nextId = 0; this.connected = false; this.closed = false;
     this.terminalDecoder = new StringDecoder('utf8');
@@ -113,12 +117,9 @@ class RemoteConnection {
       if (seconds > 60) this.fail(new Error('SSH 连接超时。请确认主机可连接，且远端已安装 Python 3 和 Bash。'));
     }, 1000);
     this.connectTimer.unref?.();
-    const dispatchFile = path.join(options.integrationDir, 'dispatch.cjs');
-    const { runtimeFiles, dispatchCompanions } = require(dispatchFile);
     this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills, native: options.native === true,
       allowBackgroundTasks: options.allowBackgroundTasks === true, claudeLead: options.claudeLead ?? null,
-      dispatchHelper: fs.readFileSync(dispatchFile, 'utf8'), dispatchModules: runtimeFiles(),
-      dispatchCompanions: Object.fromEntries(dispatchCompanions.map(name => [name, fs.readFileSync(path.join(options.integrationDir, name), 'utf8')])) });
+      dispatchHelper, dispatchModules, dispatchCompanions: companions });
   }
   onData(callback) { this.events.on('data', callback); return { dispose: () => this.events.off('data', callback) }; }
   onExit(callback) { this.events.on('exit', callback); return { dispose: () => this.events.off('exit', callback) }; }

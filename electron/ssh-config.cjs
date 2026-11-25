@@ -21,7 +21,9 @@ function expandHome(value, home = os.homedir()) {
 function readSSHSettings({ home = os.homedir(), settingsFile, platform = process.platform } = {}) {
   const defaultSshPath = platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/OpenSSH/ssh.exe') : 'ssh';
   if (process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_SSH_CONFIG && !settingsFile) return { configFile: process.env.AGENTRIX_TEST_SSH_CONFIG, sshPath: defaultSshPath, source: 'test' };
-  const preferences = settingsFile || (platform === 'win32' ? path.join(process.env.APPDATA || path.join(home, 'AppData/Roaming'), 'Code/User/settings.json') : path.join(home, '.config/Code/User/settings.json'));
+  const settingsRoot = platform === 'win32' ? process.env.APPDATA || path.join(home, 'AppData/Roaming')
+    : path.join(home, platform === 'darwin' ? 'Library/Application Support' : '.config');
+  const preferences = settingsFile || path.join(settingsRoot, 'Code/User/settings.json');
   let settings = {};
   try { settings = parse(fs.readFileSync(preferences, 'utf8')) || {}; } catch { }
   const configured = typeof settings['remote.SSH.configFile'] === 'string' ? settings['remote.SSH.configFile'] : '';

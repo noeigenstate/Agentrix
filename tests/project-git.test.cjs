@@ -19,6 +19,11 @@ async function fixture(t) {
   const history = async (directory = dir, offset = 0) => parseHistory(await readGitRaw(directory, 'history', offset), offset);
   return { dir, root, git, write, status, history };
 }
+
+test('D5 an unborn Git branch has empty history', async t => {
+  const { dir } = await fixture(t);
+  assert.deepEqual(await readGitRaw(dir, 'history', 0), { repository: true, prefix: '', output: '' });
+});
 test('Git status distinguishes stages, worktree edits, renames, deletions and Unicode untracked files', async t => {
   const f = await fixture(t);
   assert.equal((await f.status()).unborn, true); assert.deepEqual((await f.history()).commits, []);

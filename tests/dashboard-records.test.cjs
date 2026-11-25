@@ -275,6 +275,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   registerQuit({
     app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); }, getPath: () => directory },
     fs: syncFs, path, platform: 'win32', dashboard: records, labWindow,
+    retryFileOperation: require('../electron/file-retry.cjs').retryFileOperation, report: error => assert.fail(error),
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
     usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, hookServer: null, dispatchControl: null,
@@ -294,7 +295,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   assert.equal(quits, 1);
   const late = records.append('grades', { index: 2 });
   handler({ preventDefault: () => prevented++ });
-  assert.equal(prevented, 1); assert.equal(cleanups, 2); assert.equal(labDisposals, 1); assert.equal(labWaits, 2);
+  assert.equal(prevented, 1); assert.equal(cleanups, 2); assert.equal(labDisposals, 1); assert.equal(labWaits, 1);
   assert.equal(inboxDisposals, 1);
   await late;
 });

@@ -15,7 +15,12 @@ function createCloseGuards({ app, dialog, getWindow, sessions, findProject, allo
     return result.response === 1;
   }
 
-  async function requestQuit() {
+  let quitRequest;
+  function requestQuit() {
+    return quitRequest ??= confirmQuit().finally(() => { quitRequest = null; });
+  }
+
+  async function confirmQuit() {
     if (!await allowEditorClose()) return false;
     const count = liveTerminalCount();
     if (count) {
@@ -135,19 +140,35 @@ function restoreTerminal(deps, id) {
   const agent = saved?.agent || deps.legacyRestoreAgent, nativePolicy = deps.adapterOf(agent)?.nativePolicy;
   const legacyNative = nativePolicy?.restoreWithoutNative && (saved?.codex || saved?.nativeTransport);
   if (legacyNative || saved?.nativeTransport && deps.nativeSessions) {
+    if (found) terminalStartPath(deps, found.project, id);
     deps.restorePlans.delete(id);
     if (!deps.nativeSessions) throw new Error(nativePolicy.restoreWithoutNative);
     const interrupted = saved.interrupted === true;
-    return deps.nativeSessions.start(id, { agent, resume: !!saved.threadId }).then(async opened => {
+    return deps.nativeSessions.start(id, { agent, resume: !!saved.threadId }).catch(error => {
+      deps.startupErrors.set(id, error.message); deps.broadcast();
+    }).then(async opened => {
+      if (!opened) return opened;
       if (nativePolicy?.canContinueInterrupted && saved.threadId && interrupted) {
-        await deps.nativeSessions.continueInterrupted(id, opened.runtimeSessionId, () => deps.store.setRestore(id, { interrupted: false }));
+        try { await deps.nativeSessions.continueInterrupted(id, opened.runtimeSessionId, () => deps.store.setRestore(id, { interrupted: false })); }
+        catch (error) { deps.report(error); }
       }
       return opened;
-    }).catch(error => {
-      deps.startupErrors.set(id, error.message); deps.broadcast();
     });
   }
   deps.startTerminal(id);
+}
+
+function terminalStartPath(deps, project, id) {
+  const plan = deps.restorePlans.get(id);
+  const saved = deps.store.findTerminal(id)?.record.restore?.cwd;
+  const startPath = plan?.cwd || saved || project.path;
+  if (project.kind === 'ssh' || startPath === project.path) return startPath;
+  try {
+    if (deps.fs.statSync(startPath, { throwIfNoEntry: false })?.isDirectory()) return startPath;
+  } catch (error) { if (error.code !== 'ENOTDIR') throw error; }
+  if (plan) delete plan.cwd;
+  deps.store.setRestore(id, { cwd: null });
+  return project.path;
 }
 
 function startTerminal(deps, shellCache, id, agentStarting = false, transfer = null) {
@@ -161,7 +182,7 @@ function startTerminal(deps, shellCache, id, agentStarting = false, transfer = n
   const sessionId = deps.randomUUID();
   const sessionKey = transfer?.sessionKey || deps.randomUUID();
   const controlCapability = transfer?.controlCapability || deps.randomUUID();
-  const startPath = deps.restorePlans.get(id)?.cwd || deps.store.findTerminal(id)?.record.restore?.cwd || project.path;
+  const startPath = terminalStartPath(deps, project, id);
   // Local terminals use the shell chosen in settings; SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(deps, shellCache, true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? deps.path.join(deps.runtimeDir, `${id}.json`) : null;
@@ -172,6 +193,27 @@ function startTerminal(deps, shellCache, id, agentStarting = false, transfer = n
   const hooks = bootstrapFile && deps.terminalHooks({ port: deps.hookServer?.port, terminalId: id, sessionKey, eventServer: deps.eventServer, env, cwd: startPath, seatRouting: true,
     shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath: deps.powershellPath, script: claudeHookPath, node: process.execPath,
       helper: deps.path.join(deps.integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
+  const { terminal, remoteSkills, env: terminalEnv } = prepareAndSpawnTerminal(deps, { project, shell, id, sessionId, sessionKey,
+    controlCapability, startPath, hooks, env, process, bootstrapFile, skillNoteFile, claudeHookPath, transfer });
+  const s = createTerminalSession(deps, { id, project, terminal, env: terminalEnv, transfer, sessionId, sessionKey, controlCapability,
+    bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
+  if (remoteSkills) terminal.appliedRouting = { effective: remoteSkills.seatsMap, roles: remoteSkills.roles, conductor: remoteSkills.conductor === true };
+  registerTerminalSession(deps, s, project);
+  bindTerminalEvents(deps, s, project, terminalEnv);
+}
+
+function prepareAndSpawnTerminal(deps, options) {
+  const { sessionId, bootstrapFile, skillNoteFile, transfer } = options;
+  try {
+    writeTerminalStartupFiles(deps, options);
+    return spawnTerminal(deps, options);
+  } catch (error) {
+    cleanupTerminalFiles(deps, { bootstrapFile: transfer?.bootstrapFile === bootstrapFile ? null : bootstrapFile, skillNoteFile, sessionId });
+    throw error;
+  }
+}
+
+function writeTerminalStartupFiles(deps, { project, id, sessionId, sessionKey, controlCapability, startPath, hooks, env, process, bootstrapFile, skillNoteFile, claudeHookPath }) {
   applyFastHookSettings(hooks, env);
   if (bootstrapFile) deps.writeBootstrap({ file: bootstrapFile, eventServer: deps.eventServer, projectId: id, projectPath: startPath,
     sessionKey, controlAddress: deps.controlAddress, controlCapability,
@@ -191,12 +233,6 @@ function startTerminal(deps, shellCache, id, agentStarting = false, transfer = n
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void deps.writeHandoff(deps.handoffFile(id), startPath, { memoryDir: deps.memoryDir() }).catch(() => {});
   }
-  const { terminal, remoteSkills, env: terminalEnv } = spawnTerminal(deps, { project, shell, id, sessionId, sessionKey, startPath, hooks, env, process });
-  const s = createTerminalSession(deps, { id, project, terminal, env: terminalEnv, transfer, sessionId, sessionKey, controlCapability,
-    bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
-  if (remoteSkills) terminal.appliedRouting = { effective: remoteSkills.seatsMap, roles: remoteSkills.roles, conductor: remoteSkills.conductor === true };
-  registerTerminalSession(deps, s, project);
-  bindTerminalEvents(deps, s, project, terminalEnv);
 }
 
 function createTerminalSession(deps, { id, project, terminal, env, transfer, sessionId, sessionKey, controlCapability,
@@ -370,18 +406,33 @@ function bindTerminalEvents(deps, s, project, env) {
 }
 
 function cleanupTerminalFiles(deps, s) {
-  if (s.bootstrapFile) {
-    const folder = deps.path.dirname(s.bootstrapFile), prefix = `${s.sessionId}-claude-settings-`;
-    // Runs in pty exit callbacks and the quit loop: a vanished runtime folder must not throw there.
-    let entries = [];
-    try { entries = deps.fs.readdirSync(folder, { withFileTypes: true }); } catch (error) { if (error.code !== 'ENOENT') deps.report(error); }
-    for (const entry of entries) {
-      if (!entry.isDirectory() && entry.name.startsWith(prefix)) deps.fs.rmSync(deps.path.join(folder, entry.name), { force: true });
+  const { fs, path, report } = deps;
+  const retry = deps.retryFileOperation || (operation => operation());
+  const remove = operation => {
+    try { retry(operation); }
+    catch (error) { if (error.code !== 'ENOENT') report(error); }
+  };
+  for (const bootstrap of [s.bootstrapFile, ...(s.switchBootstrapFiles || [])].filter(Boolean)) {
+    const folder = path.dirname(bootstrap), base = path.basename(bootstrap);
+    const env = base.replace(/\.json$/i, '') + '-claude-env.sh';
+    let entries;
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); }
+    catch (error) {
+      if (error.code !== 'ENOENT') {
+        report(error);
+        remove(() => deps.removeBootstrap(bootstrap));
+      }
+      continue;
     }
-    deps.removeBootstrap(s.bootstrapFile);
+    for (const entry of entries) {
+      // Bootstrap sidecars share the exact JSON basename. Claude settings are named for this PTY session.
+      const { name } = entry;
+      if (!entry.isDirectory() && (name === base || name.startsWith(base + '.') || name === env || name.startsWith(`${s.sessionId}-claude-settings-`))) {
+        remove(() => fs.rmSync(path.join(folder, name), { force: true }));
+      }
+    }
   }
-  if (s.skillNoteFile) deps.fs.rmSync(s.skillNoteFile, { force: true });
-  for (const file of s.switchBootstrapFiles || []) deps.removeBootstrap(file);
+  if (s.skillNoteFile) remove(() => fs.rmSync(s.skillNoteFile, { force: true }));
 }
 
 function disposeTerminal(deps, id, { preserveNative = false, preserveSwitch = false, preserveCalls = false } = {}) {

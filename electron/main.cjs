@@ -5,7 +5,7 @@ const { createSessionPresentation } = require('./app/session-presentation.cjs');
 const { createWindowHost, createTranslator } = require('./app/window-host.cjs');
 const { openMainWindow, loadMainWindow } = require('./app/window-startup.cjs');
 const { createProjectPreviews, autoProjectImages } = require('./app/project-previews.cjs');
-const { registerQuit, startEventServer, startHookServer, workerParent } = require('./app/process-lifecycle.cjs');
+const { registerQuit, cleanStaleRuntimeFolders, startNativeWithWarnings, startEventServer, startHookServer, workerParent } = require('./app/process-lifecycle.cjs');
 const { registerWindowIpc } = require('./app/window-ipc.cjs');
 const { registerAppSchemes, registerAppProtocols } = require('./app/protocols.cjs');
 const { configureApplication, prepareWindowIcon, prepareShellIntegration } = require('./app/platform-startup.cjs');
@@ -56,6 +56,7 @@ const { createInterventions } = require('./features/agents/interventions.cjs');
 const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
 const { SkillsStore, probeCodex, probeClaude } = require('./features/skills/store.cjs');
 const { writeFileAtomic } = require('./atomic-write.cjs');
+const { retryFileOperation } = require('./file-retry.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
 const { writeHandoff, startupNote, startupNoteFields } = require('./features/agents/handoff.cjs');
@@ -235,7 +236,7 @@ const host = {
   accountEnvironment, ActionLog, adapterOf, AgentCalls, app, ApprovalGuard, approvalStamp, bashArguments, captureBranch, claudeResumeCommand,
   codexLocator, CompletionWork, ConversationLog, dashboard, endSkillSession, fs, InputGate, isTerminalResponse, legacyRestoreAgent, linuxShell,
   macShell, onPath, os, path, prepareAskpass, PromptMarkers, PromptQueue, pty, publishAction, publishConversation, quotaScope,
-  readingHistory, remoteBranch, RemoteConnection, removeBootstrap, restorePlans, shellEnvironment, startupErrors,
+  readingHistory, remoteBranch, RemoteConnection, removeBootstrap, restorePlans, retryFileOperation, shellEnvironment, startupErrors,
   startupNoteFields, stopUsageAccount, SubmissionTracker, t, terminalHooks, terminalLocale, TerminalTitleTracker, wholeThread,
   writeFileAtomic, writeHandoff, zshEnvironment,
   get claudeFirst() { return claudeFirst; },
@@ -325,7 +326,7 @@ if (!app.requestSingleInstanceLock()) {
     codexFirst = checkCodex('refresh').catch(() => {});
     if (process.platform !== 'win32') void shellPathReady.then(() => Promise.all([checkClaude('refresh'), checkCodex('refresh')])).catch(() => {});
     app.on('browser-window-focus', () => { checkClaude('focus').catch(() => {}); checkCodex('focus').catch(() => {}); });
-    store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme() });
+    store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme(), report });
     if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
       for (const project of store.projects) for (const record of [project, ...(project.terminals || [])]) {
         if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
@@ -367,18 +368,19 @@ if (!app.requestSingleInstanceLock()) {
       progress: value => filesIpc.setProgress(value),
     });
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
+    cleanStaleRuntimeFolders({ fs, path, retryFileOperation, report: error => console.error('Runtime cleanup:', error) }, app.getPath('userData'), runtimeDir);
     // A worker terminal's command hooks are its own, taken before any project terminal's (worker-terminals/BOUNDARY.md).
     eventServer = await startEventServer({ createEventServer, workerTerminals, onEvent });
     // Claude Code's HTTP hooks (C-2). Without the server, terminals keep command hooks and say why.
     hookServer = await startHookServer({ createHookServer, createHookIngest, workerTerminals, sessions, claudeHook, takeModeNote });
-    try { await initializeNativeSessions(); }
-    catch {
-      try { dispatchControl?.close(); } catch { }
-      dispatchControl = null; controlAddress = null; nativeSessions = null;
-      store.warning = t('原生会话暂不可用，已保留终端模式。');
-    }
-    const nativeWarnings = recoveryWarnings(path.join(app.getPath('userData'), 'native-session'), true);
-    if (nativeWarnings.length) store.warning = nativeWarnings.map(message => t(message)).join(' ');
+    await startNativeWithWarnings({
+      store, start: initializeNativeSessions, report: error => console.error('Native session startup:', error),
+      recover: () => recoveryWarnings(path.join(app.getPath('userData'), 'native-session'), true),
+      onFailure: () => {
+        try { dispatchControl?.close(); } catch (error) { console.error('Dispatch control cleanup:', error); }
+        dispatchControl = null; controlAddress = null; nativeSessions = null;
+      },
+    });
     sshAuth = await new SSHAuthServer(queue => send('ssh:auth-changed', queue)).start();
     updateManager = new UpdateManager({
       updater: isInstalledBuild(app.isPackaged, process.execPath) ? require('electron-updater').autoUpdater : null,
@@ -409,6 +411,7 @@ if (!app.requestSingleInstanceLock()) {
       t, send, broadcast, appUserModelId, relaunchDisplayName, app, root, registerWindowZoom, screen, createDashboard, BrowserWindow,
       ipcMain, devUrl, dashboard, windowBackgroundColor, syncDashboardLive, createLab, integrationDir, registerWindowContents, Menu,
       clipboard, previewResources, pictureFrom, registerWindowLifecycle, requestQuit, report, updateIndicators,
+      showRendererFailure: () => dialog.showErrorBox(t('Agentrix 窗口反复崩溃'), t('已停止自动重载。请退出并重新打开 Agentrix。')),
       Tray, trayImage, trayMenu, showWindow, macMenu, captureBranch,
       get window() { return window; }, set window(value) { window = value; },
       get desktopGlassWindow() { return desktopGlassWindow; }, set desktopGlassWindow(value) { desktopGlassWindow = value; },
@@ -449,8 +452,10 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 registerQuit({
-  app, platform: process.platform, showWindow, requestQuit, report, disposeDispatchInbox, projectAccounts, codexAccounts, claudeAccounts,
-  disposeClaudeAccounts, sessions, disposeTerminal, workerTerminals, cleanupAskpass, fs, path, dashboard,
+  app, platform: process.platform, showWindow, requestQuit, disposeDispatchInbox, projectAccounts, codexAccounts, claudeAccounts,
+  report: error => { console.error('Shutdown cleanup:', error); report(error); },
+  disposeClaudeAccounts, sessions, disposeTerminal, workerTerminals, cleanupAskpass, fs, path, retryFileOperation, dashboard,
+  flushRestore: () => store?.flushRestore(),
   get quitting() { return quitting; }, set quitting(value) { quitting = value; },
   get window() { return window; }, get dashboardWindow() { return dashboardWindow; }, get labWindow() { return labWindow; },
   get attentionTimer() { return attentionTimer; }, get voiceManager() { return voiceManager; }, get fileOperations() { return fileOperations; },

@@ -21,6 +21,7 @@
     "tests/affected-tests.test.cjs",
     "tests/agent-commands.test.cjs",
     "tests/agents.test.cjs",
+    "tests/app-host-audit.test.cjs",
     "tests/app-shortcuts.test.cjs",
     "tests/boundaries.test.cjs",
     "tests/ci-preflight.test.cjs",
@@ -419,7 +420,7 @@
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "b8b004950a6377c203e82c33e0c9721fb25352a5ae9ab14993db694e6f8f4bc1",
+      "digest": "85678e2f36ef6967941c7fe8c3e363e03fee16906f22e647a07161d7c00e0e37",
       "targets": [
         "integration/dispatch.cjs"
       ],

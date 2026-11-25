@@ -57,7 +57,11 @@ async function findFiles(project, query = '') {
     cached = { root, expires: Infinity, list: projectFileList(root) };
     fileLists.set(key, cached);
     const pending = cached;
-    pending.list.then(() => { pending.expires = Date.now() + FILE_CACHE_MS; }, () => { if (fileLists.get(key) === pending) fileLists.delete(key); });
+    const forget = () => { if (fileLists.get(key) === pending) fileLists.delete(key); };
+    void pending.list.then(() => {
+      pending.expires = Date.now() + FILE_CACHE_MS;
+      setTimeout(forget, FILE_CACHE_MS).unref();
+    }, forget);
   }
   const entries = await cached.list;
   const needle = query.toLowerCase();

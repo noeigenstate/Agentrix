@@ -25,6 +25,29 @@ test('adding the same real folder twice keeps one project', t => {
   assert.equal(store.projects.length, 1);
 });
 
+test('E5 local project identity follows the filesystem spelling on case-insensitive volumes', t => {
+  const { store, directory } = fixture(t);
+  const folder = path.join(directory, 'Mixed Case'), alias = path.join(directory, 'mixed case');
+  fs.mkdirSync(folder);
+  if (!fs.existsSync(alias)) return t.skip('Case-sensitive filesystem');
+  const first = store.add(folder), second = store.add(alias);
+  assert.equal(second.added, false);
+  assert.equal(second.project.id, first.project.id);
+});
+
+test('E5 macOS recognizes a saved path with a different spelling of the same directory', { skip: process.platform !== 'darwin' }, t => {
+  const { store, directory, file } = fixture(t);
+  const folder = path.join(directory, 'Mixed Case'), alias = path.join(directory, 'mixed case');
+  fs.mkdirSync(folder);
+  if (!fs.existsSync(alias)) return t.skip('Case-sensitive filesystem');
+  const first = store.add(folder).project;
+  first.path = alias;
+  store.save();
+  const second = new WorkspaceStore(file).add(folder);
+  assert.equal(second.added, false);
+  assert.equal(second.project.id, first.id);
+});
+
 test('Windows transient save locks retry atomically and persistent failures remain explicit', { skip: process.platform !== 'win32' }, t => {
   const { file, store, project } = fixture(t);
   const rename = fs.renameSync; let attempts = 0, locked = 2;
@@ -149,14 +172,120 @@ test('removing a project preserves all project files', t => {
   assert.equal(fs.readFileSync(source, 'utf8'), 'keep this');
 });
 
-test('corrupt workspace is copied aside before a new workspace can be saved', t => {
+test('G1 corrupt workspace is backed up and stays read-only after later workspace changes', t => {
   const { file, directory } = fixture(t);
   fs.writeFileSync(file, '{ invalid');
   const store = new WorkspaceStore(file);
-  assert.ok(store.warning);
+  assert.equal(store.readOnly, true);
   const backups = fs.readdirSync(directory).filter(x => x.includes('.unreadable-'));
   assert.equal(backups.length, 1);
+  assert.ok(store.warnings[0].includes(path.join(directory, backups[0])));
   assert.equal(fs.readFileSync(path.join(directory, backups[0]), 'utf8'), '{ invalid');
+  store.add(directory);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{ invalid');
+});
+
+test('G1 workspace read retries EBUSY, EPERM and EMFILE, then restores the saved project', t => {
+  const { file, project } = fixture(t);
+  const read = fs.readFileSync, failures = ['EBUSY', 'EPERM', 'EMFILE'];
+  let attempts = 0;
+  t.mock.method(fs, 'readFileSync', (name, ...args) => {
+    if (name === file && attempts++ < failures.length) throw Object.assign(new Error('locked'), { code: failures[attempts - 1] });
+    return read(name, ...args);
+  });
+  const store = new WorkspaceStore(file);
+  assert.equal(attempts, 4);
+  assert.equal(store.readOnly, false);
+  assert.equal(store.projects[0].id, project.id);
+});
+
+test('G1 a persistent read error is reported without a backup or a replacement', t => {
+  const { file, directory } = fixture(t);
+  const read = fs.readFileSync, before = read(file), entries = fs.readdirSync(directory);
+  let attempts = 0;
+  t.mock.method(fs, 'readFileSync', (name, ...args) => {
+    if (name === file) { attempts++; throw Object.assign(new Error('locked'), { code: 'EBUSY' }); }
+    return read(name, ...args);
+  });
+  const store = new WorkspaceStore(file);
+  store.save();
+  assert.equal(attempts, 5);
+  assert.equal(store.readOnly, true);
+  assert.match(store.warnings[0], /EBUSY/);
+  assert.deepEqual(read(file), before);
+  assert.deepEqual(fs.readdirSync(directory), entries);
+});
+
+test('G1 a failed backup is reported and the corrupt original remains untouched', t => {
+  const { file } = fixture(t);
+  fs.writeFileSync(file, '');
+  const write = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', (name, ...args) => {
+    if (name.startsWith(file + '.unreadable-')) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    return write(name, ...args);
+  });
+  const store = new WorkspaceStore(file);
+  assert.equal(store.readOnly, true);
+  assert.match(store.warnings[0], /ENOSPC/);
+  assert.ok(store.warnings[0].includes(file));
+  store.save();
+  assert.equal(fs.statSync(file).size, 0);
+});
+
+test('E1 BOM-prefixed JSON restores projects without a warning or a backup', t => {
+  const { file, directory, project } = fixture(t);
+  fs.writeFileSync(file, '\uFEFF' + fs.readFileSync(file, 'utf8'));
+  const store = new WorkspaceStore(file);
+  assert.equal(store.projects[0].id, project.id);
+  assert.deepEqual(store.warnings, []);
+  assert.equal(store.readOnly, false);
+  assert.equal(fs.readdirSync(directory).some(name => name.includes('.unreadable-')), false);
+});
+
+test('G2 a newer workspace version stays read-only and leaves the original untouched', t => {
+  const { file, directory } = fixture(t);
+  const saved = JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), version: 42 });
+  fs.writeFileSync(file, saved);
+  const before = fs.readdirSync(directory);
+  const store = new WorkspaceStore(file);
+  assert.equal(store.readOnly, true);
+  assert.match(store.warnings[0], /42/);
+  store.updateSettings({ theme: 'light' });
+  assert.equal(fs.readFileSync(file, 'utf8'), saved);
+  assert.deepEqual(fs.readdirSync(directory), before);
+});
+
+test('G3 a workspace save requests a flush before replacing the file', t => {
+  const { file, store } = fixture(t), write = fs.writeFileSync, rename = fs.renameSync, steps = [];
+  t.mock.method(fs, 'writeFileSync', (name, data, options) => {
+    const result = write(name, data, options);
+    steps.push(['write', options.flush]);
+    return result;
+  });
+  t.mock.method(fs, 'renameSync', (source, target) => { steps.push(['rename', target]); return rename(source, target); });
+  store.updateSettings({ theme: 'light' });
+  assert.deepEqual(steps, [['write', true], ['rename', file]]);
+  assert.equal(new WorkspaceStore(file).settings.theme, 'light');
+});
+
+test('B4 a failed restore save reports once and the scheduled retry persists the latest state', t => {
+  const { file, project } = fixture(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const errors = [], store = new WorkspaceStore(file, { report: error => errors.push(error.code) });
+  const write = fs.writeFileSync;
+  let full = true;
+  t.mock.method(fs, 'writeFileSync', (name, ...args) => {
+    if (full && name.startsWith(file + '.')) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    return write(name, ...args);
+  });
+  store.setRestore(project.id, { terminal: true });
+  store.setRestore(project.id, { cwd: project.path });
+  assert.deepEqual(errors, ['ENOSPC']);
+  assert.equal(new WorkspaceStore(file).projects[0].restore.terminal, false);
+  full = false;
+  t.mock.timers.tick(500);
+  assert.equal(new WorkspaceStore(file).projects[0].restore.cwd, project.path);
+  assert.equal(new WorkspaceStore(file).projects[0].restore.terminal, true);
 });
 
 test('new workspaces and settings start on the first theme', t => {
@@ -195,7 +324,7 @@ test('an existing workspace file keeps its theme whatever the system theme is', 
       fs.writeFileSync(file, saved);
       const store = new WorkspaceStore(file, { systemTheme });
       assert.equal(store.settings.theme, theme, `${saved} on a ${systemTheme} system`);
-      assert.equal(store.warning, null);
+      assert.deepEqual(store.warnings, []);
       assert.equal(fs.readFileSync(file, 'utf8'), saved);
       store.updateSettings({ sound: false });
       assert.equal(new WorkspaceStore(file, { systemTheme: 'light' }).settings.theme, theme, 'saving settings keeps it');
@@ -221,7 +350,7 @@ test('legacy theme values fall back to the first theme on load and on settings u
   for (const theme of ['retired', 'catalina', 'mono-amber', '', null, 42, { id: 'retired' }]) {
     fs.writeFileSync(file, JSON.stringify({ ...saved, settings: { ...saved.settings, theme, fontSize: 16 } }));
     const restored = new WorkspaceStore(file);
-    assert.equal(restored.warning, null);
+    assert.deepEqual(restored.warnings, []);
     assert.equal(restored.settings.theme, 'mono');
     assert.equal(restored.settings.fontSize, 16);
     assert.deepEqual(restored.projects.map(project => project.id), saved.projects.map(project => project.id));
@@ -270,7 +399,7 @@ test('Codex permissions: full when missing or unknown, and the three choices are
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-perm-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'workspace.json');
-  fs.writeFileSync(file, JSON.stringify({ projects: [], settings: { fontSize: 14 } }));
+  fs.writeFileSync(file, JSON.stringify({ version: 2, projects: [], settings: { fontSize: 14 } }));
   const store = new WorkspaceStore(file);
   assert.equal(store.settings.codexPermissions, 'full');
   store.updateSettings({ codexPermissions: 'ask' });

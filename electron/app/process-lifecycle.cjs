@@ -1,53 +1,101 @@
+const RUNTIME_FOLDER = /^runtime-[a-zA-Z0-9]+$/;
+
+function removeRuntimeFolder({ fs, path, retryFileOperation }, root, folder) {
+  if (path.relative(root, path.dirname(folder)) || !RUNTIME_FOLDER.test(path.basename(folder))) return;
+  if (!fs.lstatSync(folder, { throwIfNoEntry: false })?.isDirectory()) return;
+  if (path.relative(folder, fs.realpathSync(folder))) return;
+  retryFileOperation(() => fs.rmSync(folder, { recursive: true, force: true }));
+}
+
+function cleanStaleRuntimeFolders(deps, directory, current) {
+  const { fs, path, report } = deps;
+  try {
+    const root = fs.realpathSync(directory);
+    const currentName = path.basename(current);
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === currentName || !RUNTIME_FOLDER.test(entry.name)) continue;
+      try { removeRuntimeFolder(deps, root, path.join(root, entry.name)); }
+      catch (error) { report(error); }
+    }
+  } catch (error) { report(error); }
+}
+
+async function startNativeWithWarnings({ store, start, recover, onFailure, report }) {
+  try { await start(); }
+  catch (error) {
+    report(error);
+    onFailure();
+    store.warnings.push('原生会话暂不可用，已保留终端模式。');
+  }
+  store.warnings.push(...recover());
+}
+
+function quitSteps(host) {
+  const { app, report, disposeDispatchInbox, dashboardWindow, labWindow,
+    attentionTimer, voiceManager, fileOperations, skills, nativeSessions, claudeRuntime, updateManager, projectAccounts,
+    codexAccounts, claudeAccounts, disposeClaudeAccounts, usageRolloverTimer, stateTimer, sessions, disposeTerminal,
+    workerTerminals, sshAuth, eventServer, hookServer, dispatchControl, tray, cleanupAskpass, runtimeDir, fs, path, dashboard } = host;
+  const drains = [];
+  const run = operation => {
+    try {
+      const result = operation();
+      if (result && typeof result.then === 'function') drains.push(Promise.resolve(result).catch(report));
+    } catch (error) { report(error); }
+  };
+  run(disposeDispatchInbox);
+  run(() => dashboardWindow?.dispose());
+  run(() => labWindow?.dispose());
+  clearTimeout(attentionTimer);
+  run(() => voiceManager?.close());
+  run(() => fileOperations?.cancel());
+  run(() => skills?.close());
+  host.quitting = true;
+  run(() => nativeSessions?.close());
+  run(() => claudeRuntime?.close());
+  run(() => updateManager?.dispose());
+  run(() => projectAccounts.close());
+  run(() => codexAccounts.dispose());
+  run(() => claudeAccounts.dispose());
+  run(disposeClaudeAccounts);
+  clearTimeout(usageRolloverTimer);
+  clearTimeout(stateTimer);
+  for (const id of sessions.keys()) run(() => disposeTerminal(id));
+  run(() => host.flushRestore?.());
+  run(() => workerTerminals.closeAll());
+  run(() => sshAuth?.close());
+  run(() => eventServer?.close());
+  run(() => hookServer?.close());
+  run(() => dispatchControl?.close());
+  run(() => tray?.destroy());
+  run(cleanupAskpass);
+  if (runtimeDir) run(() => removeRuntimeFolder(host, fs.realpathSync(app.getPath('userData')),
+    path.join(fs.realpathSync(path.dirname(runtimeDir)), path.basename(runtimeDir))));
+  run(() => dashboard.waitForQuit());
+  run(() => labWindow?.waitForQuit());
+  return drains;
+}
+
 function registerQuit(host) {
-  let quitCleaned = false;
+  let phase;
   host.app.on('before-quit', event => {
-    const { app, platform, quitting, window, showWindow, requestQuit, report, disposeDispatchInbox, dashboardWindow, labWindow,
-      attentionTimer, voiceManager, fileOperations, skills, nativeSessions, claudeRuntime, updateManager, projectAccounts,
-      codexAccounts, claudeAccounts, disposeClaudeAccounts, usageRolloverTimer, stateTimer, sessions, disposeTerminal,
-      workerTerminals, sshAuth, eventServer, hookServer, dispatchControl, tray, cleanupAskpass, runtimeDir, fs, path, dashboard } = host;
-    let nativeDrain, workerDrain;
-    // On macOS the Dock's Quit and logging out reach here directly; they ask about running terminals like ⌘Q.
-    if (platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
-    if (!quitCleaned) {
-      quitCleaned = true;
-      disposeDispatchInbox();
-      dashboardWindow?.dispose();
-      labWindow?.dispose();
-      clearTimeout(attentionTimer);
-      voiceManager?.close(); fileOperations?.cancel();
-      skills?.close();
-      host.quitting = true;
-      nativeDrain = Promise.allSettled([nativeSessions?.close(), claudeRuntime?.close()]);
-      updateManager?.dispose();
-      projectAccounts.close();
-      codexAccounts.dispose();
-      claudeAccounts.dispose();
-      disposeClaudeAccounts();
-      clearTimeout(usageRolloverTimer);
-      clearTimeout(stateTimer);
-      for (const id of sessions.keys()) disposeTerminal(id);
-      workerDrain = workerTerminals.closeAll();
-      sshAuth?.close();
-      eventServer?.close();
-      hookServer?.close();
-      dispatchControl?.close();
-      tray?.destroy();
-      cleanupAskpass();
-      if (runtimeDir) {
-        // Verify the generated directory is directly inside this launch's userData before recursive cleanup.
-        try {
-          const root = fs.realpathSync(app.getPath('userData')), folder = fs.realpathSync(runtimeDir);
-          if (!path.relative(root, path.dirname(folder)) && /^runtime-[a-zA-Z0-9]+$/.test(path.basename(folder)) && !fs.lstatSync(runtimeDir).isSymbolicLink()) {
-            fs.rmSync(folder, { recursive: true, force: true });
-          }
-        } catch { }
-      }
+    const { app, platform, quitting, window, showWindow, requestQuit, report, quitTimeout = 5000 } = host;
+    // On macOS the Dock's Quit and logging out reach here directly.
+    if (platform === 'darwin' && !quitting && window && !window.isDestroyed()) {
+      event.preventDefault(); showWindow(); requestQuit().catch(report); return;
     }
-    const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit(), nativeDrain, workerDrain].filter(Boolean);
-    if (drains.length) {
-      event.preventDefault();
-      void Promise.allSettled(drains).then(() => app.quit());
-    }
+    if (phase === 'done') return;
+    event.preventDefault();
+    if (phase === 'draining') return;
+    phase = 'draining';
+    const drains = quitSteps(host);
+    let timer;
+    const deadline = new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), quitTimeout); });
+    void Promise.race([Promise.allSettled(drains), deadline]).then(result => {
+      clearTimeout(timer);
+      phase = 'done';
+      if (result === 'timeout') report(new Error('Timed out waiting for shutdown cleanup.'));
+      app.quit();
+    });
   });
 }
 
@@ -65,4 +113,4 @@ function workerParent(sessions, run) {
   return s?.usageEnv && s.agent === 'claude' && !s.nativeStructured ? { env: s.usageEnv, sessionKey: s.sessionKey, bootstrapFile: s.bootstrapFile } : null;
 }
 
-module.exports = { registerQuit, startEventServer, startHookServer, workerParent };
+module.exports = { registerQuit, cleanStaleRuntimeFolders, startNativeWithWarnings, startEventServer, startHookServer, workerParent };

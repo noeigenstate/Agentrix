@@ -100,7 +100,7 @@ test('native menus and completion notifications follow default English and expli
   }
   const context = { store: undefined, app: { name: 'Agentrix' }, path, root,
     updateManager: undefined,
-    Menu: { buildFromTemplate: items => items }, Notification, window: { isFocused: () => true },
+    Menu: { buildFromTemplate: items => items }, Notification, window: { isFocused: () => true, isDestroyed: () => false },
     tray: { isDestroyed: () => false, setContextMenu: items => { trayItems = items; } } };
   context.t = createTranslator(() => context.store);
   const { macMenu, trayMenu, notifyCompletion } = createWindowHost(context);
