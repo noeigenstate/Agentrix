@@ -3,7 +3,13 @@ import { WHATS_NEW } from './guide';
 import './release-notes.css';
 
 function NoteList({ notes }: { notes: typeof WHATS_NEW }) {
-  return <ul className="release-notes">{notes.map(({ title, text }) => <li key={title}><b>{t(title)}</b>{t(text)}</li>)}</ul>;
+  const ordered = [...notes].sort((a, b) => Number(!!b.highlight) - Number(!!a.highlight));
+  return <ul className="release-notes">{ordered.map(({ title, text, highlight }) => (
+    <li key={title} className={highlight ? 'release-note-highlight' : undefined}>
+      {highlight && <span className="release-note-sr-only">{t('重要：')}</span>}
+      <b>{t(title)}</b>{t(text)}
+    </li>
+  ))}</ul>;
 }
 
 // This release's changes as a list: each note a marker in the list colour, its short title strong and its detail after it in the secondary ink.

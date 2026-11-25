@@ -11,6 +11,7 @@
   --text-1: #f2f2f2; --text-2: #b5b5b5; --text-3: #999999; --text-disabled: #777777;
   --button-primary: #e5e5e5; --button-primary-text: #181818; --focus-ring: #d0d0d0;
   --success: #70bfa4; --success-text: var(--success); --running: #78a8cc; --warning: #d8ae67; --danger: #de7878; --usage: #68b8ae;
+  --release-highlight-text: #baff45; --release-highlight-bg: transparent; --release-highlight-glow: 0 0 6px rgb(from var(--release-highlight-text) r g b / .35);
   /* The two agents' own colours, on their marks and status dots only: Claude Code's brand orange and Codex's green; and the app icon's coral, on the logo's fourth square only. */
   --agent-claude: #d97757; --agent-claude-text: var(--agent-claude); --agent-codex: #34d5a5; --brand-coral: #ef7681;
   /* The short bar at the left of a selected list row. */
@@ -39,6 +40,7 @@
   --text-1: #24272d; --text-2: #5a626e; --text-3: #69717d; --text-disabled: #9aa1ab;
   --button-primary: #24272d; --button-primary-text: #ffffff; --focus-ring: #3c4043;
   --success: #438f73; --success-text: #37745e; --running: #386687; --warning: #825b05; --danger: #a34346; --usage: #136e66;
+  --release-highlight-text: var(--text-1); --release-highlight-bg: #d5ff5c; --release-highlight-glow: none;
   /* Claude Code keeps its brand #d97757 (3.1:1 on white). Codex's green is darkened to 4.1:1 on white as an icon colour; --select-bar is the dark ink of a selected row's bar. */
   --agent-codex: #0d8f6a; --select-bar: #4a4f57; --brand-coral: #cc3f52;
   /* Claude's orange as text (a reading view's list numerals): #b04e2a is 5.3:1 on white and 5.0:1 on the canvas, where #d97757 is 3.1:1; dots and rings are marks and keep it. In dark, #d97757 is 4.8:1 or more. */

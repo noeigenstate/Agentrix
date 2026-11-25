@@ -12,10 +12,11 @@ const en = require('../electron/locales/en.json');
 test('each release note is a short title and a detail line, both translated, and the title is not repeated in the detail', () => {
   assert.ok(WHATS_NEW.length >= 1);
   assert.equal(new Set(WHATS_NEW.map(note => note.title)).size, WHATS_NEW.length, 'titles are distinct');
-  for (const { title, text } of WHATS_NEW) {
+  for (const { title, text, highlight } of WHATS_NEW) {
     assert.ok([...title].length >= 2 && [...title].length <= 12, `${title}: a short title`);
     assert.ok(text.length > 8 && !text.startsWith(title), `${title}: the detail does not lead with the title`);
     assert.ok(en[title], `${title}: translated`); assert.ok(en[text], `${text}: translated`);
+    assert.ok(highlight === undefined || highlight === true, `${title}: optional highlight flag`);
   }
 });
 
@@ -62,6 +63,40 @@ test('the guide card never outgrows the window: it clips, the buttons never shri
   assert.equal(guide.declarations.filter(({ property, value }) => property === 'overflow-y' && value === 'auto').length, 1, 'one scrolling region in the card');
   const settings = readCss('src/features/settings/settings.css');
   assert.match(settings.rule('.about-page .release-groups, .about-page .release-notes')['max-width'], /^\d+px$/, 'the About change log has a comfortable line length');
+});
+
+test('highlighted release notes lead their own list and have a translated screen reader prefix', () => {
+  const note = (title, flags) => ({ title, text: 'Detail', ...flags });
+  const earlier = note('Earlier'), update = note('Update', { highlight: true }), reminder = note('Reminder', { highlight: true });
+  const added = note('Added', { group: 'new' }), latest = note('Latest', { group: 'new', highlight: true });
+  const draw = notes => renderToStaticMarkup(React.createElement(releaseNotes(notes, text => en[text] ?? text)));
+  const plain = title => `<li><b>${title}</b>Detail</li>`;
+  const highlight = title => `<li class="release-note-highlight"><span class="release-note-sr-only">Important: </span><b>${title}</b>Detail</li>`;
+  const list = (...items) => `<ul class="release-notes">${items.join('')}</ul>`;
+  const earlierList = list(highlight('Update'), highlight('Reminder'), plain('Earlier'));
+  assert.equal(draw([earlier, update, reminder]), earlierList);
+  assert.equal(draw([added, earlier, update, latest, reminder]), '<div class="release-groups">'
+    + `<section><h4>New in this beta</h4>${list(highlight('Latest'), plain('Added'))}</section>`
+    + `<section><h4>Earlier betas of this version</h4>${earlierList}</section></div>`);
+});
+
+test('the release note highlight uses theme tokens for its text, marker background and glow', () => {
+  const css = readCss('src/features/guide/release-notes.css');
+  assertRule(css, '.release-notes .release-note-highlight', {
+    color: 'var(--release-highlight-text)', background: 'var(--release-highlight-bg)', 'text-shadow': 'var(--release-highlight-glow)',
+  });
+  assertRule(css, '.release-note-highlight b', { color: 'inherit' });
+  assertRule(css, '.release-notes .release-note-highlight::before', { background: 'currentColor' });
+  assertRule(css, '.release-note-sr-only', { position: 'absolute', 'clip-path': 'inset(50%)', overflow: 'hidden' });
+
+  const themes = readCss('src/shared/styles/themes.css');
+  assertRule(themes, ':root', {
+    '--release-highlight-text': '#baff45', '--release-highlight-bg': 'transparent',
+    '--release-highlight-glow': '0 0 6px rgb(from var(--release-highlight-text) r g b / .35)',
+  });
+  assertRule(themes, ':root[data-theme="light"]', {
+    '--release-highlight-text': 'var(--text-1)', '--release-highlight-bg': '#d5ff5c', '--release-highlight-glow': 'none',
+  });
 });
 
 test('a stable release lists every note ungrouped; a beta lists them ungrouped too, or splits new notes ahead of earlier ones under two headings', () => {
