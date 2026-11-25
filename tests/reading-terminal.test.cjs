@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const { registerReadingTerminal, mountReadingTerminal, pruneReadingCli } = require('../src/features/terminal/terminal-popup.ts');
 
 function terminalHarness(t) {
@@ -85,8 +86,8 @@ test('the popup sits in the conversation area, so it never covers the message bo
   const view = read('ReadingView.tsx');
   const area = view.indexOf('className="reading-scroll-area"'), popup = view.indexOf('<ReadingTerminalPopup'), areaEnd = view.indexOf('</div>\n    {attachedCount', area);
   assert.ok(area !== -1 && area < popup && popup < areaEnd, 'the popup is rendered inside .reading-scroll-area, above the composer in the layout');
-  const popupCss = read('reading-terminal-popup.css');
-  assert.doesNotMatch(popupCss, /padding:[^;]*\b7\d+px/, 'no guessed room for the composer');
-  assert.match(popupCss, /\.reading-terminal-popup \{[^}]*height: min\(760px, 100%\)/, 'as tall as the conversation area allows, so a tall dialog shows whole');
-  assert.match(read('reading.css'), /\.reading-composer textarea::placeholder \{[^}]*white-space: nowrap; overflow: hidden; \}/);
+  const popupCss = readCss(path.join(dir, 'reading-terminal-popup.css'));
+  assert.deepEqual(popupCss.declarations.filter(({ property, value }) => property === 'padding' && /\b7\d+px/.test(value)), [], 'no guessed room for the composer');
+  assertRule(popupCss, '.reading-terminal-popup', { height: 'min(760px, 100%)' }, 'as tall as the conversation area allows, so a tall dialog shows whole');
+  assertRule(readCss(path.join(dir, 'reading.css')), '.reading-composer textarea::placeholder', { 'white-space': 'nowrap', overflow: 'hidden' });
 });

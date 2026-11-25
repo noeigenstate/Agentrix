@@ -1,21 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const postcss = require('postcss');
+const { readCss } = require('./helpers/css-rules.cjs');
 const { THEMES } = require('../src/shared/themes.ts');
 
-const read = file => postcss.parse(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
-const themes = read('src/shared/styles/themes.css'), reading = read('src/features/reading/reading.css');
+const themes = readCss('src/shared/styles/themes.css'), reading = readCss('src/features/reading/reading.css');
 const workbench = '.workspace-layout:not(:has(> .home-layer))';
-
-function declarations(sheet, selector) {
-  const values = {};
-  sheet.walkRules(rule => {
-    if (rule.selector === selector) rule.walkDecls(declaration => { values[declaration.prop] = declaration.value; });
-  });
-  return values;
-}
 
 function color(value, tokens) {
   const variable = /^var\((--[\w-]+)\)$/.exec(value);
@@ -33,13 +22,12 @@ function contrast(foreground, background, opacity) {
 }
 
 test('disabled reading composer text remains legible in every theme', () => {
-  const composer = declarations(reading, '.reading-composer');
-  const input = { ...declarations(reading, '.reading-composer textarea'), ...declarations(reading, '.reading-composer textarea:disabled') };
-  const placeholder = { ...declarations(reading, '.reading-composer textarea::placeholder'), ...declarations(reading, '.reading-composer textarea:disabled::placeholder') };
+  const composer = reading.rule('.reading-composer');
+  const input = { ...reading.rule('.reading-composer textarea'), ...reading.rule('.reading-composer textarea:disabled') };
+  const placeholder = { ...reading.rule('.reading-composer textarea::placeholder'), ...reading.rule('.reading-composer textarea:disabled::placeholder') };
   for (const { id } of THEMES) {
     const theme = `:root[data-theme="${id}"]`;
-    const tokens = { ...declarations(themes, ':root'), ...declarations(themes, theme),
-      ...declarations(themes, workbench), ...declarations(themes, `${theme} ${workbench}`) };
+    const tokens = { ...themes.rule(':root'), ...themes.rule(theme), ...themes.rule(workbench), ...themes.rule(`${theme} ${workbench}`) };
     const background = color(composer.background, tokens);
     const opacity = Number(composer.opacity ?? 1) * Number(input.opacity ?? 1);
     for (const [label, value, alpha] of [
@@ -53,8 +41,9 @@ test('disabled reading composer text remains legible in every theme', () => {
 });
 
 test('the light theme fills the owner message on the feed itself, which sets its own card token', () => {
-  const flow = read('src/features/reading/reading-flow.css'), selectors = [];
-  themes.walkRules(rule => { if (rule.some(node => node.prop === '--flow-card')) selectors.push(rule.selector); });
-  assert.ok(selectors.some(selector => selector.includes('light') && selector.includes('.conversation-feed') && selector.includes('.reading-view')), 'the nearest element defining --flow-card wins, so the light override must name .conversation-feed too');
-  assert.equal(declarations(flow, ':is(.reading-view, .conversation-feed)')['--flow-card'], 'var(--bg-input)');
+  const flow = readCss('src/features/reading/reading-flow.css');
+  const override = themes.blocks.some(({ selector, properties }) => Object.hasOwn(properties, '--flow-card')
+    && selector.includes('light') && selector.includes('.conversation-feed') && selector.includes('.reading-view'));
+  assert.ok(override, 'the nearest element defining --flow-card wins, so the light override must name .conversation-feed too');
+  assert.equal(flow.rule(':is(.reading-view, .conversation-feed)')['--flow-card'], 'var(--bg-input)');
 });

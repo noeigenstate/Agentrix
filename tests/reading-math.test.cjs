@@ -2,6 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const postcss = require('postcss');
+const { parseCss } = require('./helpers/css-rules.cjs');
 const { githubActions } = require('../scripts/clipboard-policy.cjs');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 const { allowReadingMath } = require('../src/features/reading/markdown-math-sanitize.ts');
@@ -274,8 +276,9 @@ test('Vite keeps every KaTeX font as a local WOFF2 and leaves other assets on th
   const css = fs.readFileSync(cssFile, 'utf8');
   const plugin = plugins.find(plugin => plugin.name === 'katex-woff2-only');
   const transformed = plugin.transform(css, cssFile);
-  assert.match(transformed, /KaTeX_Size3-Regular\.woff2/);
-  assert.doesNotMatch(transformed, /\.(?:woff|ttf)\)/);
+  const sources = parseCss(transformed, cssFile).declarations.filter(({ selector, property }) => selector === '@font-face' && property === 'src');
+  assert.ok(sources.some(({ value }) => /KaTeX_Size3-Regular\.woff2\)/.test(value)));
+  assert.deepEqual(sources.filter(({ value }) => /\.(?:woff|ttf)\)/.test(value)), []);
   assert.equal(build.assetsInlineLimit(path.join(path.dirname(cssFile), 'fonts/KaTeX_Size3-Regular.woff2')), false);
   assert.equal(build.assetsInlineLimit('/src/icons/small.svg'), undefined);
 });
@@ -318,11 +321,15 @@ test('Chromium keeps XML-like formula source through DOMPurify and clips reply p
   ].map(parse);
   await page.addScriptTag({ path: path.join(root, 'node_modules/dompurify/dist/purify.js') });
   const katexCss = require.resolve('katex/dist/katex.min.css');
-  const fontCss = fs.readFileSync(katexCss, 'utf8').replace(/url\((fonts\/[^)]+\.woff2)\)[^}]+(?=})/g, (_, font) => {
+  const fontCss = postcss.parse(fs.readFileSync(katexCss, 'utf8'), { from: katexCss });
+  fontCss.walkDecls('src', declaration => {
+    if (declaration.parent.name !== 'font-face') return;
+    const font = /^url\((fonts\/[^)]+\.woff2)\)/.exec(declaration.value)?.[1];
+    if (!font) return;
     const bytes = fs.readFileSync(path.join(path.dirname(katexCss), font));
-    return 'url(data:font/woff2;base64,' + bytes.toString('base64') + ') format("woff2")';
+    declaration.value = 'url(data:font/woff2;base64,' + bytes.toString('base64') + ') format("woff2")';
   });
-  await page.addStyleTag({ content: fontCss });
+  await page.addStyleTag({ content: fontCss.toString() });
   await page.addStyleTag({ path: path.join(root, 'src/shared/styles/themes.css') });
   await page.addStyleTag({ path: path.join(root, 'src/features/reading/reading.css') });
   const paths = parse('$\\unknown{src/main.ts}$ and ' + '\x60src/main.ts\x60');

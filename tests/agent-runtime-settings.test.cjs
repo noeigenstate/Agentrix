@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const React = require('react');
@@ -54,8 +55,8 @@ test('the page shows the saved settings, whether a key is saved, and the three C
     assert.match(view.select('Claude 的运行方式').props.options[0].label, /默认/, 'API, then the terminal when the quota is used up, is the default');
     assert.doesNotMatch(view.html(), /Codex 的界面/, 'Codex has only app-server, so there is nothing to choose');
     assert.equal(view.select('Claude 的运行方式').props.className, 'runtime-select', 'its trigger is wide enough for “（默认）”');
-    const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/agent-runtime-settings.css'), 'utf8');
-    assert.match(css, /\.setting-row \.select-trigger\.runtime-select \{ width: 300px; max-width: 48%; \}/);
+    const css = readCss('src/features/settings/agent-runtime-settings.css');
+    assertRule(css, '.setting-row .select-trigger.runtime-select', { width: '300px', 'max-width': '48%' });
     assert.equal(view.secret().props.value, '', 'the saved key is never shown, only that it is saved');
   } finally { view.done(); }
 });
@@ -254,10 +255,12 @@ test('Codex’s automatic reset is a switch that is off by default, saves alone 
 });
 
 test('the page’s spacing values are on the scale and its buttons keep a 32px hit area', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/settings/agent-runtime-settings.css'), 'utf8'), scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
-  for (const [, property, value] of css.matchAll(/\b((?:padding|margin|gap|column-gap|row-gap)(?:-\w+)?): ([^;}]+)[;}]/g))
+  const css = readCss('src/features/settings/agent-runtime-settings.css'), scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
+  for (const { property, value } of css.declarations) {
+    if (!/^(?:padding|margin|gap|column-gap|row-gap)(?:-\w+)?$/.test(property)) continue;
     for (const size of value.match(/-?\d+(?:\.\d+)?px/g) ?? []) assert.ok(scale.has(Math.abs(parseFloat(size))), `${property}: ${size}`);
-  assert.match(css, /\.runtime-key \.text-button \{ min-height: 32px;/);
+  }
+  assertRule(css, '.runtime-key .text-button', { 'min-height': '32px' });
 });
 
 test('every accepted change (key saved, key cleared, a setting) makes the usage card read again; a refused one does not', async () => {
@@ -383,14 +386,12 @@ test('the agents page says how Codex was found and which file it runs, why its c
 // the stylesheet is checked for the rules that hold the row in: the text column shrinks (min-width: 0) and breaks inside a
 // segment (overflow-wrap: anywhere), the button never shrinks, and the row aligns to the top. The acceptance shots measure the real layout.
 test('the Codex row keeps its button inside the row however long a path is', () => {
-  const root = path.join(__dirname, '..'), css = fs.readFileSync(path.join(root, 'src/features/settings/settings.css'), 'utf8');
-  const rule = selector => css.split('\n').find(line => line.startsWith(`${selector} {`)) ?? '';
-  assert.match(rule('.agent-setting .agent-info'), /min-width: 0/);
-  assert.match(rule('.agent-setting .agent-info'), /flex: 1/);
-  assert.match(rule('.agent-setting .agent-info small'), /overflow-wrap: anywhere/);
-  assert.match(rule('.agent-setting .setting-row > .button'), /flex: none/);
-  assert.match(rule('.agent-setting .setting-row'), /align-items: flex-start/);
-  assert.match(rule('.agent-setting .agent-status'), /color: var\(--text-1\)/);
+  const root = path.join(__dirname, '..'), css = readCss('src/features/settings/settings.css');
+  assertRule(css, '.agent-setting .agent-info', { 'min-width': '0', flex: '1' });
+  assertRule(css, '.agent-setting .agent-info small', { 'overflow-wrap': 'anywhere' });
+  assertRule(css, '.agent-setting .setting-row > .button', { flex: 'none' });
+  assertRule(css, '.agent-setting .setting-row', { 'align-items': 'flex-start' });
+  assertRule(css, '.agent-setting .agent-status', { color: 'var(--text-1)' });
   assert.match(fs.readFileSync(path.join(root, 'src/features/agents/AgentsSettings.tsx'), 'utf8'), /<span className="agent-info">/, 'the text column is the element those rules name');
 });
 

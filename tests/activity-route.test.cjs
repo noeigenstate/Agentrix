@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -397,18 +398,18 @@ test('main and called heads share inline recorded effort and speed, including ex
 });
 
 test('340px heads reserve the rate column and truncate secondary settings before they can overflow', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-rows li\.activity-call-head \{ grid-template-columns: 16px minmax\(0, 1fr\) 80px; \}/);
-  assert.match(css, /\.activity-call-rows li\.activity-call-head p \{[^}]*display: flex;[^}]*min-width: 0;/);
-  assert.match(css, /\.activity-call-head p > \* \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
-  assert.match(css, /\.activity-call-head p > b \{ flex: 0 1 auto; \}/);
-  assert.match(css, /\.activity-call-head p > \.activity-call-settings \{ flex: 0 2 auto; \}/);
-  assert.match(css, /\.activity-call-settings \{ font-size: 12px; font-weight: 400; color: var\(--flow-muted\); \}/);
-  assert.match(css, /\.activity-call-head p b \{ font-weight: 600; \}/);
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-call-rows li.activity-call-head', { 'grid-template-columns': '16px minmax(0, 1fr) 80px' });
+  assertRule(css, '.activity-call-rows li.activity-call-head p', { display: 'flex', 'min-width': '0' });
+  assertRule(css, '.activity-call-head p > *', { 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' });
+  assertRule(css, '.activity-call-head p > b', { flex: '0 1 auto' });
+  assertRule(css, '.activity-call-head p > .activity-call-settings', { flex: '0 2 auto' });
+  assertRule(css, '.activity-call-settings', { 'font-size': '12px', 'font-weight': '400', color: 'var(--flow-muted)' });
+  assertRule(css, '.activity-call-head p b', { 'font-weight': '600' });
   // The called models' list sits in a narrower bar: the rate shrinks to its figure and the settings give way first.
-  assert.match(css, /\.activity-main \.activity-call-rows li\.activity-call-head \{ grid-template-columns: 16px minmax\(0, 1fr\) auto; \}/);
-  assert.match(css, /\.activity-calls \.activity-call-rows li \.activity-rate,\s*\.activity-main \.activity-call-rows li \.activity-rate \{ min-width: 0; \}/);
-  assert.match(css, /\.activity-calls \.activity-call-head p > \.activity-call-settings,\s*\.activity-main \.activity-call-head p > \.activity-call-settings \{ flex: 0 8 auto; \}/);
+  assertRule(css, '.activity-main .activity-call-rows li.activity-call-head', { 'grid-template-columns': '16px minmax(0, 1fr) auto' });
+  assertRule(css, '.activity-calls .activity-call-rows li .activity-rate, .activity-main .activity-call-rows li .activity-rate', { 'min-width': '0' });
+  assertRule(css, '.activity-calls .activity-call-head p > .activity-call-settings, .activity-main .activity-call-head p > .activity-call-settings', { flex: '0 8 auto' });
 });
 
 test('a single preparing or reviewing call shows its own state and reviewed routes disappear', () => {
@@ -640,27 +641,35 @@ test('the lead shows the current prompt while Codex usage lists context, limit b
   assert.ok(positions.every((position, i) => position >= 0 && (!i || position > positions[i - 1])), 'context, then the limit bars, then the reset controls');
   assert.match(codex, /剩余 2 次/); assert.match(codex, /aria-valuenow="25"/); assert.match(codex, /aria-valuenow="60"/);
   assert.match(html, /class="loading-spinner"/);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.doesNotMatch(css, /activity-progress|activity-tasks|activity-prompts|activity-prompt-state|activity-task-quiet|activity-gauges|activity-count/);
+  const css = readCss('src/features/agents/activity-pane.css');
+  const removed = /activity-progress|activity-tasks|activity-prompts|activity-prompt-state|activity-task-quiet|activity-gauges|activity-count/;
+  assert.deepEqual(css.blocks.filter(({ selector }) => removed.test(selector)), []);
 });
 
 test('the inactive pane shows its usage and routing hint; only the sidebar lists can scroll', () => {
   const html = rightMarkup({ cliActive: false }, 'en');
   assert.ok(html.includes('class="activity-empty"') && html.includes('model route, context length and usage'));
   assert.doesNotMatch(html, /activity-main|activity-calls|activity-tasks|No task yet/);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
+  const css = readCss('src/features/agents/activity-pane.css');
   // Expanded tasks and called model groups can scroll in the sidebar.
-  const pane = /\.activity-pane \{[^}]*\}/.exec(css)[0];
-  assert.match(pane, /overflow: hidden/); assert.doesNotMatch(pane, /overflow-y: auto|scrollbar-width/);
-  assert.match(css, /\.activity-main:has\(\[data-expanded\]\) \{ flex: 0 1 auto; min-height: 0; \}/);
-  assert.doesNotMatch(/\.api-agents \{[^}]+\}/.exec(css)[0], /overflow|max-height/);
-  assert.doesNotMatch(/\.activity-routing-rows \{[^}]+\}/.exec(css)[0], /overflow|max-height/);
-  assert.match(css, /\.activity-calls \{ flex: 0 1 auto; min-height: 0; \}/, 'the called models take what the left bar gives and their list scrolls');
-  assert.doesNotMatch(css.replace(/@container activity \(max-height:/g, ''), /max-height:/);
-  const list = /\.activity-main-tasks\[data-expanded\], \.activity-call-groups \{([^}]+)\}/.exec(css)[1];
-  for (const part of ['flex: 0 1 auto', 'min-height: 0', 'overflow-y: auto', 'scrollbar-gutter: stable', 'mask-image', 'animation-timeline: scroll(self)']) assert.ok(list.includes(part), part);
-  assert.match(css, /@keyframes activity-fade/);
-  assert.match(css, /\.activity-call-rows li p \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap/);
+  const pane = css.rule('.activity-pane');
+  assert.equal(pane.overflow, 'hidden');
+  assert.notEqual(pane['overflow-y'], 'auto');
+  assert.equal(pane['scrollbar-width'], undefined);
+  assertRule(css, '.activity-main:has([data-expanded])', { flex: '0 1 auto', 'min-height': '0' });
+  for (const selector of ['.api-agents', '.activity-routing-rows']) {
+    const properties = Object.keys(css.rule(selector));
+    assert.deepEqual(properties.filter(property => property.startsWith('overflow') || property === 'max-height'), [], selector);
+  }
+  assertRule(css, '.activity-calls', { flex: '0 1 auto', 'min-height': '0' }, 'the called models take what the left bar gives and their list scrolls');
+  assert.deepEqual(css.declarations.filter(({ property }) => property === 'max-height'), []);
+  const selector = '.activity-main-tasks[data-expanded], .activity-call-groups';
+  assertRule(css, selector, {
+    flex: '0 1 auto', 'min-height': '0', 'overflow-y': 'auto', 'scrollbar-gutter': 'stable', 'animation-timeline': 'scroll(self)',
+  });
+  assert.ok(Object.hasOwn(css.rule(selector), 'mask-image'));
+  assert.ok(css.atRules.includes('@keyframes activity-fade'));
+  assertRule(css, '.activity-call-rows li p', { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' });
 });
 
 test('the main card lists the prompts: the working one with its spinner and clock, the step under it, those waiting after, each row the summary with the whole text in its hover', () => {
@@ -711,15 +720,16 @@ test('with no prompt the main card says the agent state in words and invents no 
 });
 
 test('each task row is on the 32px grid: its state icon, the role word and the task on one line, a clock at the right', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  const row = css.split(/\r?\n/).find(line => line.startsWith('.activity-call-rows li {'));
-  for (const part of ['grid-template-columns: 16px minmax(0, 1fr) auto', 'column-gap: 8px', 'height: 32px']) assert.ok(row.includes(part), part);
-  assert.ok(css.includes('.activity-call-rows li::before { content: \'\'; position: absolute; inset: 0 -8px; border-radius: 8px; }'), 'the hover reaches 8px past the text');
-  assert.match(css, /\.activity-call-rows li p \{[^}]*text-overflow: ellipsis; white-space: nowrap/);
-  assert.match(css, /li :is\(time, \.activity-row-end\) \{[^}]*font-size: 12px[^}]*var\(--flow-faint\)[^}]*tabular-nums/);
-  assert.match(css, /\.activity-call-rows li:is\(\.is-running, \.is-working\) \.activity-row-icon \{ color: var\(--running\); \}/, 'the spinner is the one colour');
-  assert.match(css, /\.activity-call-rows li\.is-done \.activity-row-icon \{ color: var\(--success\); \}/);
-  assert.match(css, /\.activity-call-rows li\.is-step p \{ color: var\(--flow-faint\); \}/, 'the step is quieter');
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-call-rows li', { 'grid-template-columns': '16px minmax(0, 1fr) auto', 'column-gap': '8px', height: '32px' });
+  assertRule(css, '.activity-call-rows li::before', { content: "''", position: 'absolute', inset: '0 -8px', 'border-radius': '8px' }, 'the hover reaches 8px past the text');
+  assertRule(css, '.activity-call-rows li p', { 'text-overflow': 'ellipsis', 'white-space': 'nowrap' });
+  assertRule(css, '.activity-call-rows li :is(time, .activity-row-end)', {
+    'font-size': '12px', color: 'var(--flow-faint)', 'font-variant-numeric': 'tabular-nums',
+  });
+  assertRule(css, '.activity-call-rows li:is(.is-running, .is-working) .activity-row-icon', { color: 'var(--running)' }, 'the spinner is the one colour');
+  assertRule(css, '.activity-call-rows li.is-done .activity-row-icon', { color: 'var(--success)' });
+  assertRule(css, '.activity-call-rows li.is-step p', { color: 'var(--flow-faint)' }, 'the step is quieter');
 });
 
 test('the main card shows the parent review source, clock and step before queued prompts, and ends with the parent', () => {
@@ -781,13 +791,14 @@ test('metrics are label | meter | figure blocks: one number format, a warning co
   const unknown = usageMarkup('zh', { agentUsage: { limits: [], context: { used: 4200, window: 0 }, round: null, total: null } });
   assert.ok(unknown.includes('>—</b>') && unknown.includes('已用 4.2k tokens，窗口大小未知'));
   assert.doesNotMatch(unknown, /0%|还可容纳 0|role="meter"/);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-metric \{[^}]*grid-template-columns: 88px minmax\(0, 1fr\) 48px; grid-template-rows: 32px/);
-  assert.ok(css.includes('.activity-metric.activity-tokens > small { grid-area: 1 / 2 / auto / -1;'), 'the breakdown starts in the meters column, on the label line');
-  assert.match(css, /\.activity-metric\.is-warn > b \{ color: var\(--warning\); \}/);
-  assert.match(css, /\.activity-metric\.is-warn \.activity-meter i \{ background: var\(--warning\); \}/);
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-metric', { 'grid-template-columns': '88px minmax(0, 1fr) 48px', 'grid-template-rows': '32px' });
+  assertRule(css, '.activity-metric.activity-tokens > small', { 'grid-area': '1 / 2 / auto / -1' }, 'the breakdown starts in the meters column, on the label line');
+  assertRule(css, '.activity-metric.is-warn > b', { color: 'var(--warning)' });
+  assertRule(css, '.activity-metric.is-warn .activity-meter i', { background: 'var(--warning)' });
   // Compact bar rows leave room for the routing key below both accounts.
-  assert.match(css, /\.api-agent \.activity-metrics \{ gap: 2px; \}/); assert.match(css, /\.api-agent \.activity-metric \{ grid-template-rows: 20px; \}/);
+  assertRule(css, '.api-agent .activity-metrics', { gap: '2px' });
+  assertRule(css, '.api-agent .activity-metric', { 'grid-template-rows': '20px' });
   assert.doesNotMatch(full, /<h4[^>]*>用量<\/h4>/);
   assert.ok(full.indexOf('上下文长度') < full.indexOf('>本轮<') && full.indexOf('>本轮<') < full.indexOf('>本次对话<'), 'context first, then this round, then this conversation');
 });
@@ -799,12 +810,15 @@ test('the reset action is a 32px row on the task grid and keeps unknown, failed 
   assert.match(render({ left: 0, total: null }, { state: 'ready' }), /<small>已用完<\/small>/);
   assert.doesNotMatch(/<button[^>]*activity-estop[\s\S]*?<\/button>/.exec(render(null, { state: 'error', reason: 'timeout' }))[0], /剩余/, 'an unknown count is not shown as a number');
   assert.match(/<button[^>]*activity-estop[\s\S]*?<\/button>/.exec(render(null, { state: 'error', reason: 'timeout' }))[0], /<span class="activity-reset-label">重置额度<\/span><small>查询失败<\/small>/, 'the status is on the row itself');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-reset-row \{[^}]*grid-template-columns: 16px max-content minmax\(0, 1fr\); column-gap: 8px;[^}]*height: 32px/);
-  assert.match(css, /\.activity-reset-label \{[^}]*white-space: nowrap; \}/, 'the label is never cut');
-  assert.doesNotMatch(/\.activity-reset-label \{[^}]*\}/.exec(css)[0], /text-overflow/);
-  assert.match(css, /\.activity-reset-row small \{[^}]*text-align: right; text-overflow: ellipsis;[^}]*font-size: 12px;[^}]*white-space: nowrap/, 'the slot is right-aligned like the other figures and gives way first');
-  assert.match(css, /\.activity-reset > \.activity-note \{ padding-left: 24px; \}/, 'a note after a run starts under the label');
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-reset-row', { 'grid-template-columns': '16px max-content minmax(0, 1fr)', 'column-gap': '8px', height: '32px' });
+  const label = css.rule('.activity-reset-label');
+  assert.equal(label['white-space'], 'nowrap', 'the label is never cut');
+  assert.equal(label['text-overflow'], undefined);
+  assertRule(css, '.activity-reset-row small', {
+    'text-align': 'right', 'text-overflow': 'ellipsis', 'font-size': '12px', 'white-space': 'nowrap',
+  }, 'the slot is right-aligned like the other figures and gives way first');
+  assertRule(css, '.activity-reset > .activity-note', { 'padding-left': '24px' }, 'a note after a run starts under the label');
 });
 
 test('the reset countdown is one large overlay: a draining ring with the seconds, its text, cancel and the hint, warning only in the last seconds, with no per-second announcement', t => {
@@ -827,16 +841,21 @@ test('the reset countdown is one large overlay: a draining ring with the seconds
   assert.deepEqual([10, 5, 4].map(count => announced(count, 'en')), ['Resetting the limit in 10 s', '5 seconds left', '']);
   assert.ok(typeof ResetCountdown === 'function');
   for (const key of ['秒', '秒后重置 Codex 额度', '或点击空白处取消', '还剩 {seconds} 秒', '倒计时中…']) assert.ok(en[key], key);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/reset-countdown.css'), 'utf8');
-  assert.match(css, /\.reset-countdown \{ position: fixed; inset: 0; z-index: 400;[^}]*72%[^}]*-webkit-app-region: no-drag/, 'over the whole window, title bar included, at 72% of the canvas colour');
-  assert.match(css, /\.reset-countdown-ring \{[^}]*width: 240px; height: 240px/);
-  assert.match(css, /\.reset-countdown-number \{ font: 600 104px/);
-  assert.match(css, /\.reset-countdown-cancel \{[^}]*height: 32px/);
-  assert.match(css, /\.reset-countdown\.is-warning \.reset-countdown-ring \{ --ring-ink: var\(--warning\); \}/);
-  assert.match(css, /transition: stroke-dashoffset 1s linear/);
-  assert.match(css, /:root\[data-motion="off"\] \.reset-countdown\.is-draining[^}]*var\(--ring-now\)/, 'without motion the ring steps with the number');
-  assert.match(css, /prefers-reduced-motion: reduce\)[^]*data-motion="system"[^]*var\(--ring-now\)/);
-  assert.doesNotMatch(css, /animation|bounce|scale\(/);
+  const css = readCss('src/features/agents/reset-countdown.css');
+  assertRule(css, '.reset-countdown', {
+    position: 'fixed', inset: '0', 'z-index': '400', background: 'color-mix(in srgb, var(--bg-app) 72%, transparent)', '-webkit-app-region': 'no-drag',
+  }, 'over the whole window, title bar included, at 72% of the canvas colour');
+  assertRule(css, '.reset-countdown-ring', { width: '240px', height: '240px' });
+  assert.match(css.rule('.reset-countdown-number').font, /^600 104px\b/);
+  assertRule(css, '.reset-countdown-cancel', { height: '32px' });
+  assertRule(css, '.reset-countdown.is-warning .reset-countdown-ring', { '--ring-ink': 'var(--warning)' });
+  assertRule(css, '.reset-countdown-arc', { transition: 'stroke-dashoffset 1s linear' });
+  const draining = '.reset-countdown.is-draining .reset-countdown-arc';
+  assertRule(css, `:root[data-motion="off"] ${draining}`, { 'stroke-dashoffset': 'var(--ring-now)' }, 'without motion the ring steps with the number');
+  const reduced = css.rule(`:root[data-motion="system"] ${draining}`, '@media (prefers-reduced-motion: reduce)');
+  assert.equal(reduced['stroke-dashoffset'], 'var(--ring-now)');
+  assert.deepEqual(css.atRules.filter(rule => /keyframes|bounce/.test(rule)), []);
+  assert.deepEqual(css.declarations.filter(({ property, value }) => property.includes('animation') || /bounce|scale\(/.test(value)), []);
 });
 
 test('the reset row stays the trigger: it never turns into a countdown row, and the old row countdown is gone', () => {
@@ -851,8 +870,8 @@ test('the reset row stays the trigger: it never turns into a countdown row, and 
   assert.equal(en['倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消'], 'The countdown is in progress. Cancel it with the button, Esc, or a click outside.');
   assert.ok(source.includes('{!!count && <ResetCountdown count={count} total={COUNTDOWN} onCancel={() => setCount(null)} />}'));
   assert.doesNotMatch(source, /activity-reset-cancel|is-counting|'\{seconds\} 秒后重置'/);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.doesNotMatch(css, /activity-reset-cancel|is-counting/);
+  const css = readCss('src/features/agents/activity-pane.css');
+  assert.deepEqual(css.blocks.filter(({ selector }) => /activity-reset-cancel|is-counting/.test(selector)), []);
   assert.ok(!('{seconds} 秒后重置' in en), 'the old row label is gone from the translations');
 });
 
@@ -903,9 +922,9 @@ test('the main row shows the step under way and spins only while the agent works
   assert.doesNotMatch(step(edit, 'complete'), /is-step|ActivityPane/, 'a running step of an agent that is not working is stale');
   assert.match(step(edit, 'complete'), /<li class="is-queued"|<li class="is-working"/);
   assert.equal((step(edit, 'working').match(/<li class="is-step"/g) || []).length, 1); assert.equal((finished.match(/<li class="is-step"/g) || []).length, 0);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-rows li \.activity-rate \{ min-width: 80px; text-align: right; \}/, 'a fixed column for the rate');
-  assert.doesNotMatch(css, /activity-route/, 'the route chips are gone');
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-call-rows li .activity-rate', { 'min-width': '80px', 'text-align': 'right' }, 'a fixed column for the rate');
+  assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('activity-route')), [], 'the route chips are gone');
 });
 
 test('every group of called models has its own rate and inline effort, its calls exactly as given and is never merged', () => {
@@ -921,9 +940,9 @@ test('every group of called models has its own rate and inline effort, its calls
   assert.ok(calls.includes('<span class="activity-call-settings">high</span>') && calls.includes('<span class="activity-call-settings">max · 快速</span>'), 'effort and speed follow the bold model name');
   assert.doesNotMatch(calls, /activity-call-note/, 'settings are never repeated on a separate row');
   assert.deepEqual([...calls.matchAll(/<p>(claude-[a-z0-9-]+ work)<\/p>/g)].map(match => match[1]), ['claude-opus-5-5 work', 'claude-sonnet-5-5 work', 'claude-sonnet-5-5 work'], 'calls as given');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-head p > \.activity-call-provider \{ flex: 0 100 auto; \}/, 'the service gives way first');
-  assert.doesNotMatch(css, /activity-call-tag/);
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-call-head p > .activity-call-provider', { flex: '0 100 auto' }, 'the service gives way first');
+  assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('activity-call-tag')), []);
 });
 
 test('a dispatched worker that has not reported its model shows the requested one as unconfirmed, or 模型未确认, never the placeholder, until it reports', t => {

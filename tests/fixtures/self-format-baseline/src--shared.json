@@ -1,6 +1,4 @@
 {
-  "src/shared/Select.css :: tests/select.test.cjs :: source-regex": 2,
-  "src/shared/Select.css :: tests/u1-polish.test.cjs :: source-regex": 6,
   "src/shared/Select.tsx :: tests/select.test.cjs :: source-regex": 1,
   "src/shared/Select.tsx :: tests/u1-polish.test.cjs :: source-regex": 6,
   "src/shared/i18n.ts :: tests/language-defaults.test.cjs :: source-execution": 1,

@@ -1,6 +1,0 @@
-{
-  "src/shared/styles/styles.css :: tests/u1-polish.test.cjs :: source-regex": 5,
-  "src/shared/styles/themes.css :: tests/decision-stage.test.cjs :: source-regex": 2,
-  "src/shared/styles/themes.css :: tests/reading-ui.test.cjs :: source-regex": 1,
-  "src/shared/styles/themes.css :: tests/u1-polish.test.cjs :: source-regex": 1
-}

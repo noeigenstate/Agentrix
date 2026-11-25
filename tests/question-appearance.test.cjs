@@ -1,34 +1,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// The choice, question, review and waiting cards, the reading composer and the file cards, read as CSS text: the type
-// levels sit on the product scale (14/13/12, weights 400/600) and the spacing on the 2/4/8/12/16/24/32 steps.
-// themes.css overrides no size or weight of these classes, so one reading covers the mono and light themes.
-const reading = path.join(__dirname, '..', 'src', 'features', 'reading');
-const strip = css => css.replace(/\/\*[\s\S]*?\*\//g, '');
-const rules = file => [...strip(fs.readFileSync(path.join(reading, file), 'utf8')).matchAll(/([^{}]+)\{([^}]*)\}/g)].map(match => ({ selector: match[1].trim(), body: match[2] }));
-const declarations = body => body.split(';').map(item => [item.slice(0, item.indexOf(':')).trim(), item.slice(item.indexOf(':') + 1).trim()]).filter(([name]) => name);
-const rule = (list, selector) => list.filter(item => item.selector === selector).flatMap(item => declarations(item.body));
-const last = (list, selector, property) => rule(list, selector).filter(([name]) => name === property).at(-1)?.[1];
-const card = rules('reading.css').filter(item => /\.reading-(choice|question|waiting)/.test(item.selector));
+// The choice and question cards use the product scale for type and spacing in both themes.
+const reading = readCss('src/features/reading/reading.css');
+const card = reading.declarations.filter(({ selector }) => /\.reading-(choice|question|waiting)/.test(selector));
+const last = (list, selector, property) => list.findLast(item => item.selector === selector && item.property === property)?.value;
 const SPACING = new Set([0, 2, 4, 8, 12, 16, 24, 32]);
 const spaced = (list, label) => {
   const off = [];
-  for (const item of list) for (const [name, value] of declarations(item.body)) {
+  for (const { selector, property: name, value } of list) {
     if (!/^(gap|row-gap|column-gap|margin(-[a-z]+)?|padding(-[a-z]+)?)$/.test(name)) continue;
-    for (const [, size] of value.replace(/calc\(100% \+ (\d+)px\)/g, '$1px').matchAll(/(\d+(?:\.\d+)?)px/g)) if (!SPACING.has(Number(size))) off.push(`${label} ${item.selector} { ${name}: ${value} }`);
+    for (const [, size] of value.replace(/calc\(100% \+ (\d+)px\)/g, '$1px').matchAll(/(\d+(?:\.\d+)?)px/g)) if (!SPACING.has(Number(size))) off.push(`${label} ${selector} { ${name}: ${value} }`);
   }
   return off;
 };
 
 test('every text size of the cards is 14, 13 or 12 and every weight 400 or 600', () => {
   const sizes = [], weights = [];
-  for (const item of card) for (const [name, value] of declarations(item.body)) {
-    if (name === 'font-size') sizes.push([item.selector, value]);
-    if (name === 'font' && value !== 'inherit') { const [, weight, size] = /^(\d+) calc\((\d+(?:\.\d+)?)px/.exec(value) ?? []; sizes.push([item.selector, `calc(${size}px`]); weights.push([item.selector, weight]); }
-    if (name === 'font-weight') weights.push([item.selector, value]);
+  for (const { selector, property: name, value } of card) {
+    if (name === 'font-size') sizes.push([selector, value]);
+    if (name === 'font' && value !== 'inherit') {
+      const [, weight, size] = /^(\d+) calc\((\d+(?:\.\d+)?)px/.exec(value) ?? [];
+      sizes.push([selector, `calc(${size}px`]);
+      weights.push([selector, weight]);
+    }
+    if (name === 'font-weight') weights.push([selector, value]);
   }
   for (const [selector, value] of sizes) {
     if (value === 'inherit') continue;
@@ -53,14 +52,15 @@ test('one title level per card: 14px at 600; the body is 13px; details, hints an
 });
 
 test('the reading composer textarea is one 32px line: 4px padding around a 24px line, never shorter', () => {
-  const css = rules('reading.css'), selector = '.reading-composer textarea';
-  assert.equal(last(css, selector, 'padding'), '4px 0');
-  assert.equal(last(css, selector, 'min-height'), '32px');
-  assert.match(last(css, selector, 'font'), /\/calc\(24px \* var\(--reading-text\)\) /);
+  const input = reading.rule('.reading-composer textarea');
+  assert.equal(input.padding, '4px 0');
+  assert.equal(input['min-height'], '32px');
+  assert.match(input.font, /\/calc\(24px \* var\(--reading-text\)\) /);
 });
 
 test('the file cards and the pictures beside them keep their spacing on the scale, their text at 12px and 600', () => {
-  const css = rules('reading.css'), flow = rules('reading-flow.css'), files = rules('file-cards.css');
+  const css = reading.declarations, flow = readCss('src/features/reading/reading-flow.css').declarations;
+  const files = readCss('src/features/reading/file-cards.css').declarations;
   assert.deepEqual([
     ...spaced(files, 'file-cards.css'),
     ...spaced(flow.filter(item => /file-cards/.test(item.selector)), 'reading-flow.css'),
@@ -71,19 +71,17 @@ test('the file cards and the pictures beside them keep their spacing on the scal
 });
 
 // The tokens of a theme, by block: the dark base on :root, the light overrides under :root[data-theme="light"]; a var() resolves through the same set.
-const themes = strip(fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'styles', 'themes.css'), 'utf8'));
-const tokens = block => Object.fromEntries([...themes.split(block)[1].split('\n}')[0].matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6}|var\(--[\w-]+\))/g)].map(match => [match[1], match[2]]));
+const themes = readCss('src/shared/styles/themes.css');
 const resolve = (set, name) => { const value = set[name]; return value.startsWith('var(') ? resolve(set, value.slice(4, -1)) : value; };
 const luminance = hex => { const [r, g, b] = [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16) / 255).map(v => v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4); return .2126 * r + .7152 * g + .0722 * b; };
 const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + .05) / (lo + .05); };
 
 test('a disabled .button is muted, not faded: its text stays 4.5:1 on its own fill in both themes, and a checked box is neutral', () => {
-  const css = strip(fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'styles', 'styles.css'), 'utf8')), disabled = css.match(/button\.button:disabled \{([^}]*)\}/);
-  assert.ok(disabled, 'one rule outranks every variant colour, the primary button included');
-  const style = Object.fromEntries(declarations(disabled[1]));
+  const css = readCss('src/shared/styles/styles.css'), style = css.rule('button.button:disabled');
+  assert.ok(style, 'one rule outranks every variant colour, the primary button included');
   assert.equal(style.opacity, '1', 'opacity would fade text and fill together');
   assert.equal(style.color, 'var(--text-3)'); assert.equal(style.background, 'var(--bg-control)');
-  const dark = tokens(':root {'), light = { ...dark, ...tokens(':root[data-theme="light"] {') };
+  const dark = themes.rule(':root'), light = { ...dark, ...themes.rule(':root[data-theme="light"]') };
   for (const [theme, set] of [['mono', dark], ['light', light]]) assert.ok(contrast(resolve(set, '--text-3'), resolve(set, '--bg-control')) >= 4.5, `${theme}: disabled text on the control fill`);
   const mark = last(card, ':is(.reading-question-option, .reading-question-input).is-checked .reading-question-mark', 'background');
   assert.equal(mark, 'var(--text-1)', 'a checked box is filled with the text colour; the warning accent stays on the card edge');

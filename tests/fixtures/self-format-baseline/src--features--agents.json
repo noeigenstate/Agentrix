@@ -1,7 +1,4 @@
 {
   "src/features/agents/AgentsSettings.tsx :: tests/agent-runtime-settings.test.cjs :: source-regex": 1,
-  "src/features/agents/SubagentChip.tsx :: tests/agent-tab.test.cjs :: source-regex": 2,
-  "src/features/agents/activity-pane.css :: tests/activity-route.test.cjs :: source-regex": 40,
-  "src/features/agents/reset-countdown.css :: tests/activity-route.test.cjs :: source-regex": 9,
-  "src/features/agents/seats-dialog.css :: tests/seats-ui.test.cjs :: source-regex": 14
+  "src/features/agents/SubagentChip.tsx :: tests/agent-tab.test.cjs :: source-regex": 2
 }

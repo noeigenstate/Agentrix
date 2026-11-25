@@ -1,6 +1,7 @@
 require('./fixtures/lab-isolation.cjs');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -46,7 +47,7 @@ const zh = run => { applyLanguage('zh'); return run(); };
 const html = element => renderToStaticMarkup(element);
 const count = (text, pattern) => (text.match(pattern) ?? []).length;
 const read = file => fs.readFileSync(file, 'utf8');
-const css = () => read(path.join(labDir, 'lab.css')).replace(/\/\*[\s\S]*?\*\//g, '');
+const css = () => readCss('src/features/lab/lab.css');
 
 // ---- fixtures ------------------------------------------------------------------------------------------------------------
 const task = (id, kind) => ({ id, source: 'history', title: `任务 ${id}`, text: 'text', commit: `c${id}`, base: `b${id}`, modules: ['a', 'b'], linesChanged: 40, hiddenTests: ['tests/x.test.cjs'], kind, why: '跨 2 个模块 · 改动 40 行' });
@@ -391,7 +392,7 @@ test('the running screen: a finished approach says 已完成, a live one without
   const out = view({ experiments: [experiment({ arms: ['opus', 'sol'], repeats: 1, state: 'running', runs })] }, { kind: 'experiment', id: 'e1' });
   assert.match(out, /data-active="false"[^]*?已完成/); assert.doesNotMatch(out, /等待中/);
   assert.equal(count(out, /data-active="true"/g), 1);
-  assert.doesNotMatch(css(), /var\(--running\)/, 'the interface never borrows the running blue, which could read as an approach');
+  assert.deepEqual(css().declarations.filter(({ value }) => value.includes('var(--running)')), [], 'the interface never borrows the running blue, which could read as an approach');
 }));
 
 test('results never show 0 for what is unknown, say unpriced runs, and mark an unfinished experiment', () => zh(() => {
@@ -673,24 +674,24 @@ test('the lab CSP allows its own assets and dev socket without external images o
 
 test('a source card that cannot run keeps its reason at the secondary text colour, and the three source cards stay equal in one row at any width', () => {
   const sheet = css();
-  assert.match(sheet, /\.choice:disabled > :not\(\.reason\) \{ opacity: \.45; \}/, 'the card dims its icon and words');
-  assert.match(sheet, /\.choice:disabled \.reason \{ opacity: 1; color: var\(--text-2\); \}/, 'the reason is not dimmed');
-  assert.match(sheet, /\.choices\.three \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \}/);
-  const narrow = /@media \(max-width: 1000px\) \{([\s\S]*?)\n\}/.exec(sheet);
-  assert.ok(narrow && !/\.choices\.three/.test(narrow[1]), 'the narrow window does not re-flow the source cards');
-  assert.match(sheet, /\.steps li:not\(:last-child\)::after \{[^}]*flex: 1 1 0;/, 'every connector takes an equal share');
+  assertRule(sheet, '.choice:disabled > :not(.reason)', { opacity: '.45' }, 'the card dims its icon and words');
+  assertRule(sheet, '.choice:disabled .reason', { opacity: '1', color: 'var(--text-2)' }, 'the reason is not dimmed');
+  assertRule(sheet, '.choices.three', { 'grid-template-columns': 'repeat(3, minmax(0, 1fr))' });
+  const narrow = '@media (max-width: 1000px)';
+  assert.ok(sheet.atRules.includes(narrow));
+  assert.deepEqual(sheet.blocks.filter(({ context, selector }) => context.includes(narrow) && selector.includes('.choices.three')), [], 'the narrow window does not re-flow the source cards');
+  assertRule(sheet, '.steps li:not(:last-child)::after', { flex: '1 1 0' }, 'every connector takes an equal share');
 });
 
 test('the lab stylesheet keeps the product scale and takes every colour from the theme tokens apart from the four approach colours', () => {
-  const declarations = [...css().matchAll(/([^{}]+)\{([^}]*)\}/g)].flatMap(([, selector, body]) => body.split(';').map(item => item.trim()).filter(Boolean)
-    .map(item => ({ selector: selector.trim(), name: item.slice(0, item.indexOf(':')).trim(), value: item.slice(item.indexOf(':') + 1).trim() })));
+  const sheet = css(), declarations = sheet.declarations;
   const off = [], scale = new Set([0, 2, 4, 8, 12, 16, 24, 32]);
-  for (const { selector, name, value } of declarations) {
+  for (const { selector, property: name, value } of declarations) {
     if (/^(padding|margin|gap|row-gap|column-gap)(-|$)/.test(name)) for (const [, px] of value.matchAll(/(\d+(?:\.\d+)?)px/g)) if (!scale.has(Number(px))) off.push(`${selector} { ${name}: ${value} }`);
   }
   assert.deepEqual(off, [], 'spacing is 2/4/8/12/16/24/32');
   const sizes = new Set(), weights = new Set(), radii = new Set();
-  for (const { name, value } of declarations) {
+  for (const { property: name, value } of declarations) {
     if (name === 'font-size') sizes.add(value);
     if (name === 'font-weight') weights.add(value);
     if (name === 'font' && value !== 'inherit') { sizes.add(/(\d+)px/.exec(value)?.[1] + 'px'); weights.add(/^(\d+)/.exec(value)?.[1]); }
@@ -698,20 +699,20 @@ test('the lab stylesheet keeps the product scale and takes every colour from the
   }
   assert.deepEqual([...sizes].sort(), ['12px', '13px', '14px', '16px', '48px']); assert.deepEqual([...weights].sort(), ['400', '600']);
   assert.deepEqual([...radii].sort(), ['12px', '8px', '999px']);
-  const literal = declarations.filter(({ name, value }) => /#[0-9a-f]{3,8}\b/i.test(value) && !/^--lab-arm-(orchestrated|opus|sol|sonnet)$/.test(name));
+  const literal = declarations.filter(({ property, value }) => /#[0-9a-f]{3,8}\b/i.test(value) && !/^--lab-arm-(orchestrated|opus|sol|sonnet)$/.test(property));
   assert.deepEqual(literal, [], 'colours come from the theme tokens; only --lab-arm-* are literal');
-  assert.match(css(), /\.lab \{ --lab-arm-orchestrated: #009e73; --lab-arm-opus: #e69f00; --lab-arm-sol: #56b4e9; --lab-arm-sonnet: #cc79a7;/);
-  assert.match(css(), /:root\[data-theme="light"\] \.lab \{ --lab-arm-orchestrated: #008a64; --lab-arm-opus: #b97800; --lab-arm-sol: #1f86c4; --lab-arm-sonnet: #b45c8c;/);
-  assert.match(read(path.join(src, 'shared/styles/styles.css')), /\.button \{[^}]*height: 32px/);
-  assert.equal(declarations.find(({ selector, name }) => selector === '.figure' && name === 'font-size').value, '48px', 'ring figures use the hero size');
-  assert.equal(declarations.find(({ selector, name }) => selector === 'details.data summary' && name === 'height').value, '32px');
+  assertRule(sheet, '.lab', { '--lab-arm-orchestrated': '#009e73', '--lab-arm-opus': '#e69f00', '--lab-arm-sol': '#56b4e9', '--lab-arm-sonnet': '#cc79a7' });
+  assertRule(sheet, ':root[data-theme="light"] .lab', { '--lab-arm-orchestrated': '#008a64', '--lab-arm-opus': '#b97800', '--lab-arm-sol': '#1f86c4', '--lab-arm-sonnet': '#b45c8c' });
+  assertRule(readCss('src/shared/styles/styles.css'), '.button', { height: '32px' });
+  assertRule(sheet, '.figure', { 'font-size': '48px' }, 'ring figures use the hero size');
+  assertRule(sheet, 'details.data summary', { height: '32px' });
 });
 
 test('every scrolling region is labelled and focusable, and scrolling is only ever drawn through that one component', () => {
   const { ScrollRegion } = lab('Marks.tsx');
   assert.match(html(React.createElement(ScrollRegion, { label: '表' }, 'x')), /^<div class="scroll" role="region" aria-label="表" tabindex="0">x<\/div>$/);
   for (const name of fs.readdirSync(labDir).filter(file => /\.tsx$/.test(file) && file !== 'Marks.tsx')) assert.doesNotMatch(read(path.join(labDir, name)), /className="scroll"/, name);
-  assert.ok(count(css(), /\.scroll:focus-visible/g) >= 1);
+  assert.ok(css().blocks.some(({ selector }) => selector.includes('.scroll:focus-visible')));
 });
 
 test('the page reads only the lab bridge and imports only src/shared; the main window’s menu opens the lab through openLab', () => {

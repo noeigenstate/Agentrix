@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { WHATS_NEW } = require('../src/features/guide/guide.ts');
@@ -18,28 +19,31 @@ test('each release note is a short title and a detail line, both translated, and
 });
 
 test('the guide and the About page share one list: left-aligned, one marker colour, strong title over secondary detail, scrolling only when it overflows', () => {
-  const component = read('src/features/guide/ReleaseNotes.tsx'), css = read('src/features/guide/release-notes.css'), guide = read('src/features/guide/guide.css');
+  const component = read('src/features/guide/ReleaseNotes.tsx'), css = readCss('src/features/guide/release-notes.css'), guide = readCss('src/features/guide/guide.css');
   assert.match(component, /<li key=\{title\}><b>\{t\(title\)\}<\/b>\{t\(text\)\}<\/li>/);
   assert.match(read('src/features/guide/UsageGuide.tsx'), /<ReleaseNotes \/>/); assert.match(read('src/features/settings/AboutSettings.tsx'), /<ReleaseNotes \/>/);
-  assert.match(css, /\.release-notes \{[^}]*list-style: none; text-align: left;[^}]*color: var\(--text-2\)/);
-  assert.match(css, /\.release-notes li::before \{[^}]*background: var\(--usage\)/, 'the marker takes the list colour, not a literal');
-  assert.match(css, /\.release-notes b \{[^}]*font-weight: 600; color: var\(--text-1\)/);
-  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'tokens only');
-  assert.match(css, /\.release-notes \{[^}]*gap: 12px/);
-  assert.match(guide, /\.guide-notes \{[^}]*min-height: 0; max-height: min\(440px, 52vh\); padding-right: 8px; overflow-y: auto;/, 'the list scrolls, shrinks and keeps the scrollbar off the text');
-  assert.doesNotMatch(read('src/features/settings/settings.css'), /about-notes/);
+  assertRule(css, '.release-notes', { 'list-style': 'none', 'text-align': 'left', color: 'var(--text-2)', gap: '12px' });
+  assertRule(css, '.release-notes li::before', { background: 'var(--usage)' }, 'the marker takes the list colour, not a literal');
+  assertRule(css, '.release-notes b', { 'font-weight': '600', color: 'var(--text-1)' });
+  assert.deepEqual(css.declarations.filter(({ value }) => /#[0-9a-f]{3,8}\b/i.test(value)), [], 'tokens only');
+  assertRule(guide, '.guide-notes', {
+    'min-height': '0', 'max-height': 'min(440px, 52vh)', 'padding-right': '8px', 'overflow-y': 'auto',
+  }, 'the list scrolls, shrinks and keeps the scrollbar off the text');
+  const settings = readCss('src/features/settings/settings.css');
+  assert.deepEqual(settings.blocks.filter(({ selector }) => selector.includes('about-notes')), []);
 });
 
 test('the guide card never outgrows the window: it clips, the buttons never shrink, and only the notes scroll', () => {
-  const guide = read('src/features/guide/guide.css');
-  assert.match(guide, /\.settings-dialog\.guide-dialog \{[^}]*overflow: hidden;/, 'the card itself has no scrollbar');
-  assert.match(guide, /\.settings-dialog\.guide-dialog\[open\] \{ display: flex; flex-direction: column; \}/);
-  assert.match(guide, /\.guide-content \{ flex: 1; min-height: 0;/);
-  for (const part of ['guide-logo', 'guide-dots', 'guide-footer', 'guide-links']) assert.match(guide, new RegExp(`\\.${part} \\{ flex: none;`), `${part} keeps its size`);
-  assert.match(guide, /\.guide-content h2 \{ flex: none;/);
-  assert.match(guide, /\.guide-body \{ display: flex; flex-direction: column;/, 'the body passes the room on to the notes');
-  assert.equal((guide.match(/overflow-y: auto/g) || []).length, 1, 'one scrolling region in the card');
-  assert.match(read('src/features/settings/settings.css'), /\.about-page \.release-groups, \.about-page \.release-notes \{ max-width: \d+px; \}/, 'the About change log has a comfortable line length');
+  const guide = readCss('src/features/guide/guide.css');
+  assertRule(guide, '.settings-dialog.guide-dialog', { overflow: 'hidden' }, 'the card itself has no scrollbar');
+  assertRule(guide, '.settings-dialog.guide-dialog[open]', { display: 'flex', 'flex-direction': 'column' });
+  assertRule(guide, '.guide-content', { flex: '1', 'min-height': '0' });
+  for (const part of ['guide-logo', 'guide-dots', 'guide-footer', 'guide-links']) assertRule(guide, `.${part}`, { flex: 'none' }, `${part} keeps its size`);
+  assertRule(guide, '.guide-content h2', { flex: 'none' });
+  assertRule(guide, '.guide-body', { display: 'flex', 'flex-direction': 'column' }, 'the body passes the room on to the notes');
+  assert.equal(guide.declarations.filter(({ property, value }) => property === 'overflow-y' && value === 'auto').length, 1, 'one scrolling region in the card');
+  const settings = readCss('src/features/settings/settings.css');
+  assert.match(settings.rule('.about-page .release-groups, .about-page .release-notes')['max-width'], /^\d+px$/, 'the About change log has a comfortable line length');
 });
 
 test('a stable release lists every note ungrouped; a beta lists them ungrouped too, or splits new notes ahead of earlier ones under two headings', () => {
@@ -50,14 +54,14 @@ test('a stable release lists every note ungrouped; a beta lists them ungrouped t
     assert.deepEqual(marked, [...marked].sort((a, b) => Number(b) - Number(a)), 'the new notes are a prefix, so the release body keeps its order');
   } // else: the first beta of a version has no earlier betas, so it shows a single list
   assert.ok(WHATS_NEW.every(note => note.group === undefined || note.group === 'new'));
-  const component = read('src/features/guide/ReleaseNotes.tsx'), css = read('src/features/guide/release-notes.css');
+  const component = read('src/features/guide/ReleaseNotes.tsx'), css = readCss('src/features/guide/release-notes.css');
   for (const heading of ['本次测试版新增', '此前测试版的更新']) {
     assert.match(component, new RegExp(`<h4>\\{t\\('${heading}'\\)\\}</h4>`));
     assert.ok(en[heading], `${heading}: translated`);
   }
   assert.equal(en['本次测试版新增'], 'New in this beta'); assert.equal(en['此前测试版的更新'], 'Earlier betas of this version');
   assert.match(component, /!added\.length \|\| !earlier\.length\) return <NoteList notes=\{WHATS_NEW\} \/>/, 'with one kind of note there are no headings');
-  assert.match(css, /\.release-groups h4 \{[^}]*font-size: 12px;[^}]*color: var\(--text-2\)/);
+  assertRule(css, '.release-groups h4', { 'font-size': '12px', color: 'var(--text-2)' });
 });
 
 const script = path.join(__dirname, '..', 'scripts', 'release-notes.mjs');

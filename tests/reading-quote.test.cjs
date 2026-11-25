@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
@@ -59,19 +60,20 @@ test('the leading quote block is read back exactly', () => {
 });
 
 test('the quote styles use theme tokens and the spacing scale only', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-quote.css'), 'utf8');
-  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i, 'no literal colours');
+  const css = readCss('src/features/reading/reading-quote.css');
+  assert.deepEqual(css.declarations.filter(({ value }) => /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i.test(value)), [], 'no literal colours');
   const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
-  const spacing = [...css.matchAll(/(?:padding|margin|gap|top|right|left|bottom)[a-z-]*:\s*([^;}]+)/g)].flatMap(match => match[1].match(/-?\d+(?:\.\d+)?px/g) ?? []);
+  const spacing = css.declarations.filter(({ property }) => /(?:padding|margin|gap|top|right|left|bottom)[a-z-]*$/.test(property))
+    .flatMap(({ value }) => value.match(/-?\d+(?:\.\d+)?px/g) ?? []);
   for (const value of spacing) assert.ok(scale.has(Math.abs(parseFloat(value))), `${value} is off the spacing scale`);
 });
 
 test('the message menu is the standard dropdown at the pointer; the old corner button and its reserved column are gone', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-quote.css'), 'utf8');
-  assert.doesNotMatch(css, /reading-quote-action/, 'no quote button styles');
-  assert.doesNotMatch(css, /padding-right: 40px/, 'no column reserved for a button');
-  assert.match(css, /\.reading-message-menu \{ position: fixed;/);
-  assert.match(css, /\.reading-user:focus-visible, \.reading-assistant:focus-visible \{ outline: 2px solid var\(--focus-ring\)/, 'a focused message shows the standard ring');
+  const css = readCss('src/features/reading/reading-quote.css');
+  assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('reading-quote-action')), [], 'no quote button styles');
+  assert.deepEqual(css.declarations.filter(({ property, value }) => property === 'padding-right' && value === '40px'), [], 'no column reserved for a button');
+  assertRule(css, '.reading-message-menu', { position: 'fixed' });
+  assertRule(css, '.reading-user:focus-visible, .reading-assistant:focus-visible', { outline: '2px solid var(--focus-ring)' }, 'a focused message shows the standard ring');
   const source = name => fs.readFileSync(path.join(__dirname, '../src/features/reading', name), 'utf8');
   assert.doesNotMatch(source('ReadingQuote.tsx'), /QuoteAction|reading-quote-action/);
   assert.match(source('MessageMenu.tsx'), /className="dropdown reading-message-menu"/, 'the existing dropdown, no new menu component');
@@ -110,9 +112,9 @@ test('the chip shows the excerpt as one clean line: Markdown markers dropped, li
 
 test('the quote block is laid out by the Markdown renderer and the chip is one line with an ellipsis', () => {
   const read = file => fs.readFileSync(path.join(__dirname, '../src/features/reading', file), 'utf8');
-  const css = read('reading-quote.css');
-  assert.doesNotMatch(/\.reading-user-quote \{[^}]*\}/.exec(css)[0], /pre-wrap/, 'not raw pre-wrapped text');
-  assert.match(css, /\.reading-quote > span \{[^}]*white-space: nowrap/); assert.match(css, /\.reading-quote > span \{[^}]*text-overflow: ellipsis/);
+  const css = readCss('src/features/reading/reading-quote.css');
+  assert.notEqual(css.rule('.reading-user-quote')['white-space'], 'pre-wrap', 'not raw pre-wrapped text');
+  assertRule(css, '.reading-quote > span', { 'white-space': 'nowrap', 'text-overflow': 'ellipsis' });
   assert.match(read('PendingPromptEntries.tsx'), /<blockquote className="reading-user-quote"><Markdown text=\{quote\} \/><\/blockquote>/);
   assert.match(read('ReadingQuote.tsx'), /plainExcerpt\(quote\.excerpt\)/);
 });

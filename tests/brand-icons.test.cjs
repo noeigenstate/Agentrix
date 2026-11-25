@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -107,29 +108,27 @@ test('Claude keeps its official spark without a ring in failed, running and earl
     assert.equal((html.match(/<path /g) || []).length, 1);
     assert.doesNotMatch(html, /<(?:circle|line|animate|image)\b/);
   }
-  const css = fs.readFileSync(path.join(root, 'src/features/reading/reading-flow.css'), 'utf8');
-  const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
-  for (const [, selector, body] of rules) {
-    if (!selector.includes('.reading-node') || !/\b(?:box-shadow|outline|border(?:-(?:width|style|color))?)\s*:/.test(body)) continue;
+  const css = readCss('src/features/reading/reading-flow.css');
+  for (const { selector, property } of css.declarations) {
+    if (!selector.includes('.reading-node') || !/^(?:box-shadow|outline|border(?:-(?:width|style|color))?)$/.test(property)) continue;
     for (const agent of ['claude', 'codex']) assert.match(selector, new RegExp(`:not\\([^)]*\\.is-${agent}\\b[^)]*\\)`), selector);
   }
 });
 
 test('Codex inherits its own ink, and a running node is a heavier ring with no animation', () => {
-  const css = fs.readFileSync(path.join(root, 'src/features/reading/reading-flow.css'), 'utf8');
-  const fillRules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .filter(([, selector, body]) => selector.includes('.agent-brand-codex') && /\bfill\s*:/.test(body))
-    .map(([, selector, body]) => ({ selector: selector.trim(), fill: body.match(/\bfill\s*:\s*([^;]+)/)[1].trim() }));
-  assert.deepEqual(fillRules, []);
+  const css = readCss('src/features/reading/reading-flow.css');
+  assert.deepEqual(css.declarations.filter(({ selector, property }) => selector.includes('.agent-brand-codex') && property === 'fill'), []);
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /fill="currentColor"/);
   // Both official marks use the same box in the reading node.
-  assert.match(css, /\.reading-node > :is\(\.agent-brand-codex, \.agent-brand-claude\) \{ width: 26px; height: 26px; \}/);
-  assert.match(css, /\.reading-node > \.user-avatar \{ width: 100%; height: 100%; \}/);
-  assert.doesNotMatch(css, /reading-spark|spark-bloom|agent-brand-[^{]+\{[^}]*\b(?:animation|transform):/);
-  // Only generic nodes have rings, including while running or failed; brand marks stay borderless.
-  assert.match(css, /\.reading-step:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ box-shadow: inset 0 0 0 1\.5px var\(--node-tint\); \}/);
-  assert.match(css, /\.reading-step\.is-running:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
-  assert.match(css, /\.reading-step\.is-failed:not\(\.is-user, \.is-claude, \.is-codex\) \.reading-node \{ --node-tint: var\(--flow-fail\); box-shadow: inset 0 0 0 2px var\(--node-tint\); \}/);
-  assert.doesNotMatch(/\.reading-node \{[^}]*\}/.exec(css)[0], /box-shadow/, 'the base node has no ring');
-  assert.doesNotMatch(css, /@keyframes|animation:/);
+  assertRule(css, '.reading-node > :is(.agent-brand-codex, .agent-brand-claude)', { width: '26px', height: '26px' });
+  assertRule(css, '.reading-node > .user-avatar', { width: '100%', height: '100%' });
+  assert.deepEqual(css.blocks.filter(({ selector }) => /reading-spark|spark-bloom/.test(selector)), []);
+  assert.deepEqual(css.declarations.filter(({ selector, property }) => selector.includes('agent-brand-') && ['animation', 'transform'].includes(property)), []);
+  assert.deepEqual(css.atRules.filter(rule => rule.includes('spark-bloom') || rule.startsWith('@keyframes ')), []);
+  const node = ':not(.is-user, .is-claude, .is-codex) .reading-node';
+  assertRule(css, `.reading-step${node}`, { 'box-shadow': 'inset 0 0 0 1.5px var(--node-tint)' });
+  assertRule(css, `.reading-step.is-running${node}`, { 'box-shadow': 'inset 0 0 0 2px var(--node-tint)' });
+  assertRule(css, `.reading-step.is-failed${node}`, { '--node-tint': 'var(--flow-fail)', 'box-shadow': 'inset 0 0 0 2px var(--node-tint)' });
+  assert.equal(css.rule('.reading-node')['box-shadow'], undefined, 'the base node has no ring');
+  assert.deepEqual(css.declarations.filter(({ property }) => property === 'animation'), []);
 });

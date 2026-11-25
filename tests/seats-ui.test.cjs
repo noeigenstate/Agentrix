@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -337,16 +338,16 @@ test('Escape closes the open menu first and then the dialog; the X closes it too
 });
 
 test('the chart places connector drops at the columns and moves the palette into a drawer below 1400 px', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  const compact = css.slice(css.indexOf('@media (max-width: 940px)'), css.indexOf('@media (max-width: 700px)'));
-  assert.match(css, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(4,/);
-  assert.match(compact, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(2,/);
-  assert.match(css, /\.seats-palette \{ display: none; \}/);
-  assert.match(css, /\.seats-palette\.is-open \{[^}]*display: flex/);
-  assert.match(css, /@media \(width >= 1400px\) \{[^]*?\.seats-palette \{[^}]*display: flex/);
-  assert.match(css, /\.seats-chart-bus::after \{[^}]*inset: 8px var\(--bus-inset\) 0/);
-  assert.match(css, /\.seats-chart-link, \.seats-chart-bus \{[^}]*pointer-events: none/);
-  assert.doesNotMatch(css, /@keyframes|animation:/);
+  const css = readCss('src/features/agents/seats-dialog.css');
+  assert.match(css.rule('.seats-team-grid')['grid-template-columns'], /^repeat\(4,/);
+  assert.match(css.rule('.seats-team-grid', '@media (max-width: 940px)')['grid-template-columns'], /^repeat\(2,/);
+  assertRule(css, '.seats-palette', { display: 'none' });
+  assertRule(css, '.seats-palette.is-open', { display: 'flex' });
+  assert.equal(css.rule('.seats-palette', '@media (width >= 1400px)').display, 'flex');
+  assert.match(css.rule('.seats-chart-bus::after').inset, /^8px var\(--bus-inset\) 0(?:\s|$)/);
+  assertRule(css, '.seats-chart-link, .seats-chart-bus', { 'pointer-events': 'none' });
+  assert.deepEqual(css.atRules.filter(rule => rule.startsWith('@keyframes ')), []);
+  assert.deepEqual(css.declarations.filter(({ property }) => property === 'animation'), []);
 });
 
 test('the project and template retain independent unsaved drafts', async t => {
@@ -636,11 +637,11 @@ test('the moved-defaults note is a neutral banner and the discard question a war
   const h = dialogHarness(t, seatsInfo({ defaultsMoved: [{ seat: 'developer', from: 'gpt-6.2-sol', to: 'gpt-6.3-sol' }] }));
   const tree = h.render();
   assert.equal(byAttr(tree, 'data-moved').props.className, 'seats-banner', 'no is-bad on the note');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-banner \{[^}]*border: 1px solid var\(--border\)/, 'the base banner border is neutral');
-  assert.match(css, /\.seats-banner\.is-bad \{ border-color: var\(--danger\)/);
-  const mk = css.split('\n').filter(line => line.startsWith('.seats-mk'));
-  assert.ok(mk.some(line => line.includes('--agent-claude')) && mk.some(line => line.includes('data-family="codex"') && line.includes('--agent-codex')), 'the family dots use the existing agent tokens');
+  const css = readCss('src/features/agents/seats-dialog.css');
+  assertRule(css, '.seats-banner', { border: '1px solid var(--border)' }, 'the base banner border is neutral');
+  assertRule(css, '.seats-banner.is-bad', { 'border-color': 'var(--danger)' });
+  assertRule(css, '.seats-mk', { background: 'var(--agent-claude)' }, 'the family dots use the existing agent tokens');
+  assertRule(css, '.seats-mk[data-family="codex"]', { background: 'var(--agent-codex)' });
 });
 
 test('a default-move receipt survives a newer read and the first edit without collapsing the notice slot', async t => {
@@ -659,8 +660,8 @@ test('a default-move receipt survives a newer read and the first edit without co
   byAttr(openMenu(h, 'architect'), 'data-assign', 'haiku').props.onClick();
   assert.equal(byAttr(h.render(), 'data-save').props.disabled, false);
   assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer/);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-strip:not\(:has\(p:not\(:empty\), \.seats-banner, button\)\)/);
+  const css = readCss('src/features/agents/seats-dialog.css');
+  assert.ok(css.rule('.seats-strip:not(:has(p:not(:empty), .seats-banner, button))'));
 });
 
 // ---- second acceptance round: no tile overlaps another, small-tile chips shorten and ellipsize, the one-click fix is chosen by rule ----
@@ -690,8 +691,8 @@ test('the card, banner, palette and menu name a Claude model by its release, and
   assert.match(textOf(menu), /Opus 5\.5/);
   assert.equal(findAll(menu, node => node.props['data-assign'] === 'opus').length, 0, 'the menu lists the release, checked for the alias');
   assert.equal(byAttr(menu, 'data-assign', 'claude-opus-5-5').props['aria-checked'], true);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-gem-name, \.seats-gem-summary \{[^}]*text-overflow: ellipsis/);
+  const css = readCss('src/features/agents/seats-dialog.css');
+  assertRule(css, '.seats-gem-name, .seats-gem-summary', { 'text-overflow': 'ellipsis' });
 });
 
 // ---- layout A (round cat-r2): effort on the tile, menus that close, the grouped 模型盘 ----
@@ -1432,9 +1433,9 @@ test('drafts use the main process role defaults and preserve its library order',
 });
 
 test('invalid editor fields override the normal border and keep the visible focus outline', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-role-fields :is\(input, textarea, select\)\[aria-invalid="true"\] \{ border-color: var\(--danger\); \}/);
-  assert.match(css, /\.seats-dialog :focus-visible \{ outline: 2px solid var\(--focus-ring\); outline-offset: 2px; \}/);
+  const css = readCss('src/features/agents/seats-dialog.css');
+  assertRule(css, '.seats-role-fields :is(input, textarea, select)[aria-invalid="true"]', { 'border-color': 'var(--danger)' });
+  assertRule(css, '.seats-dialog :focus-visible', { outline: '2px solid var(--focus-ring)', 'outline-offset': '2px' });
 });
 
 test('pending and invalid project files replace the saved status and show the template label once', async t => {

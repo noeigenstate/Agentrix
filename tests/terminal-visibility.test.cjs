@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -363,10 +364,12 @@ test('splits have no title or status bars: a corner cluster (grip, restart, clos
   assert.equal((html.match(/class="button secondary small terminal-split-restart"/g) || []).length, 1, 'only the stopped split has the restart over its body');
   const single = renderToStaticMarkup(React.createElement(ProjectTerminals, { ...props, project: { ...props.project, terminals: [props.project.terminals[1]] } }));
   assert.doesNotMatch(single, /terminal-split-tools|terminal-split-restart/, 'a lone terminal has neither (its header already restarts it)');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/workspace/workspace.css'), 'utf8');
-  assert.doesNotMatch(css, /terminal-split-header|terminal-split-footer|split-status/);
-  assert.match(css, /\.terminal-split-tools \{[^}]*position: absolute;[^}]*opacity: 0; pointer-events: none;/, 'hidden until hover, and then out of the way of the pointer');
-  assert.match(css, /\.terminal-split:hover \.terminal-split-tools, \.terminal-split:focus-within \.terminal-split-tools \{ opacity: 1; pointer-events: auto; \}/, 'shown by the pointer or by keyboard focus');
+  const css = readCss('src/features/workspace/workspace.css');
+  assert.deepEqual(css.blocks.filter(({ selector }) => /terminal-split-header|terminal-split-footer|split-status/.test(selector)), []);
+  assertRule(css, '.terminal-split-tools', { position: 'absolute', opacity: '0', 'pointer-events': 'none' }, 'hidden until hover, and then out of the way of the pointer');
+  assertRule(css, '.terminal-split:hover .terminal-split-tools, .terminal-split:focus-within .terminal-split-tools', {
+    opacity: '1', 'pointer-events': 'auto',
+  }, 'shown by the pointer or by keyboard focus');
   const { TERMINAL_SPLITS } = loadUI('workspace/useProjectReorder.ts', { motion: {} });
   const split = { dataset: { terminalId: 'codex' } }, grip = { closest: selector => selector === '[data-terminal-id]' ? split : null };
   assert.deepEqual(TERMINAL_SPLITS.item({ closest: selector => selector === '.terminal-split-grip' ? grip : null }), { element: split, id: 'codex' });

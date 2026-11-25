@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -184,10 +185,10 @@ test('the sub-agent chip is in the header of an expanded project only: never on 
   }
   h.props.focused = true; h.props.project.terminals = [];
   assert.equal(chips().length, 0, 'no terminal, no chip');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/workspace/workspace.css'), 'utf8');
-  assert.match(css, /\.subagent-chip-anchor \{ display: none;/, 'hidden by default');
-  assert.match(css, /@media \(max-width: 1000px\) \{ \.subagent-chip-anchor \{ display: block; \} \}/, 'shown only where the pane is hidden, at the same 1000px as the rule that hides the pane');
-  assert.match(css, /@media \(max-width: 1000px\) \{[^]*?\.activity-pane, \.project-panel\.has-activity::before \{ display: none; \}/, 'the pane-hiding rule this one pairs with');
+  const css = readCss('src/features/workspace/workspace.css'), narrow = '@media (max-width: 1000px)';
+  assertRule(css, '.subagent-chip-anchor', { display: 'none' }, 'hidden by default');
+  assert.equal(css.rule('.subagent-chip-anchor', narrow).display, 'block', 'shown only where the pane is hidden');
+  assert.equal(css.rule('.activity-pane, .project-panel.has-activity::before', narrow).display, 'none', 'the pane-hiding rule this one pairs with');
 });
 
 test('the unread status button still opens a grid card with either activity toggle setting', t => {
@@ -1931,8 +1932,8 @@ test('a sub-agent step names its role on one line with an ellipsis and the whole
   const { render } = readingHarness(t, [readingEntry('u1', 'user', 10, { text: 'go' }), readingTool('检查现有测试覆盖', 11, { kind: 'agent', tool: 'Task', done: false, detail: 'general-purpose' })]);
   const html = render();
   assert.match(html, /<li class="[^"]*reading-tool-agent"[^>]*>[\s\S]*<small title="general-purpose">general-purpose<\/small>/);
-  const flow = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-flow.css'), 'utf8');
-  assert.match(flow, /\.reading-tools-tree li\.reading-tool-agent > small \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
+  const flow = readCss('src/features/reading/reading-flow.css');
+  assertRule(flow, '.reading-tools-tree li.reading-tool-agent > small', { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' });
 });
 
 test('live thinking and confirmation stay inside the latest agent, including a tools-only history', t => {
@@ -3014,16 +3015,15 @@ test('switching to a terminal in another small card leaves this popup and focus 
 
 test('a generated picture shows its prompt as a two-line summary and a toggle appears only when the summary is cut off', () => {
   const view = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
+  const css = readCss('src/features/reading/reading.css');
   const figure = view.slice(view.indexOf('function GeneratedImage'), view.indexOf('// A reply card inside'));
   assert.ok(figure.includes('element.scrollHeight > element.clientHeight'), 'the clamp is measured');
   assert.ok(figure.includes('new ResizeObserver(measure)'), 'and measured again when the card changes width');
   assert.ok(figure.includes('(clipped || expanded)'), 'the toggle shows only for a cut-off or an expanded prompt');
   assert.ok(figure.includes('aria-expanded={expanded} aria-controls={captionId}'));
   assert.doesNotMatch(figure, /figcaption[^>]*title=/, 'no tooltip: the expansion replaces it');
-  const caption = css.split(/\r?\n/).find(line => line.startsWith('.reading-generated figcaption {'));
-  for (const part of ['-webkit-line-clamp: 2', 'font-size: calc(12px * var(--reading-text))', 'line-height: 1.5', 'color: var(--text-3)']) assert.ok(caption.includes(part), part);
-  assert.ok(css.includes('.reading-generated figcaption.is-expanded { display: block; overflow: visible; white-space: pre-wrap; }'));
+  assertRule(css, '.reading-generated figcaption', { '-webkit-line-clamp': '2', 'font-size': 'calc(12px * var(--reading-text))', 'line-height': '1.5', color: 'var(--text-3)' });
+  assertRule(css, '.reading-generated figcaption.is-expanded', { display: 'block', overflow: 'visible', 'white-space': 'pre-wrap' });
   assert.equal(en['展开提示词'], 'Show prompt'); assert.equal(en['收起'], 'Collapse');
 });
 
@@ -3221,21 +3221,23 @@ test('a picture result shows the picture first, then its sentence and its prompt
 });
 
 test('the reading view keeps two vertical lines: the avatars and the reply text edge, which the composer and every row share', () => {
-  const flow = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-flow.css'), 'utf8');
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
-  const card = fs.readFileSync(path.join(__dirname, '../src/features/reading/result-card.css'), 'utf8');
-  const narrow = css.slice(css.indexOf('@container (max-width: 480px)'));
-  assert.match(narrow, /--reading-inset: 0px; --turn-pad: 0px;/, 'in a card narrower than 480px the content edge is the avatars edge');
-  assert.ok(flow.includes('.reading-step-body > .reading-turn { margin-left: calc(var(--reading-inset) - var(--step-lead) - var(--turn-pad)); }'));
-  assert.ok(flow.includes('.reading-assistant { padding: 0 16px 0 var(--turn-pad);'));
-  assert.ok(flow.includes('.reading-turn-tools { position: relative; min-width: 0; padding-left: var(--turn-pad); }'), 'the pill starts on the content edge');
-  assert.doesNotMatch(flow, /\.reading-turn-tools[^{]*::before|\.reading-turn-mark|\.reading-tool-icon/, 'a tool group has no icon or rail, and its opened rows no kind icon: the pill and the state marks alone');
-  assert.ok(flow.includes('.reading-turn > .reading-status { margin-left: var(--turn-pad); }'));
-  assert.ok(flow.includes('.reading-step-body > .reading-status { margin-left: calc(var(--reading-inset) - var(--step-lead)); }'));
-  assert.ok(css.includes('.reading-composer { margin: 4px var(--reading-edge-right) 16px var(--reading-edge-left); }'));
-  assert.ok(css.includes('.reading-attachments { display: flex; align-items: center; gap: 8px; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left);'));
-  assert.ok(card.includes('.result-status, .result-evidence, .result-actions { box-sizing: border-box; padding-left: var(--turn-pad); padding-right: var(--reading-inset); }'));
-  assert.ok(css.includes('.reading-content { gap: 16px; }') && css.includes('.reading-step.is-user:not(:first-child) { margin-top: 16px; }'), 'rounds are told apart by space');
+  const flow = readCss('src/features/reading/reading-flow.css');
+  const css = readCss('src/features/reading/reading.css');
+  const card = readCss('src/features/reading/result-card.css');
+  const narrow = css.rule('.reading-view', '@container (max-width: 480px)');
+  assert.partialDeepStrictEqual(narrow, { '--reading-inset': '0px', '--turn-pad': '0px' }, 'in a card narrower than 480px the content edge is the avatars edge');
+  assertRule(flow, '.reading-step-body > .reading-turn', { 'margin-left': 'calc(var(--reading-inset) - var(--step-lead) - var(--turn-pad))' });
+  assertRule(flow, '.reading-assistant', { padding: '0 16px 0 var(--turn-pad)' });
+  assertRule(flow, '.reading-turn-tools', { position: 'relative', 'min-width': '0', 'padding-left': 'var(--turn-pad)' }, 'the pill starts on the content edge');
+  assert.deepEqual(flow.blocks.filter(({ selectors }) => selectors.some(selector => /\.reading-turn-tools.*::before|\.reading-turn-mark|\.reading-tool-icon/.test(selector))), [],
+    'a tool group has no icon or rail, and its opened rows no kind icon: the pill and the state marks alone');
+  assertRule(flow, '.reading-turn > .reading-status', { 'margin-left': 'var(--turn-pad)' });
+  assertRule(flow, '.reading-step-body > .reading-status', { 'margin-left': 'calc(var(--reading-inset) - var(--step-lead))' });
+  assertRule(css, '.reading-composer', { margin: '4px var(--reading-edge-right) 16px var(--reading-edge-left)' });
+  assertRule(css, '.reading-attachments', { display: 'flex', 'align-items': 'center', gap: '8px', margin: '0 var(--reading-edge-right) 8px var(--reading-edge-left)' });
+  assertRule(card, '.result-status, .result-evidence, .result-actions', { 'box-sizing': 'border-box', 'padding-left': 'var(--turn-pad)', 'padding-right': 'var(--reading-inset)' });
+  assertRule(css, '.reading-content', { gap: '16px' }, 'rounds are told apart by space');
+  assertRule(css, '.reading-step.is-user:not(:first-child)', { 'margin-top': '16px' });
 });
 
 test('the save-as channel is registered in the main process, the preload and the types', () => {
@@ -3252,24 +3254,26 @@ test('list markers take the running agent\'s colour: Claude orange for Claude Co
     state.terminal.agent = agent;
     assert.match(render(), new RegExp(`<div class="reading-view" data-agent="${expected}"`), `${agent} marks the reading root`);
   }
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
-  const themes = fs.readFileSync(path.join(__dirname, '../src/shared/styles/themes.css'), 'utf8');
-  assert.match(css, /:is\(\.reading-view, \.conversation-feed\)\[data-agent="claude"\] \{ --list-marker: var\(--agent-claude\); --list-number: var\(--agent-claude-text\); \}/);
-  assert.doesNotMatch(css, /data-agent="codex"/, 'Codex keeps the default');
-  assert.match(css, /ul > li::before \{[^}]*background: var\(--list-marker, var\(--usage\)\)/);
-  assert.match(css, /ul ul > li::before \{[^}]*inset 0 0 0 1\.5px var\(--list-marker, var\(--usage\)\)/);
-  assert.match(css, /ol > li::marker \{ color: var\(--list-number, var\(--usage\)\)/);
-  assert.doesNotMatch(css.match(/\.reading-markdown ul > li[\s\S]*?ol > li::marker[^\n]*/)[0], /(?<!, )var\(--usage\)(?!\))/, 'no marker rule names the teal without the fallback');
+  const css = readCss('src/features/reading/reading.css');
+  const themes = readCss('src/shared/styles/themes.css');
+  assertRule(css, ':is(.reading-view, .conversation-feed)[data-agent="claude"]', { '--list-marker': 'var(--agent-claude)', '--list-number': 'var(--agent-claude-text)' });
+  assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('data-agent="codex"')), [], 'Codex keeps the default');
+  const bullet = '.reading-markdown ul > li::before', nested = '.reading-markdown ul ul > li::before', numeralMarker = '.reading-markdown ol > li::marker';
+  assertRule(css, bullet, { background: 'var(--list-marker, var(--usage))' });
+  assertRule(css, nested, { 'box-shadow': 'inset 0 0 0 1.5px var(--list-marker, var(--usage))' });
+  assertRule(css, numeralMarker, { color: 'var(--list-number, var(--usage))' });
+  const markerRules = new Set([bullet, nested, numeralMarker]);
+  const bareUsage = css.declarations.filter(({ selector, value }) => markerRules.has(selector) && /(?<!, )var\(--usage\)(?!\))/.test(value));
+  assert.deepEqual(bareUsage, [], 'no marker rule names the teal without the fallback');
   // The numeral is text: its token reaches 4.5:1 on every light reading surface; dark keeps the brand orange.
-  const token = (block, name) => block.match(new RegExp(`${name}: (#[0-9a-f]{6})`))[1];
-  const light = themes.slice(themes.indexOf(':root[data-theme="light"] {')), dark = themes.slice(0, themes.indexOf(':root[data-theme="light"] {'));
+  const light = themes.rule(':root[data-theme="light"]'), dark = themes.rule(':root');
   const channel = value => { const c = parseInt(value, 16) / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
   const lum = hex => 0.2126 * channel(hex.slice(1, 3)) + 0.7152 * channel(hex.slice(3, 5)) + 0.0722 * channel(hex.slice(5, 7));
   const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
-  const numeral = token(light, '--agent-claude-text');
-  for (const surface of [token(light, '--bg-card'), token(light, '--bg-app'), token(light, '--bg-hover')]) assert.ok(ratio(numeral, surface) >= 4.5, `${numeral} on ${surface}`);
-  assert.match(dark, /--agent-claude-text: var\(--agent-claude\)/);
-  assert.equal(token(dark, '--agent-claude'), '#d97757');
+  const numeral = light['--agent-claude-text'];
+  for (const surface of [light['--bg-card'], light['--bg-app'], light['--bg-hover']]) assert.ok(ratio(numeral, surface) >= 4.5, `${numeral} on ${surface}`);
+  assert.equal(dark['--agent-claude-text'], 'var(--agent-claude)');
+  assert.equal(dark['--agent-claude'], '#d97757');
 });
 
 test('ConversationFeed shows a step’s output by default; hideToolOutput (the native view’s) keeps the row, one reason for a failed step, and the output of a "!" card, a diff and the plan', t => {
@@ -3614,11 +3618,10 @@ test('a sent quote is laid out as Markdown: inline code and lists are not shown 
 });
 
 test('a locked composer looks locked: no input fill, the quiet divider edge and a readable draft, in theme tokens only', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading.css'), 'utf8');
-  const locked = /\.reading-composer:has\(textarea:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? '';
-  assert.match(locked, /background: transparent;/); assert.match(locked, /border-color: var\(--divider\);/);
-  assert.match(css, /\.reading-composer textarea:disabled \{ color: var\(--text-2\); \}/, 'the draft kept in it stays readable');
-  assert.doesNotMatch(locked, /#[0-9a-f]{3,8}\b|rgba?\(/i, 'tokens only');
+  const css = readCss('src/features/reading/reading.css'), selector = '.reading-composer:has(textarea:disabled)';
+  assertRule(css, selector, { background: 'transparent', 'border-color': 'var(--divider)' });
+  assertRule(css, '.reading-composer textarea:disabled', { color: 'var(--text-2)' }, 'the draft kept in it stays readable');
+  assert.deepEqual(css.declarations.filter(entry => entry.selector === selector && /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i.test(entry.value)), [], 'tokens only');
 });
 
 test('claude: a message Claude Code has queued no longer counts as a leftover input', async t => {

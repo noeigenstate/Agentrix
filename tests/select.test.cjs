@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -54,10 +55,10 @@ test('the window bounds override a trigger wider than the available menu space',
 });
 
 test('the selected option carries a check in a fixed column, and the trigger pads on the spacing scale', () => {
-  const source = fs.readFileSync(filename, 'utf8'), css = fs.readFileSync(path.join(__dirname, '../src/shared/Select.css'), 'utf8');
+  const source = fs.readFileSync(filename, 'utf8'), css = readCss('src/shared/Select.css');
   assert.match(source, /className="select-option-mark" aria-hidden="true">\{index === selected && <Check size/, 'only the selected row draws the check, and it is hidden from the reader (aria-selected says it)');
-  assert.match(css, /\.select-option-mark \{[^}]*flex: none; width: 16px/, 'the slot is 16px on every row, so labels stay aligned');
-  assert.match(css, /\.select-trigger \{[^}]*padding: 0 12px;/);
+  assertRule(css, '.select-option-mark', { flex: 'none', width: '16px' }, 'the slot is 16px on every row, so labels stay aligned');
+  assertRule(css, '.select-trigger', { padding: '0 12px' });
 });
 
 test('a wide settings trigger never gets a menu wider than itself', () => {
@@ -75,14 +76,14 @@ test('a menu opens up when the space below cannot show every option and the spac
 });
 
 test('a selected disabled option keeps the muted colour in every theme: no rule hands its row the selected text colour', () => {
-  const sheet = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  const select = sheet('src/shared/Select.css'), offenders = [];
+  const select = readCss('src/shared/Select.css'), themes = readCss('src/shared/styles/themes.css');
   // The light theme makes text-3 the main text colour on a selected row; a disabled row has no fill and must stay muted.
-  for (const [, selectors, body] of sheet('src/shared/styles/themes.css').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (!/--text-3\s*:\s*var\(--text-1\)/.test(body)) continue;
-    for (const selector of selectors.split(',')) if (/\.select-menu li/.test(selector) && !selector.includes(':not([aria-disabled="true"])')) offenders.push(selector.trim());
-  }
+  const offenders = themes.blocks.filter(({ properties }) => properties['--text-3'] === 'var(--text-1)')
+    .flatMap(({ selector }) => selector.match(/\.select-menu li[^,]*/g) ?? [])
+    .filter(selector => !selector.includes(':not([aria-disabled="true"])'));
   assert.deepEqual(offenders, [], 'a selected disabled option read as an enabled selected one');
-  const disabled = select.indexOf('.select-menu li[aria-disabled="true"] {'), selected = select.indexOf('.select-menu li[aria-selected="true"] {');
-  assert.ok(disabled > selected && /\.select-menu li\[aria-disabled="true"\] \{[^}]*color: var\(--text-3\)/.test(select), 'the disabled colour comes after the selected one, so it wins');
+  const disabled = '.select-menu li[aria-disabled="true"]', selected = '.select-menu li[aria-selected="true"]';
+  const order = select.blocks.filter(({ context }) => !context.length).map(({ selector }) => selector);
+  assert.ok(order.includes(selected) && order.indexOf(disabled) > order.indexOf(selected), 'the disabled colour comes after the selected one, so it wins');
+  assertRule(select, disabled, { color: 'var(--text-3)' });
 });

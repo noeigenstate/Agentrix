@@ -28,6 +28,7 @@
     "tests/claude-hook-url.test.cjs",
     "tests/cli-branch-guard.test.cjs",
     "tests/clipboard-writes.test.cjs",
+    "tests/css-rules.test.cjs",
     "tests/delivery.test.cjs",
     "tests/design-audit.test.cjs",
     "tests/desktop-glass.test.cjs",

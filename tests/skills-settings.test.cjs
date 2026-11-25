@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -457,8 +458,8 @@ test('the page shows a built-in skill by its title and clamped summary, never it
   assert.equal(h.items().join().includes('code-standard'), false); assert.equal(h.page().includes('seven lines'), false);
   assert.equal(h.text(h.one(node => node.props.className === 'skills-title')).startsWith('代码规范'), true);
   h.byLabel('启用 代码规范');
-  const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
-  assert.match(css, /\.skills-summary \{[^}]*-webkit-line-clamp: 2;[^}]*overflow: hidden;/);
+  const css = readCss('src/features/settings/skills-settings.css');
+  assertRule(css, '.skills-summary', { '-webkit-line-clamp': '2', overflow: 'hidden' });
 });
 
 test('the search matches the shown title and summary as well as the name', async t => {
@@ -520,31 +521,31 @@ test('the reserved-name message keeps each skill name whole on one line', async 
   h.button('创建').props.onClick(); await h.settle();
   const names = h.all(node => node.props.className === 'skills-name').map(node => h.text(node));
   assert.deepEqual(names, ['code-standard', 'code-standard-<标识>', 'code-standard-team']);
-  const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
-  assert.match(css, /\.skills-error \.skills-name \{ white-space: nowrap; \}/);
+  const css = readCss('src/features/settings/skills-settings.css');
+  assertRule(css, '.skills-error .skills-name', { 'white-space': 'nowrap' });
   assert.equal(h.text(h.one(node => node.props.role === 'alert')), h.state.failure);
 });
 
 test('the skills stylesheet pads on the spacing scale and the render/source toggle has a 32 px hit area', () => {
-  const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
+  const css = readCss('src/features/settings/skills-settings.css');
   const scale = new Set([0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64]);
-  const off = [...css.matchAll(/(?:^|[;{\s])padding(?:-[a-z]+)?: ([^;}]+)[;}]/g)]
-    .flatMap(match => match[1].match(/-?\d+(?:\.\d+)?(?=px)/g) ?? []).map(Number).filter(value => !scale.has(value));
+  const off = css.declarations.filter(({ property }) => /^padding(?:-[a-z]+)?$/.test(property))
+    .flatMap(({ value }) => value.match(/-?\d+(?:\.\d+)?(?=px)/g) ?? []).map(Number).filter(value => !scale.has(value));
   assert.deepEqual(off, [], 'every padding value is on the 2 4 8 12 16 20 24 32 40 48 64 scale');
-  const button = /\.skills-view-toggle button \{([^}]*)\}/.exec(css), hit = /\.skills-view-toggle button::after \{([^}]*)\}/.exec(css);
-  assert.ok(button && hit, 'the toggle buttons and an ::after hit area');
-  assert.match(button[1], /position: relative/);
-  assert.match(hit[1], /position: absolute; inset: -4px 0/);
-  assert.ok(Number(/height: (\d+)px/.exec(button[1])[1]) + 8 >= 32);
+  const button = css.rule('.skills-tabs .skills-view-toggle button'), hit = css.rule('.skills-tabs .skills-view-toggle button::after');
+  assert.equal(button.position, 'relative');
+  assert.equal(hit.position, 'absolute');
+  assert.match(hit.inset, /^-4px 0(?:\s|$)/);
+  assert.ok(Number(/^(\d+)px$/.exec(button.height)[1]) + 8 >= 32);
 });
 
 test('every settings switch has a hit area of at least 32 px around its 22 px look', () => {
-  const css = fs.readFileSync(path.join(root, 'features/settings/settings.css'), 'utf8');
-  const rule = /input\[type="checkbox"\]::after[^{]*\{([^}]*)\}/.exec(css);
-  assert.ok(rule, 'a ::after hit area');
-  const inset = /position: absolute; inset: (-?\d+)px (-?\d+)px/.exec(rule[1]);
+  const css = readCss('src/features/settings/settings.css');
+  const selector = '.setting-row input[type="checkbox"]::after, .skills-settings input[type="checkbox"]::after';
+  const hit = css.rule(selector);
+  assert.equal(hit.position, 'absolute');
+  const inset = /^(-?\d+)px (-?\d+)px(?:\s|$)/.exec(hit.inset);
   assert.ok(inset && 22 - 2 * Number(inset[1]) >= 32 && 38 - 2 * Number(inset[2]) >= 32);
-  assert.match(css, /\.setting-row input\[type="checkbox"\]::after, \.skills-settings input\[type="checkbox"\]::after/);
 });
 
 test('English exists for each built-in skill title and summary', () => {

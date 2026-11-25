@@ -1,5 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -428,10 +429,10 @@ test('the heat map hints are theme-neutral: the darkest cell is the highest in l
 });
 
 test('every tile title of a row sits on one baseline: the hero tile keeps the top padding of the others and puts its extra room below', () => {
-  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  const top = rule => Number(new RegExp(String.raw`\.kpi${rule} \{[^}]*padding: (\d+)px`).exec(css)[1]);
-  assert.equal(top('.hero'), top(''), 'the same top padding, so the labels share a row');
-  assert.match(css, /\.kpi\.hero \{ padding: 12px 16px 24px; \}/);
+  const css = readCss('src/features/dashboard/dashboard.css');
+  const top = selector => Number(/^(\d+)px\b/.exec(css.rule(selector).padding)[1]);
+  assert.equal(top('.kpi.hero'), top('.kpi'), 'the same top padding, so the labels share a row');
+  assertRule(css, '.kpi.hero', { padding: '12px 16px 24px' });
 });
 
 test('there is no limit to the models drawn: a fourth model gets its own colour, mark and end label', () => zh(() => {
@@ -755,16 +756,15 @@ test('the dashboard CSP allows its own assets and dev socket without external im
 });
 
 test('the dashboard stylesheet keeps the product scale: spacing, type, radii, controls, and tokens for every colour but the chart series', () => {
-  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  const declarations = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].flatMap(([, selector, body]) => body.split(';').map(item => item.trim()).filter(Boolean)
-    .map(item => ({ selector: selector.trim(), name: item.slice(0, item.indexOf(':')).trim(), value: item.slice(item.indexOf(':') + 1).trim() })));
+  const css = readCss('src/features/dashboard/dashboard.css');
+  const declarations = css.declarations;
   const off = [], scale = new Set([0, 2, 4, 8, 12, 16, 24, 32]);
-  for (const { selector, name, value } of declarations) {
+  for (const { selector, property: name, value } of declarations) {
     if (/^(padding|margin|gap|row-gap|column-gap)(-|$)/.test(name)) for (const [, px] of value.matchAll(/(\d+(?:\.\d+)?)px/g)) if (!scale.has(Number(px))) off.push(`${selector} { ${name}: ${value} }`);
   }
   assert.deepEqual(off, [], 'spacing is 2/4/8/12/16/24/32');
   const sizes = new Set(), weights = new Set(), radii = new Set();
-  for (const { name, value } of declarations) {
+  for (const { property: name, value } of declarations) {
     if (name === 'font-size') sizes.add(value);
     if (name === 'font-weight') weights.add(value);
     if (name === 'font') { sizes.add(/(\d+)px/.exec(value)?.[1] + 'px'); weights.add(/^(\d+)/.exec(value)?.[1]); }
@@ -772,24 +772,25 @@ test('the dashboard stylesheet keeps the product scale: spacing, type, radii, co
   }
   assert.deepEqual([...sizes].sort(), ['12px', '13px', '14px', '16px', '48px']); assert.deepEqual([...weights].sort(), ['400', '600']);
   assert.deepEqual([...radii].sort(), ['12px', '8px', '999px']);
-  const literal = declarations.filter(({ name, value }) => /#[0-9a-f]{3,8}\b/i.test(value) && !/^--(m-[0-5]|r[1-5]|rework)$/.test(name));
+  const literal = declarations.filter(({ property, value }) => /#[0-9a-f]{3,8}\b/i.test(value) && !/^--(m-[0-5]|r[1-5]|rework)$/.test(property));
   assert.deepEqual(literal, [], 'colours come from the theme tokens; only the six model colours, the five-step slate ramp and the rework red are literal');
-  assert.match(css, /\.dash \{ --m-0: #3987e5; --m-1: #d95926; --m-2: #199e70; --m-3: #c98500; --m-4: #d55181; --m-5: #9085e9;/);
-  assert.match(css, /:root\[data-theme="light"\] \.dash \{ --m-0: #2a78d6; --m-1: #eb6834; --m-2: #1baf7a; --m-3: #eda100; --m-4: #e87ba4; --m-5: #6250d6;/);
-  assert.doesNotMatch(css, /--chart-[123]|dash-pattern|pattern-ink/, 'the three-series colours and the bar textures are gone');
-  assert.equal(declarations.find(({ selector, name }) => selector === 'details.data summary' && name === 'height').value, '32px', 'the data-table toggle is a 32px control');
-  assert.match(fs.readFileSync(path.join(src, 'shared/styles/styles.css'), 'utf8'), /\.button \{[^}]*height: 32px/);
+  assertRule(css, '.dash', { '--m-0': '#3987e5', '--m-1': '#d95926', '--m-2': '#199e70', '--m-3': '#c98500', '--m-4': '#d55181', '--m-5': '#9085e9' });
+  assertRule(css, ':root[data-theme="light"] .dash', { '--m-0': '#2a78d6', '--m-1': '#eb6834', '--m-2': '#1baf7a', '--m-3': '#eda100', '--m-4': '#e87ba4', '--m-5': '#6250d6' });
+  const removed = /--chart-[123]|dash-pattern|pattern-ink/;
+  assert.deepEqual(css.blocks.filter(({ selector }) => removed.test(selector)), [], 'the bar textures are gone');
+  assert.deepEqual(declarations.filter(({ property, value }) => removed.test(property) || removed.test(value)), [], 'the three-series colours and the bar textures are gone');
+  assertRule(css, 'details.data summary', { height: '32px' }, 'the data-table toggle is a 32px control');
+  assertRule(readCss('src/shared/styles/styles.css'), '.button', { height: '32px' });
 });
 
 // WCAG contrast of the page's own colours, from the stylesheet and the base tokens of themes.css (the dashboard window is outside the workbench).
 test('every heat step has an ink that reads on it at 4.5:1 in both themes, and the model colours hold 3:1 in dark', () => {
-  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const css = readCss('src/features/dashboard/dashboard.css');
   const luminance = hex => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
   const ratio = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
-  const block = selector => css.slice(css.indexOf(selector) + selector.length, css.indexOf('}', css.indexOf(selector)));
   const tokens = { dark: { 'text-1': '#f2f2f2', 'bg-app': '#181818', 'bg-card': '#262626' }, light: { 'text-1': '#24272d', 'bg-app': '#f8f9fb', 'bg-card': '#ffffff' } };
-  const themes = { dark: block('.dash {'), light: block(':root[data-theme="light"] .dash {') };
-  const value = (theme, name) => themes[theme].match(new RegExp(`--${name}: ([^;]+);`))?.[1] ?? (theme === 'light' ? value('dark', name) : undefined);
+  const themes = { dark: css.rule('.dash'), light: css.rule(':root[data-theme="light"] .dash') };
+  const value = (theme, name) => themes[theme][`--${name}`] ?? themes.dark[`--${name}`];
   const hex = (theme, name) => { const raw = value(theme, name); return raw.startsWith('var(') ? tokens[theme][raw.slice(6, -1)] : raw; };
   for (const theme of ['dark', 'light']) for (const step of [1, 2, 3, 4, 5]) {
     assert.ok(ratio(hex(theme, `r${step}`), hex(theme, `r-ink-${step}`)) >= 4.5, `${theme} step ${step} ink ${ratio(hex(theme, `r${step}`), hex(theme, `r-ink-${step}`)).toFixed(2)}`);
@@ -800,19 +801,18 @@ test('every heat step has an ink that reads on it at 4.5:1 in both themes, and t
 });
 
 test('the donut’s centre figure and its 子任务 caption both take a text token and read on the card at 4.5:1 in both themes', () => {
-  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const css = readCss('src/features/dashboard/dashboard.css');
   // An SVG <text> with no fill is painted black, which is ~1.4:1 on the dark card: every label in the ring names its colour.
-  assert.match(css, /\.donut svg text \{ fill: var\(--text-2\); \}/);
-  assert.match(css, /\.donut svg text\.centre \{ fill: var\(--text-1\);/);
-  const themes = fs.readFileSync(path.join(src, 'shared/styles/themes.css'), 'utf8');
-  const block = selector => themes.slice(themes.indexOf(`
-${selector} {`), themes.indexOf('}', themes.indexOf(`
-${selector} {`)));
-  const token = (body, name) => body.match(new RegExp(`--${name}: (#[0-9a-f]{6});`, 'i'))[1];
+  assertRule(css, '.donut svg text', { fill: 'var(--text-2)' });
+  assertRule(css, '.donut svg text.centre', { fill: 'var(--text-1)' });
+  const themes = readCss('src/shared/styles/themes.css');
   const luminance = hex => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
   const ratio = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
-  for (const [theme, body] of [['dark', block(':root')], ['light', block(':root[data-theme="light"]')]]) for (const ink of ['text-1', 'text-2']) {
-    assert.ok(ratio(token(body, ink), token(body, 'bg-card')) >= 4.5, `${theme} ${ink} on the card ${ratio(token(body, ink), token(body, 'bg-card')).toFixed(2)}`);
+  for (const [theme, properties] of [['dark', themes.rule(':root')], ['light', themes.rule(':root[data-theme="light"]')]]) {
+    for (const ink of ['--text-1', '--text-2']) {
+      const result = ratio(properties[ink], properties['--bg-card']);
+      assert.ok(result >= 4.5, `${theme} ${ink} on the card ${result.toFixed(2)}`);
+    }
   }
 });
 
@@ -854,7 +854,7 @@ test('the speed chart writes every end label in a gutter right of the plot, leve
   assert.ok(labels.every(label => label.text.length <= 16), 'a long name is cut');
   const chartMath = fs.readFileSync(path.join(dashboardDir, 'SpeedChart.tsx'), 'utf8');
   assert.match(chartMath, /const clip = \(name: string\) => name\.length > NAME_MAX/, 'with an ellipsis');
-  assert.match(fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8'), /\.chart \.tail \{ fill: none; stroke-width: 1; stroke-dasharray: 2 3;/);
+  assertRule(readCss('src/features/dashboard/dashboard.css'), '.chart .tail', { fill: 'none', 'stroke-width': '1', 'stroke-dasharray': '2 3' });
 }));
 
 test('a table the region cuts through hides the cut columns until they are whole in view: nothing half-shown beside the pinned column or at the right edge', () => {
@@ -875,13 +875,16 @@ test('a table the region cuts through hides the cut columns until they are whole
   assert.equal(cut(150), '125', 'between column edges, the columns half under the pin are cut as well as the one at the right edge');
   assert.equal(cut(200), '12', 'at the end of the scroll, 3 to 5 are whole and only those under the pin are cut');
   assert.equal(cut(0).includes('0'), false, 'the pinned column is never hidden');
-  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8');
-  assert.match(css, /\.sticky \.is-cut \{ color: transparent; \}\s*\.sticky \.is-cut \* \{ visibility: hidden; \}/, 'its cells keep their lines and show no value');
+  const css = readCss('src/features/dashboard/dashboard.css');
+  assertRule(css, '.sticky .is-cut', { color: 'transparent' });
+  assertRule(css, '.sticky .is-cut *', { visibility: 'hidden' }, 'its cells keep their lines and show no value');
 });
 
 test('the key is opaque to the top of the scroll area: the page has no top padding to show through, and the key carries the 16px', () => {
-  const css = fs.readFileSync(path.join(dashboardDir, 'dashboard.css'), 'utf8');
-  assert.match(css, /\.dash-main \{[^}]*padding: 0 16px 16px;/, 'a sticky box stops at the padding, so there is none above it');
-  assert.match(css, /\.dash-main > :first-child \{ margin-top: 16px; \}/, 'the toolbar keeps its 16px as a margin');
-  assert.match(css, /\.keybar \{ position: sticky; top: 0;[^}]*margin-top: -16px; padding: 24px 0 8px; background: var\(--bg-app\); \}/, 'its own top padding covers what scrolls under it, up to its top edge');
+  const css = readCss('src/features/dashboard/dashboard.css');
+  assertRule(css, '.dash-main', { padding: '0 16px 16px' }, 'a sticky box stops at the padding, so there is none above it');
+  assertRule(css, '.dash-main > :first-child', { 'margin-top': '16px' }, 'the toolbar keeps its 16px as a margin');
+  assertRule(css, '.keybar', {
+    position: 'sticky', top: '0', 'margin-top': '-16px', padding: '24px 0 8px', background: 'var(--bg-app)',
+  }, 'its own top padding covers what scrolls under it, up to its top edge');
 });

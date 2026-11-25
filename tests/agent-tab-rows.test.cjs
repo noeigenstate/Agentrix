@@ -1,5 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -150,7 +151,13 @@ test('background tasks are listed with their terminal and age, and 后台 N 个�
   assert.match(read('src/features/workspace/ProjectPanel.tsx'), /<BackgroundBadge terminals=\{project\.terminals\} \/>/, 'the project header, which is the small card\'s too');
   assert.match(read('src/features/files/ProjectExplorer.tsx'), /agentBackground > 0 && <span className="explorer-tab-count explorer-tab-background"/, 'the Agent tab');
   const walk = dir => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(dir + '/' + entry.name) : [dir + '/' + entry.name]);
-  for (const file of walk('src/features/reading').filter(name => /\.(tsx?|css)$/.test(name))) assert.doesNotMatch(read(file), /BackgroundBadge|background-badge|后台 \{count\} 个运行中/, `${file}: nothing of it inside the reading view`);
+  const removed = /BackgroundBadge|background-badge|后台 \{count\} 个运行中/;
+  for (const file of walk('src/features/reading').filter(name => /\.tsx?$/.test(name))) assert.doesNotMatch(read(file), removed, `${file}: nothing of it inside the reading view`);
+  for (const file of walk('src/features/reading').filter(name => name.endsWith('.css'))) {
+    const css = readCss(file);
+    assert.deepEqual(css.blocks.filter(({ selector }) => removed.test(selector)), [], file);
+    assert.deepEqual(css.declarations.filter(({ property, value }) => removed.test(property) || removed.test(value)), [], file);
+  }
 
   // Every new sentence has its English.
   const english = JSON.parse(read('electron/locales/en.json'));
@@ -231,10 +238,11 @@ test('a background task that has an end time counts from it', () => {
 });
 
 test('the 15 s notice is a wrapping line of its own and the narrow header shortens the background badge', () => {
-  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-notice \{[^}]*flex-wrap: wrap/);
-  assert.match(css, /\.activity-call-notice > span \{[^}]*flex: 1 1 calc\(100% - 22px\)/);
-  assert.match(css, /@container \(max-width: 380px\) \{[^\n]*\.activity-background-long \{ display: none; \} \.activity-background-short \{ display: inline; \}/);
+  const css = readCss('src/features/agents/activity-pane.css'), narrow = '@container (max-width: 380px)';
+  assertRule(css, '.activity-call-notice', { 'flex-wrap': 'wrap' });
+  assertRule(css, '.activity-call-notice > span', { flex: '1 1 calc(100% - 22px)' });
+  assert.equal(css.rule('.activity-background-long', narrow).display, 'none');
+  assert.equal(css.rule('.activity-background-short', narrow).display, 'inline');
   const badge = fs.readFileSync(path.join(src, 'features/agents/BackgroundBadge.tsx'), 'utf8');
   assert.match(badge, /aria-label=/); assert.match(badge, /'后台 \{count\}'/);
   assert.equal(require('../electron/locales/en.json')['后台 {count}'], 'Background {count}');
@@ -247,10 +255,10 @@ test('the notice actions are small buttons on their own line, a starting group h
   assert.ok(html.indexOf('activity-call-notice-actions') > html.indexOf('已等 15 秒'), 'the actions follow the text');
   assert.doesNotMatch(html, /Sonnet 5\.5（未确认）/, 'the head drops the mark; the row says 启动中 · 未确认');
   assert.ok(html.includes('启动中 · 未确认'));
-  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-notice > \.activity-call-notice-actions \{[^}]*flex: 1 1 100%/);
-  assert.doesNotMatch(css, /\.activity-call-notice button/, 'no hand-made link buttons');
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-call-notice > .activity-call-notice-actions', { flex: '1 1 100%' });
+  assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('.activity-call-notice button')), [], 'no hand-made link buttons');
   const grid = fs.readFileSync(path.join(src, 'features/terminal/ProjectTerminals.tsx'), 'utf8');
   assert.match(grid, /gridColumn: `span \$\{spare \+ 1\}`/, 'the last split takes the cells a short last row leaves');
-  assert.match(fs.readFileSync(path.join(src, 'features/files/files.css'), 'utf8'), /\.explorer-tabs \{[^}]*flex-wrap: wrap/, 'the tab row wraps instead of scrolling');
+  assertRule(readCss('src/features/files/files.css'), '.explorer-tabs', { 'flex-wrap': 'wrap' }, 'the tab row wraps instead of scrolling');
 });

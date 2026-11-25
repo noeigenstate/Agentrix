@@ -1,5 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -529,9 +530,11 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------
 const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', cliActive: true, agent: 'claude', readingHistory: false });
 test('a viewable row is a plain block row with one full-width button: the row has no grid of its own, so the button never lands in the 16px icon column', () => {
-  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
-  assert.match(css, /\.activity-call-rows li\.activity-call-item \{ display: block; height: auto; \}/, 'the row is a plain block, so the button fills it');
-  assert.match(css, /\.activity-call-rows li\.activity-call-item > \.activity-call-body \{ display: grid; grid-template-columns: 16px minmax\(0, 1fr\);/, 'the button (or the div of a plain call) carries the icon column and the two lines inside');
+  const css = readCss('src/features/agents/activity-pane.css');
+  assertRule(css, '.activity-call-rows li.activity-call-item', { display: 'block', height: 'auto' }, 'the row is a plain block, so the button fills it');
+  assertRule(css, '.activity-call-rows li.activity-call-item > .activity-call-body', {
+    display: 'grid', 'grid-template-columns': '16px minmax(0, 1fr)',
+  }, 'the button (or the div of a plain call) carries the icon column and the two lines inside');
 });
 
 const gridMarkup = (terminals, focused) => renderToStaticMarkup(React.createElement(load('features/terminal/ProjectTerminals.tsx').ProjectTerminals, {
@@ -670,18 +673,19 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
 }));
 
 test("the chip's popover is the Agent tab's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
-  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = read('features/agents/subagent-chip.css');
-  assert.match(css, /\.subagent-menu \{ --flow-line: var\(--divider\); --flow-ink: var\(--text-1\); --flow-muted: var\(--text-2\); --flow-faint: var\(--text-3\);/, 'the pane\'s ink levels');
-  assert.match(css, /\.subagent-menu \{[^}]*background: var\(--bg-menu\);/);
-  assert.doesNotMatch(css, /\.subagent-menu \{[^}]*box-shadow/, 'no new shadow');
+  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = readCss('src/features/agents/subagent-chip.css');
+  assertRule(css, '.subagent-menu', {
+    '--flow-line': 'var(--divider)', '--flow-ink': 'var(--text-1)', '--flow-muted': 'var(--text-2)', '--flow-faint': 'var(--text-3)', background: 'var(--bg-menu)',
+  }, "the pane's ink levels and the menu fill");
+  assert.equal(css.rule('.subagent-menu')['box-shadow'], undefined, 'no new shadow');
   assert.doesNotMatch(read('features/agents/SubagentChip.tsx').replace(/\/\/.*$/gm, ''), /\b(openSplit|toggleSplit|closeSplit)\(|window\.agentrix|writeTerminal|onFocus|onExpand/);
 });
 
 test("a sub-agent view's hint stays on one line, so the box keeps its 36px at any width while typed text still grows it", () => {
-  const css = fs.readFileSync(path.join(src, 'features/reading/reading.css'), 'utf8');
+  const css = readCss('src/features/reading/reading.css');
   assert.match(fs.readFileSync(path.join(src, 'features/agents/SubagentInput.tsx'), 'utf8'), /subagent-input-row reading-composer/);
-  assert.match(css, /\.reading-composer textarea::placeholder \{ color: var\(--text-2\); white-space: nowrap; overflow: hidden; \}/);
-  assert.match(css, /\.reading-composer textarea \{[^}]*field-sizing: content;[^}]*min-height: 32px;/);
+  assertRule(css, '.reading-composer textarea::placeholder', { color: 'var(--text-2)', 'white-space': 'nowrap', overflow: 'hidden' });
+  assertRule(css, '.reading-composer textarea', { 'field-sizing': 'content', 'min-height': '32px' });
 });
 
 test('two splits of one model are told apart by their task: it leads the header and every accessible name, the model follows', () => zh(() => {
@@ -707,13 +711,14 @@ test('a worker that has not reported its model is named by the requested one as 
 }));
 
 test('the task keeps the header’s width: only the state, the clock and the close button share its row, who it is goes on one quiet line under it, and the header stays above the feed', () => zh(() => {
-  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  const css = readCss('src/features/agents/activity-pane.css');
   const row = paneMarkup(ok({})).match(/<div class="subagent-head-row">(.*?)<\/div>/)[1];
   assert.deepEqual([...row.matchAll(/class="([^"]+)"/g)].map(match => match[1]), ['agent-brand-icon agent-brand-codex', 'subagent-title', 'subagent-tag subagent-state is-running', 'subagent-elapsed', 'icon-button'], 'no role, model, settings or speed beside the task');
-  assert.match(css, /\.subagent-title \{ flex: 1 1 0; min-width: 0; overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
-  assert.match(css, /\.subagent-meta \{ overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap; \}/);
-  assert.match(css, /\.subagent-body \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0, #000 14px\);/, 'a line scrolled under the header fades instead of showing half');
-  assert.match(css, /\.subagent-head \{ position: relative; z-index: 1;[^}]*background: var\(--bg-app\); \}/, 'the feed scrolling to its end clips under the header, never over it');
+  const clipped = { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' };
+  assertRule(css, '.subagent-title', { ...clipped, flex: '1 1 0', 'min-width': '0' });
+  assertRule(css, '.subagent-meta', clipped);
+  assertRule(css, '.subagent-body', { 'mask-image': 'linear-gradient(to bottom, transparent 0, #000 14px)' }, 'a line scrolled under the header fades instead of showing half');
+  assertRule(css, '.subagent-head', { position: 'relative', 'z-index': '1', background: 'var(--bg-app)' }, 'the feed scrolling to its end clips under the header, never over it');
 }));
 
 // A sub-agent inside the session has no direct channel (main answers 未送达 for it), so its split offers no box, only the reason; a dispatched worker keeps its box.

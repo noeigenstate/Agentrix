@@ -1,5 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -233,18 +234,24 @@ test('the panel is the approved sheet: mark, title, command and three buttons; a
 });
 
 test('the panel’s style takes colours, radii and tokens from the app: no literal colour, the radii of the sheet, and every variable exists', () => {
-  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = read('features/native-session/native-panel.css'), themes = read('shared/styles/themes.css'), base = read('shared/styles/styles.css') + read('shared/styles/typography.css');
-  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /#[0-9a-f]{3,8}\b|\brgba?\((?!0 0 0 \/ \.35\)|from var\(--text-1\) r g b)|\b(hsl|oklch|lab)\(/i, 'only the shadow’s black and ink derived from --text-1');
-  const defined = new Set([...(themes + base + css).matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1])), used = [...css.matchAll(/var\((--[\w-]+)/g)].map(match => match[1]);
+  const css = readCss('src/features/native-session/native-panel.css');
+  const sheets = [css, readCss('src/shared/styles/themes.css'), readCss('src/shared/styles/styles.css'), readCss('src/shared/styles/typography.css')];
+  const literal = /#[0-9a-f]{3,8}\b|\brgba?\((?!0 0 0 \/ \.35\)|from var\(--text-1\) r g b)|\b(hsl|oklch|lab)\(/i;
+  assert.deepEqual(css.declarations.filter(({ value }) => literal.test(value)), [], 'only the shadow’s black and ink derived from --text-1');
+  const defined = new Set(sheets.flatMap(sheet => sheet.declarations.filter(({ property }) => property.startsWith('--')).map(({ property }) => property)));
+  const used = css.declarations.flatMap(({ value }) => [...value.matchAll(/var\((--[\w-]+)/g)].map(match => match[1]));
   assert.deepEqual([...new Set(used)].filter(name => !defined.has(name)), [], 'no variable that nothing defines');
-  assert.deepEqual([...new Set([...css.matchAll(/--(track|seg-\d)\s*:[^;]*;/g)].flatMap(match => match[0].match(/#[0-9a-f]{3,8}/gi) ?? []))], [], 'the track and the parts are mixed from existing tokens');
-  const rule = selector => css.match(new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`, 'm'))?.[1] ?? '';
-  assert.match(rule('.native-panel'), /border-radius: 16px/); assert.match(rule('.native-panel'), /width: min\(520px, calc\(100% - 32px\)\)/); assert.match(rule('.native-panel'), /max-height: calc\(100% - 132px\)/);
-  for (const selector of ['.native-panel-cmd', '.native-panel-chip', '.native-toast']) assert.match(rule(selector), /border-radius: 999px/, selector);
-  assert.match(rule('.native-panel-meter'), /border-radius: 999px/); assert.match(rule('.native-panel-alert'), /border-radius: 8px/); assert.match(rule('.native-panel-suggest button'), /border-radius: 8px/);
-  assert.match(rule('.native-panel-rows'), /grid-template-columns: 96px 1fr/); assert.match(css, /animation: native-panel-rise \.16s ease-out/);
-  assert.match(rule('.native-panel-scrim'), /color-mix\(in srgb, var\(--bg-app\) 70%, transparent\)/, 'the page colour at the strength the reading view’s own overlay uses'); assert.match(rule(':root[data-theme="light"] .native-panel-scrim'), /var\(--bg-app\) 35%/, 'and very light in the light theme');
-  assert.match(rule('.native-panel-quota.is-out .native-panel-meter > i'), /var\(--danger\)/); assert.match(rule('.native-panel-meter > i'), /var\(--usage\)/);
+  const trackColors = css.declarations.filter(({ property, value }) => /^--(track|seg-\d)$/.test(property) && /#[0-9a-f]{3,8}/i.test(value));
+  assert.deepEqual(trackColors, [], 'the track and the parts are mixed from existing tokens');
+  assertRule(css, '.native-panel', { 'border-radius': '16px', width: 'min(520px, calc(100% - 32px))', 'max-height': 'calc(100% - 132px)' });
+  for (const selector of ['.native-panel-cmd', '.native-panel-chip', '.native-toast', '.native-panel-meter']) assertRule(css, selector, { 'border-radius': '999px' });
+  for (const selector of ['.native-panel-alert', '.native-panel-suggest button']) assertRule(css, selector, { 'border-radius': '8px' });
+  assertRule(css, '.native-panel-rows', { 'grid-template-columns': '96px 1fr' });
+  assert.ok(css.declarations.some(({ property, value }) => property === 'animation' && value === 'native-panel-rise .16s ease-out'));
+  assertRule(css, '.native-panel-scrim', { background: 'color-mix(in srgb, var(--bg-app) 70%, transparent)' }, 'the page colour at the strength the reading view’s own overlay uses');
+  assertRule(css, ':root[data-theme="light"] .native-panel-scrim', { background: 'color-mix(in srgb, var(--bg-app) 35%, transparent)' }, 'and very light in the light theme');
+  assertRule(css, '.native-panel-quota.is-out .native-panel-meter > i', { background: 'var(--danger)' });
+  assertRule(css, '.native-panel-meter > i', { background: 'var(--usage)' });
 });
 
 // A window with the listeners, selection and size observers the panel needs; `close()` hands the globals back. A key goes to every listener of the window in
@@ -1641,15 +1648,15 @@ test('the requests and the switch question stand at the end of the timeline on t
   const html = await viewHtml(richSession), content = html.slice(html.indexOf('reading-content'), html.indexOf('class="reading-composer"'));
   assert.match(content, /<div class="native-tail">/); assert.ok(content.indexOf('reading-step is-agent') < content.indexOf('native-tail'), 'the request waits at the end of the conversation');
   assert.doesNotMatch(html, /reading-choice-host|native-summary|native-requests/, 'no host below the conversation whose card would scroll inside it');
-  const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8');
-  assert.match(css, /\.native-tail \{[^}]*margin-left: var\(--reading-inset\);/, 'the same left edge as the reply text and the tool pills');
-  assert.match(css, /\.native-tail \.native-request \{ max-height: none; overflow: visible; \}/, 'the base card’s 45vh cap and scrollbar are off');
+  const css = readCss('src/features/native-session/native-session.css');
+  assertRule(css, '.native-tail', { 'margin-left': 'var(--reading-inset)' }, 'the same left edge as the reply text and the tool pills');
+  assertRule(css, '.native-tail .native-request', { 'max-height': 'none', overflow: 'visible' }, 'the base card’s 45vh cap and scrollbar are off');
   assert.doesNotMatch(await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null })]), /native-tail/, 'nothing to show, no empty wrapper');
 });
 
 test('only what the reading view does not have stays in native-session.css', () => {
-  const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  const classes = new Set(css.match(/\.native-[a-z-]+/g));
+  const css = readCss('src/features/native-session/native-session.css');
+  const classes = new Set(css.blocks.flatMap(({ selector }) => selector.match(/\.native-[a-z-]+/g) ?? []));
   assert.deepEqual([...classes].sort(), ['.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
     'no header, step, receipt, diff or plan style of its own');
 });
