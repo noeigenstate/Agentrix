@@ -50,7 +50,8 @@ test('platform verification also finds nested production dependencies', t => {
   assert.throws(() => verifyInstall(root));
 });
 test('build configuration pins the SDK, keeps its dependency graph and cleans ignored-script CI installs', () => {
-  assert.equal(dependencies['@anthropic-ai/claude-agent-sdk'], '0.3.317');
+  assert.match(dependencies['@anthropic-ai/claude-agent-sdk'], /^\d+\.\d+\.\d+$/, 'an exact version, never a range');
+  assert.equal(require('../package-lock.json').packages['node_modules/@anthropic-ai/claude-agent-sdk'].version, dependencies['@anthropic-ai/claude-agent-sdk']);
   assert.ok(scripts.postinstall.includes('claude-sdk-pack.cjs --clean'));
   assert.ok(build.asarUnpack.includes('node_modules/@anthropic-ai/claude-agent-sdk/**/*'));
   assert.ok(![...build.asarUnpack, ...build.mac.asarUnpack].includes('node_modules/**/*'));

@@ -10,7 +10,9 @@ const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.c
 // checkout, and a clean one has no folder for it.
 const evidence = (t, name) => { const file = path.join(os.tmpdir(), name); t.diagnostic(`evidence: ${file}`); return file; };
 
-for (const [version, variable] of [['2.1.317', 'AGENTRIX_REAL_CLAUDE'], ['2.1.318', 'AGENTRIX_REAL_CLAUDE_318']]) {
+// AGENTRIX_REAL_CLAUDE is the CLI of the locked SDK (0.3.x ships Claude Code 2.1.x).
+const locked = '2.1.' + require('../package-lock.json').packages['node_modules/@anthropic-ai/claude-agent-sdk'].version.split('.')[2];
+for (const [version, variable] of [[locked, 'AGENTRIX_REAL_CLAUDE'], ['2.1.318', 'AGENTRIX_REAL_CLAUDE_318']]) {
   for (const mode of ['default', 'window', 'setting-window', 'pct', 'pct-control', 'disabled-setting', 'disabled-env', 'disabled-compact', 'reactive', 'failure']) test(`real Claude ${version} auto compact ${mode}`, {
     skip: !process.env[variable] && `set ${variable}`, timeout: 45000,
   }, async t => {

@@ -26,7 +26,7 @@ test('real Claude streaming usage reaches the main native rate before the turn r
   });
   f.env.AGENTRIX_DATA_DIR = path.join(f.cwd, 'profile');
   const version = spawnSync(process.env.AGENTRIX_REAL_CLAUDE, ['--version'], { env: f.env, encoding: 'utf8' });
-  assert.equal(version.status, 0); assert.match(version.stdout, /^2\.1\.317\b/);
+  assert.equal(version.status, 0); assert.match(version.stdout, /^\d+\.\d+\.\d+ \(Claude Code\)/, 'the locked CLI answers its version');
   const raw = [], events = [], usage = createNativeUsage('claude');
   const runtime = createClaudeRuntime({ directory: path.join(f.cwd, 'state'), resolveExecutable: async () => process.env.AGENTRIX_REAL_CLAUDE,
     loadSdk: async () => ({ ...f.sdk, query(options) {
