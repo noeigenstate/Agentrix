@@ -97,6 +97,9 @@ def run_case(case):
 
 
 def run_worker_case(case, worker):
+    # The worker writes launch words and never reads them; its output is checked in remote-worker.test.cjs.
+    if case["kind"] == "words":
+        return run_case(case)
     text = fixture_text(case)
     options = {name: case[name] for name in ("format", "versions") if name in case}
     try:
