@@ -4,12 +4,16 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
-const { queueControl, recordControl, controlOf } = require('./inbox.cjs');
+const { queueControl, recordControl, controlOf, readBoard, boardEntry } = require('./inbox.cjs');
 const { globRegExp } = require('../../boundaries.cjs');
+const { readEnvelope } = require('../agents/dispatch-events.cjs');
 
 const FINDINGS = '## Findings for the ledger';
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return ''; throw error; } };
+const read = (file, missing = '', encoding = 'utf8') => {
+  try { return fs.readFileSync(file, encoding); } catch (error) { if (error.code === 'ENOENT') return missing; throw error; }
+};
+const jsonLine = value => JSON.stringify(value) + '\n';
 const nonnegative = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 
 function projectTeam(cwd, create = false) {
@@ -55,9 +59,85 @@ const paths = text => (text.toLowerCase().replaceAll('\\', '/').match(/[\p{L}\d_
     return file.includes('/') ? [file, file.split('/').at(-1)] : [file];
   });
 
-const memoryEntry = /^(?:### \d{4}-\d{2}-\d{2}(?=[T\s])|## Round\b)/;
+const memoryPath = file => path.join(path.dirname(file), path.parse(file).name + '.jsonl');
+const memoryEntry = ({ at = Date.now(), title, text, runId, source }) => ({
+  v: 1, type: 'memory.entry', at, title, text, ...(runId && { runId }), ...(source && { source }),
+});
+const trimBlankLines = text => text.replace(/^(?:[ \t]*\r?\n)+|(?:\r?\n[ \t]*)+$/g, '');
+
+// Legacy import only. Keep free text before the first heading and all text between headings.
+function importLegacyMemory(original) {
+  const markdown = original.replace(/^\uFEFF/, '');
+  const headings = [...markdown.matchAll(/^(?:### \d{4}-\d{2}-\d{2}(?=[T\s]|$)|## Round\b)[^\r\n]*/gm)];
+  const entries = headings.map(({ 0: title, index }, position) => {
+    const text = trimBlankLines(markdown.slice(index + title.length, headings[position + 1]?.index));
+    const stamp = title.slice(4).split(' · ', 1)[0].replace(' ', 'T');
+    const at = Date.parse(/T\d\d:\d\d(?::\d\d)?$/.test(stamp) ? stamp + 'Z' : stamp);
+    return memoryEntry({ at: Number.isFinite(at) ? at : 0, title, text, source: 'legacy-markdown' });
+  });
+  const preface = trimBlankLines(markdown.slice(0, headings[0]?.index));
+  if (preface) entries.unshift(memoryEntry({ at: 0, title: '', text: preface, source: 'legacy-preface' }));
+  return entries;
+}
+
+function writeMemoryFile(file, text, once = false) {
+  const temporary = file + '.' + randomUUID() + '.tmp';
+  const fd = fs.openSync(temporary, 'wx', 0o600);
+  try {
+    try { fs.writeFileSync(fd, text); } finally { fs.closeSync(fd); }
+    if (once) fs.linkSync(temporary, file);
+    else fs.renameSync(temporary, file);
+  } catch (error) {
+    if (!once || error.code !== 'EEXIST') throw error;
+  } finally { fs.rmSync(temporary, { force: true }); }
+}
+
+function initializeMemory(markdownFile, file) {
+  const original = read(markdownFile, null, null);
+  const backup = path.join(path.dirname(markdownFile), path.parse(markdownFile).name + '.legacy.md');
+  if (original !== null) writeMemoryFile(backup, original, true);
+  // Publish only a complete import, and let concurrent worktrees use the same original snapshot.
+  writeMemoryFile(file, importLegacyMemory(read(backup)).map(jsonLine).join(''), true);
+  return read(file);
+}
+
+const memoryHeading = ({ title, source }) => source === 'legacy-markdown' || !title ? title : '### ' + title;
+function renderMemoryEntry(entry) {
+  const { text } = entry;
+  return [memoryHeading(entry), typeof text === 'string' ? text : JSON.stringify(text)].filter(Boolean).join('\n\n');
+}
+
+function syncMemory(markdownFile, file, addition) {
+  let data = read(file, null) ?? initializeMemory(markdownFile, file);
+  for (;;) {
+    const rows = data.split(/\r?\n/).filter(line => line.trim()).map(line => {
+      const { value } = readEnvelope(line, { channel: 'memory.jsonl', legacy: false });
+      if (value.type !== 'memory.entry' || !nonnegative(value.at) || typeof value.title !== 'string'
+          || !(typeof value.text === 'string' || value.text && typeof value.text === 'object' && !Array.isArray(value.text))) {
+        throw Object.assign(new Error('memory.jsonl: invalid memory entry'), { code: 'wire.invalid' });
+      }
+      return value;
+    });
+    if (addition) {
+      const entry = memoryEntry(addition);
+      const line = (data && !data.endsWith('\n') ? '\n' : '') + jsonLine(entry);
+      fs.appendFileSync(file, line);
+      data += line;
+      rows.push(entry);
+      addition = null;
+    }
+    const text = rows.map(renderMemoryEntry).join('\n\n');
+    const rendered = text && text + '\n';
+    if (read(markdownFile, null) !== rendered) writeMemoryFile(markdownFile, rendered);
+    const current = read(file);
+    if (current === data) return rows;
+    // A worktree can append while a synchronous brief is refreshing the human view.
+    data = current;
+  }
+}
+
 const truncated = '\n\n[Entry truncated]';
-function fitEntry(entry, budget) {
+function fitEntry(entry, heading, budget) {
   if (Buffer.byteLength(entry) <= budget) return entry;
   const available = budget - Buffer.byteLength(truncated);
   const paragraphs = entry.replaceAll('\r\n', '\n').split(/\n[ \t]*\n/);
@@ -68,11 +148,10 @@ function fitEntry(entry, budget) {
     if (bytes + size > available) break;
     kept.push(paragraph); bytes += size;
   }
-  const heading = entry.split('\n', 1)[0].trimEnd();
   if (kept.length) return kept.join('\n\n') + truncated;
   if (available < 1) return '';
   let clipped = '';
-  for (const char of heading) {
+  for (const char of heading.trimEnd()) {
     bytes += Buffer.byteLength(char);
     if (bytes > available) break;
     clipped += char;
@@ -80,19 +159,19 @@ function fitEntry(entry, budget) {
   return clipped + truncated;
 }
 
-function memoryExcerpt(text, { allow = [], brief = '' } = {}) {
+function memoryExcerpt(rows, { allow = [], brief = '' } = {}) {
   const taskWords = new Set(words(brief)), taskPaths = new Set(paths(brief));
   const globs = allow.map(glob => globRegExp(glob.toLowerCase()));
-  const entries = text.split(/(?=^### \d{4}-\d{2}-\d{2}(?=[T\s])|^## Round\b|^# )/m)
-    .map(entry => entry.trim()).filter(entry => memoryEntry.test(entry)).reverse();
+  const entries = rows.filter(entry => entry.source !== 'legacy-preface').reverse();
   const chosen = [];
   let remaining = MEMORY_LIMIT;
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, row] of entries.entries()) {
+    const entry = renderMemoryEntry(row);
     if (index >= 2 && !paths(entry).some(file => taskPaths.has(file) || globs.some(glob => glob.test(file)))
         && !words(entry).some(word => taskWords.has(word))) continue;
     const gap = chosen.length ? 2 : 0;
-    const reserve = index === 0 && entries.length > 1 ? Math.min(MEMORY_LIMIT / 2, Buffer.byteLength(entries[1]) + 2) : 0;
-    const excerpt = fitEntry(entry, remaining - gap - reserve);
+    const reserve = index === 0 && entries.length > 1 ? Math.min(MEMORY_LIMIT / 2, Buffer.byteLength(renderMemoryEntry(entries[1])) + 2) : 0;
+    const excerpt = fitEntry(entry, memoryHeading(row), remaining - gap - reserve);
     if (!excerpt) continue;
     chosen.push(excerpt);
     remaining -= Buffer.byteLength(excerpt) + gap;
@@ -100,14 +179,20 @@ function memoryExcerpt(text, { allow = [], brief = '' } = {}) {
   return chosen.join('\n\n');
 }
 
-// Findings reach project memory as well as an explicit task ledger, with one append when they are the same file.
-function recordFindings(options, answer, header) {
+// Legacy 1.6.4 fallback for workers that returned only final text.
+function legacyFindings(answer) {
   const at = answer.indexOf(FINDINGS);
-  if (at < 0) return false;
-  const findings = answer.slice(at + FINDINGS.length).split(/\n#{1,2} /)[0].trim();
-  const destinations = [...new Set([options.memory, options.ledger].filter(Boolean).map(file => path.resolve(file)))];
-  if (!findings || !destinations.length) return false;
-  for (const file of destinations) fs.appendFileSync(file, `\n\n### ${header}\n\n${findings}\n`);
+  return at < 0 ? '' : answer.slice(at + FINDINGS.length).split(/\n#{1,2} /)[0].trim();
+}
+
+function recordFindings({ memory, ledger }, findings, header, runId) {
+  const structured = Array.isArray(findings);
+  const text = structured ? findings.filter(item => typeof item === 'string' && item.trim()).map(item => '- ' + item.trim()).join('\n')
+    : typeof findings === 'string' ? legacyFindings(findings) : '';
+  if (!text || !(memory || ledger)) return false;
+  const entry = { title: String(header).replace(/[\r\n]/g, ' '), text, runId, source: structured ? 'findings' : 'legacy-findings' };
+  if (memory) syncMemory(memory, memoryPath(memory), entry);
+  if (ledger && (!memory || path.resolve(ledger) !== path.resolve(memory))) fs.appendFileSync(ledger, '\n\n' + renderMemoryEntry(entry) + '\n');
   return true;
 }
 
@@ -115,15 +200,24 @@ class Team {
   constructor(directory, cwd) {
     this.directory = directory; this.cwd = cwd;
     this.memory = path.join(directory, 'memory.md');
+    this.memoryJsonl = memoryPath(this.memory);
     this.journal = path.join(directory, 'journal.jsonl');
     this.board = path.join(directory, 'board');
   }
   entries() {
     return read(this.journal).split(/\r?\n/).filter(Boolean).flatMap(line => {
-      try { const entry = JSON.parse(line); return entry && typeof entry === 'object' && !Array.isArray(entry) ? [entry] : []; } catch { return []; }
+      try { return [readEnvelope(line, { channel: 'journal.jsonl' }).value]; }
+      catch (error) { if (error.code === 'wire.unsupported_version') throw error; return []; }
     });
   }
-  append(entry) { fs.appendFileSync(this.journal, JSON.stringify({ ...entry, time: Date.now() }) + '\n'); }
+  append(entry) { fs.appendFileSync(this.journal, jsonLine({ ...entry, v: 1, time: Date.now() })); }
+  appendMemory(entry) { syncMemory(this.memory, this.memoryJsonl, entry); }
+  appendReceipt(record) {
+    const { id, at, messageId, status, reason } = record;
+    this.append({ type: 'control-receipt', id, messageId, status, at, ...(reason !== undefined && { reason }) });
+    this.appendMemory({ at, title: `${new Date(at).toISOString()} · owner intervention receipt`, runId: id, source: 'control-receipt',
+      text: { messageId, status, ...(reason !== undefined && { reason }) } });
+  }
   queueControl(id, control, notify) { return queueControl(this, id, control, notify); }
   recordControl(id, title, control, notify) { return this.locked(() => recordControl(this, id, title, controlOf(control), notify)); }
   async locked(action) {
@@ -174,11 +268,11 @@ class Team {
       const file = path.join(this.board, name);
       let entry, alive = false;
       try {
-        entry = JSON.parse(read(file));
-        if (Number.isSafeInteger(entry.pid) && entry.pid > 0 && Array.isArray(entry.allow) && entry.allow.every(glob => typeof glob === 'string')) {
+        entry = readBoard(read(file));
+        if (entry) {
           try { process.kill(entry.pid, 0); alive = true; } catch (error) { alive = error.code === 'EPERM'; }
         }
-      } catch {}
+      } catch (error) { if (error.code?.startsWith('wire.')) throw error; }
       if (alive) entries.push(entry);
       else fs.rmSync(file, { force: true });
     }
@@ -188,7 +282,7 @@ class Team {
     const entry = { id, pid: process.pid, title: options.title, role: options.role, agent: options.agent, model: options.model,
       cwd: options.cwd, allow: options.allow, startedAt: Date.now() };
     const temporary = path.join(this.board, id + '.tmp');
-    fs.writeFileSync(temporary, JSON.stringify(entry));
+    fs.writeFileSync(temporary, jsonLine(boardEntry(entry)));
     fs.renameSync(temporary, path.join(this.board, id + '.json'));
   }
   release(id) {
@@ -211,13 +305,13 @@ class Team {
     const pointer = readOnly && outside
       ? 'The full project memory is outside the role folder and cannot be read from this role. The lead can supply an entry on request.'
       : `Full project memory: ${this.memory}`;
-    const memory = small ? [] : [`# Project memory\n\n${pointer}\n\n${memoryExcerpt(read(this.memory), { allow, brief })}`.trimEnd()];
+    const memory = small ? [] : [`# Project memory\n\n${pointer}\n\n${memoryExcerpt(syncMemory(this.memory, this.memoryJsonl), { allow, brief })}`.trimEnd()];
     return [...memory, `# Working now\n\n${working || '- none'}`,
       `# Repository\n\n${lines.slice(0, 40).join('\n') || '(clean)'}${lines.length > 40 ? `\n… and ${lines.length - 40} more` : ''}\n\n${log || '(no commits)'}`];
   }
   finish(options, report) {
     return this.locked(() => {
-      recordFindings({ ...options, memory: this.memory }, report.answer, report.header);
+      recordFindings({ ...options, memory: this.memory }, report.findings ?? report.answer, report.header, report.id);
       this.append({ type: 'end', id: report.id, agent: options.agent, title: String(options.title || '').slice(0, 240), session: report.session || options.resume || null,
         role: options.role, kind: report.kind ?? null, model: report.model || 'unreported',
         reason: report.reason, outputTokens: nonnegative(report.outputTokens) ? report.outputTokens : null,

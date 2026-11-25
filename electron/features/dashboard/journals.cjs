@@ -3,6 +3,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { readJsonl } = require('./jsonl.cjs');
+const { readEnvelope } = require('../agents/dispatch-events.cjs');
 
 const execute = promisify(execFile);
 const RETRY_MIN = 1000, RETRY_MAX = 60_000;
@@ -12,6 +13,11 @@ async function gitCommon(projectPath) {
     const { stdout } = await execute('git', ['rev-parse', '--git-common-dir'], { cwd, windowsHide: true, timeout: 5000, maxBuffer: 8192 });
     return await fs.promises.realpath(path.resolve(cwd, stdout.trim()));
   } catch { return null; }
+}
+
+async function readJournal(file) {
+  const rows = await readJsonl(file, { version: null, timeKey: 'time' });
+  return rows.map(row => readEnvelope(row, { channel: 'journal.jsonl' }).value);
 }
 
 class DashboardJournals {
@@ -100,7 +106,7 @@ class DashboardJournals {
     await this.sync();
     const histories = new Map();
     for (const project of this.projects) if (!histories.has(project.common)) {
-      histories.set(project.common, readJsonl(path.join(project.directory, 'journal.jsonl'), { version: null, timeKey: 'time' }));
+      histories.set(project.common, readJournal(path.join(project.directory, 'journal.jsonl')));
     }
     return Promise.all(this.projects.map(async project => ({ projectId: project.id, project: project.name, key: project.common,
       entries: await histories.get(project.common) })));

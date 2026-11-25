@@ -43,6 +43,19 @@ test('journal reads are bounded and watchers always use native real paths, inclu
   source.stop(); assert.ok(watched.every(entry => entry.watcher.closed));
 });
 
+test('dashboard reads historical and version-one journal rows and reports unsupported versions', async t => {
+  const { directory, common, file } = lab(t);
+  const source = new DashboardJournals({ getProjects: () => [{ id: 'a', path: directory }], changed() {}, resolveCommon: async () => common });
+  t.after(() => source.stop());
+  const rows = [{ type: 'incident', time: 1, cause: 'old' }, { v: 1, type: 'finding', time: 2, title: 'new' }];
+  const original = rows.map(row => JSON.stringify(row) + '\n').join('');
+  fs.writeFileSync(file, original);
+  assert.deepEqual((await source.read())[0].entries, rows);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  fs.appendFileSync(file, '{"v":7,"type":"finding","time":3}\n');
+  await assert.rejects(source.read(), { code: 'wire.unsupported_version', message: 'journal.jsonl: unsupported version 7' });
+});
+
 test('opening a dashboard before Team exists observes creation and begins watching its journal', async t => {
   const { directory, common, journalDirectory, file } = lab(t, false);
   const watched = []; let changes = 0;
