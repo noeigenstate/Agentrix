@@ -33,7 +33,7 @@ const isolatedTest = (name, run) => test(name, {
   skip: process.platform !== 'darwin' ? 'macOS filesystem isolation is required' : false,
 }, run);
 
-function fakeDispatchModule(settingsFile) {
+function fakeDispatchModule(settingsFile, helperFormat) {
   const fs = require('node:fs');
   const path = require('node:path');
   const net = require('node:net');
@@ -100,11 +100,11 @@ function fakeDispatchModule(settingsFile) {
       fs.writeFileSync(childBrief, 'Implement the requested change yourself.');
       const result = spawnSync(process.execPath, [entry, 'codex', '--role', '执行', '--title', 'Build fixture',
         '--model', 'gpt-6.1-sol', '--effort', 'max', '--fast', '--cwd', childCwd, '--brief', childBrief,
-        '--out', childOut, '--kind', 'core', '--allow', 'src/**'],
+        '--out', childOut, '--kind', 'core', '--allow', 'src/**', '--events', 'jsonl'],
         { encoding: 'utf8', timeout: 15000 });
       if (result.status !== 0) throw new Error(result.stdout + result.stderr);
       tell({ kind: 'nested', output: result.stdout });
-      const childId = /\[dispatch\] ended ([\w-]+)/.exec(result.stdout)[1];
+      const childId = result.stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'dispatch.ended').id;
       const journal = path.join(cwd, '.git/agentrix'); fs.mkdirSync(journal, { recursive: true });
       fs.writeFileSync(path.join(journal, 'journal.jsonl'), [
         { type: 'end', id: 'plan', kind: 'investigate', activeMs: 120 },
@@ -119,12 +119,15 @@ function fakeDispatchModule(settingsFile) {
     fs.writeFileSync('plan.md', 'LEAD_NOTE_ONLY\n');
     tell({ kind: 'answer', text: 'Done' });
   }
-  module.exports.run = async function(args, { env, launch }) {
+  for (const key of ['dispatchEvent', 'detachedEnd', 'renderDispatchLine']) {
+    Object.defineProperty(module.exports, key, { get: () => require(helperFormat)[key] });
+  }
+  module.exports.run = async function(args, { env, launch, detached }) {
     env = { ...env, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) };
-    const value = name => args[args.indexOf(name) + 1], id = randomUUID();
+    const value = name => args[args.indexOf(name) + 1], id = detached?.id ?? randomUUID();
     const cwd = value('--cwd'), out = value('--out'), model = value('--model'), role = value('--role');
     const send = event => globalThis.__AGENTRIX_LAB_SINK(event);
-    process.stdout.write('[lab-fixture-call] ' + JSON.stringify(args) + '\n');
+    process.stderr.write('[lab-fixture-call] ' + JSON.stringify(args) + '\n');
     await send({ type: 'dispatch-start', id, agent: args[0], model, role, kind: value('--kind'), cwd,
       startedAt: Date.now(), title: value('--title'), fast: args.includes('--fast'), effort: value('--effort') });
     const child = launch(process.execPath, ['-e', '(' + fakeModel.toString() + ')()'], {
@@ -141,11 +144,11 @@ function fakeDispatchModule(settingsFile) {
       const lines = output.split('\n'); output = lines.pop();
       for (const line of lines) {
         const message = JSON.parse(line);
-        if (message.kind === 'nested') process.stdout.write(message.output);
+        if (message.kind === 'nested') process.stderr.write(message.output);
         if (message.kind === 'answer') fs.writeFileSync(out, message.text);
-        if (message.kind === 'proof') process.stdout.write('[lab-fixture-proof] ' + JSON.stringify(message.proof) + '\n');
+        if (message.kind === 'proof') process.stderr.write('[lab-fixture-proof] ' + JSON.stringify(message.proof) + '\n');
         if (message.kind === 'orphan') {
-          process.stdout.write('[lab-fixture-orphan] ' + message.pid + '\n');
+          process.stderr.write('[lab-fixture-orphan] ' + message.pid + '\n');
           if (env.LAB_FAKE_LIVE_COST) void send({ type: 'dispatch-rate', id,
             reportedCostUsd: Number(env.LAB_FAKE_LIVE_COST), outputTokens: 100, activeMs: 1000 });
         }
@@ -162,9 +165,9 @@ function fakeDispatchModule(settingsFile) {
       outputTokens: 40, totalOutputTokens: 50, activeMs: 2000, inputTokens: 100, cachedTokens: 10,
       reportedCostUsd: env.LAB_FAKE_UNKNOWN === 'yes' ? null : Number(env.LAB_FAKE_COST || 0.04),
       ...(env.LAB_FAKE_UNKNOWN === 'yes' ? { inputTokens: null, cachedTokens: null } : {}) });
-    process.stdout.write('[dispatch] ended ' + id + ' ' + args[0] + ' model ' + (env.LAB_FAKE_MODEL || model) +
-      ' effort high fast off · 20 token/s (40 output tokens in 2 s) · exit 0 reason ' +
-      (env.LAB_FAKE_REASON || 'exit') + ' · scope ok · out ' + out + '\n');
+    process.stdout.write(JSON.stringify({ v: 1, type: 'dispatch.ended', id, at: Date.now(), agent: args[0], model: env.LAB_FAKE_MODEL || model,
+      effort: value('--effort'), fast: args.includes('--fast'), exitCode: 0, reason: env.LAB_FAKE_REASON || 'exit', rate: { outputTokens: 40, activeMs: 2000 },
+      scope: { state: 'ok', count: 0, files: [] }, refused: { count: 0 }, needsDecision: false, result: { source: 'final-text', out }, routing: null }) + '\n');
     return 0;
   };
 }
@@ -206,7 +209,8 @@ async function fixture(t, options = {}) {
   await git('add', '.'); await git('commit', '-m', 'Fix a cross-module calculation', '-m', 'Return the expected result while keeping the public interface.');
   const commit = await git('rev-parse', 'HEAD'), helper = path.join(directory, 'fake-dispatch.cjs');
   const settingsFile = path.join(directory, 'fake-settings.json');
-  await fs.writeFile(helper, '(' + fakeDispatchModule.toString() + ')(' + JSON.stringify(settingsFile) + ');\n');
+  const helperInputs = [settingsFile, require.resolve('../integration/dispatch.cjs')].map(value => JSON.stringify(value));
+  await fs.writeFile(helper, '(' + fakeDispatchModule.toString() + ')(' + helperInputs.join(', ') + ');\n');
   const project = { id: 'p', name: 'Fixture', path: projectPath, kind: 'local' }, recorded = [];
   const records = { async read() { return []; }, run(...args) { recorded.push(args); } };
   const env = {

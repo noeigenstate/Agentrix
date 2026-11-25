@@ -303,16 +303,149 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
   return Buffer.concat([Buffer.from(parts.join('\n\n') + '\n\n# Task\n\n'), brief]);
 }
 
-async function stopWorker(argv, stdout) {
+const oneLine = message => String(message).replace(/[\r\n]+/g, ' ');
+const quoted = text => JSON.stringify(text).slice(1, -1);
+const dispatchEvent = (type, id, fields = {}) => ({ v: 1, type: 'dispatch.' + type, id, at: Date.now(), ...fields });
+const routeText = ({ agent, model, effort, fast }) =>
+  `${agent} model ${model} effort ${effort || 'unreported'} fast ${fast === null ? 'unreported' : fast ? 'on' : 'off'}`;
+
+function renderDispatchStart(event) {
+  const { routing: { verdict, declared, fallback, unverified }, pid, session } = event;
+  const route = verdict === 'mismatch' ? `MISMATCH (declared ${declared.model} ${declared.effort} fast ${declared.fast ? 'on' : 'off'})` : verdict;
+  const notes = unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '';
+  const routedFallback = fallback && verdict === 'ok' ? ' · fallback' : '';
+  return `${routeText(event)} · routing ${route}${routedFallback}${notes} · pid ${pid} session ${session}${fallbackText(event.fallback)}`;
+}
+
+function fallbackText(fallback) {
+  if (!fallback) return '';
+  const reason = fallback.reason === 'remote_sandbox_unavailable' ? '因为远端 Codex 或其 Linux 沙箱不可用。' : '因为这台电脑尚未完成 Codex 沙箱设置。';
+  return ` · ${fallback.from} → ${fallback.to}，${reason}`;
+}
+
+function scopeText({ state, count, files, unavailable }) {
+  switch (state) {
+    case 'off': return '';
+    case 'unchecked': return ` · scope unchecked (${unavailable === 'working-tree' ? 'working tree unavailable' : 'not a git working tree'})`;
+    case 'changed': return ` · files changed during run: ${count} (author unknown)`;
+    case 'out-of-scope': return ` · OUT OF SCOPE: ${files.join(', ')}${count > files.length ? ` and ${count - files.length} more` : ''}`;
+    case 'ok': return ' · scope ok';
+  }
+}
+
+function renderDispatchEnd(event) {
+  const { id, agent, exitCode, reason, rate, scope, refused, needsDecision, result, routing, fallback,
+    warnings = [], skillProposals, skillChangesLeftLive, interventions, stops, treeStopFailure } = event;
+  if (!agent) {
+    const label = result.source === 'lab' ? (reason === 'killed' ? 'stopped' : reason) : 'error';
+    const failure = warnings.find(value => value.code === 'lab_dispatch_failed');
+    const detail = failure ? ' · ' + (failure.event ? renderDispatchLine(failure.event).slice(0, 1000) : failure.detail)
+      : reason === 'lost' || warnings.some(value => value.code === 'helper_lost') ? ' (helper exited without a final receipt)' : '';
+    return `ended ${id} · exit ${exitCode} reason ${label}${detail}`;
+  }
+  const speed = rate ? `${Math.round(rate.outputTokens * 1000 / rate.activeMs)} token/s (${rate.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(rate.activeMs / 1000)} s)`
+    : 'token/s unreported';
+  const warning = code => warnings.find(value => value.code === code)?.detail;
+  const restore = warning('scope_left_live') ? ' · out-of-scope changes left live (shared checkout or worktree; author unknown)' : '';
+  const restored = warnings.find(value => value.code === 'scope_restored');
+  const restoredText = restored ? ` · restored ${restored.count} out-of-scope paths${restored.quarantine ? ' · quarantined scope changes: ' + restored.quarantine : ''}` : '';
+  const bookkeeping = warning('team_bookkeeping_failed');
+  return `ended ${id} ${routeText(event)} · ${speed} · exit ${exitCode} reason ${reason}${scopeText(scope)}`
+    + (refused.count ? ` · refused ${refused.count}${refused.first ? ': ' + refused.first.action : ''}` : '') + restore + restoredText
+    + (bookkeeping ? ' · WARNING: team bookkeeping failed: ' + bookkeeping : '')
+    + (skillProposals ? ` · ${skillProposals} skill proposals restored and awaiting the lead` : '')
+    + (skillChangesLeftLive ? ` · ${skillChangesLeftLive} skill changes left live (author unknown)` : '')
+    + warnings.filter(value => value.code === 'skill_proposal').map(value => ' · ' + value.detail).join('')
+    + (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '')
+    + (treeStopFailure ? ' · tree stop failed: ' + treeStopFailure : '')
+    + ` · out ${result.out}${fallbackText(fallback)}${routing ? ' · routing ' + routing : ''}${needsDecision ? ' · needs decision' : ''}`;
+}
+
+function renderNotice({ id, code, detail }) {
+  switch (code) {
+    case 'events_undelivered': return `events not delivered to Agentrix (${detail})`;
+    case 'codex_control_unavailable': return `transport ${id} app-server: ${detail}`;
+    case 'receipt_unavailable': return `receipt unavailable ${id}: ${detail}`;
+    case 'stop_queued': return `stop queued ${id}`;
+    case 'stop_requested': return `stop requested ${id}${detail.reason ? ': ' + quoted(detail.reason) : ''}${detail.noResume ? ' · no resume' : ''}`;
+    case 'intervened': return `intervened ${id}: ${quoted(detail)}`;
+    case 'scope_restore_unavailable': return `scope restore unavailable for pre-existing file: ${detail}`;
+    case 'scope_restore_failed': return `scope restore failed: ${detail}`;
+    case 'runtime_failed': return `runtime failed ${id}: ${detail}`;
+    case 'finalization_failed': return `finalization failed: ${detail}`;
+    case 'skill_recovery_failed': return `skill recovery failed: ${detail}`;
+    case 'deferred_control_unavailable': return 'deferred control receipts unavailable';
+  }
+}
+
+function renderRequest({ id, requestId, resolution }) {
+  const { state, kind, preview, timeout, message } = resolution;
+  const text = state === 'opened' ? `${kind} opened${preview ? ': ' + quoted(preview) : ''}`
+    : state === 'declining' ? `${timeout === null ? 'requires owner approval' : `unanswered for ${timeout} s`}; declining`
+      : state === 'decline-failed' ? `not declined: ${message}` : message;
+  return `request ${id} ${requestId} ${text}`;
+}
+
+const lineRenderers = {
+  'dispatch.started': event => `started ${event.id} ${renderDispatchStart(event)}`,
+  'dispatch.ended': renderDispatchEnd,
+  'dispatch.waiting': event => `waiting ${event.id}: ${event.message}`,
+  'dispatch.start-failed': event => `failed to start ${event.id}: ${event.message}`,
+  'dispatch.running': ({ id, seconds, lastActivityAt, waiting }) => `still running ${id} · `
+    + (lastActivityAt === null ? 'receipt temporarily unavailable' : `${seconds} s · last activity ${new Date(lastActivityAt).toISOString()}${waiting ? ' · ' + waiting.message : ''}`),
+  'dispatch.detached': event => `detached ${event.id} · session follows in wait`,
+  'dispatch.unknown-run': event => `unknown run ${event.id}`,
+  'dispatch.intervention': ({ id, messageId, status, reason }) => `intervention ${id} ${messageId} ${status}${reason ? ': ' + reason : ''}`,
+  'dispatch.transport': ({ id, path, reason }) => `transport ${id} ${path}: ${reason}`,
+  'dispatch.request': renderRequest,
+  'dispatch.resume': ({ id, state, message }) => `${state === 'resuming' ? 'resuming' : 'resume failed'} ${id}: ${message}`,
+  'dispatch.notice': renderNotice,
+  'dispatch.failed': event => `failed: ${event.message}`,
+};
+function renderDispatchLine(event, { compactFailure = false } = {}) {
+  if (event.type === 'dispatch.waiting' && event.kind !== 'sandbox') return event.message;
+  if (event.type === 'dispatch.failed' && compactFailure) return '[dispatch] ' + event.message;
+  if (event.type === 'dispatch.notice' && event.code === 'usage') return event.detail.trimEnd();
+  return '[dispatch] ' + lineRenderers[event.type](event);
+}
+
+function dispatchOutput({ onEvent, jsonl = false, stdout = onEvent && !jsonl ? null : process.stdout, compactFailure } = {}) {
+  return (event, legacyLine) => {
+    onEvent?.(event);
+    stdout?.write((jsonl ? JSON.stringify(event) : legacyLine ?? renderDispatchLine(event, { compactFailure })) + '\n');
+  };
+}
+
+function dispatchArguments(argv) {
+  let jsonl = false;
+  const args = [...argv];
+  for (let index = 1; index < args.length; index++) {
+    if (args[index] !== '--events') continue;
+    if (jsonl || args[index + 1] !== 'jsonl') return { args, jsonl: true, error: 'Expected one --events jsonl option' };
+    jsonl = true;
+    args.splice(index--, 2);
+  }
+  return { args, jsonl };
+}
+
+function scopeReport(checking, changed, outOfScope, readOnly, team) {
+  if (!checking) return { state: 'off', count: 0, files: [] };
+  if (changed === null) return { state: 'unchecked', count: 0, files: [], unavailable: team ? 'working-tree' : 'git' };
+  const files = readOnly ? changed : outOfScope;
+  const state = !files.length ? 'ok' : readOnly ? 'changed' : 'out-of-scope';
+  return { state, count: files.length, files: files.slice(0, 10) };
+}
+
+async function stopWorker(argv, emit) {
   try {
     const options = argumentsOf(argv), team = projectTeam(options.cwd);
     if (!team) throw new Error('Team commands require a git repository');
     await team.queueControl(options.id, { id: randomUUID(), type: 'stop', at: Date.now(),
       ...(options.reason ? { reason: options.reason } : {}), ...(options.noResume ? { noResume: true } : {}) });
-    stdout.write('[dispatch] stop queued ' + options.id + '\n');
+    emit(dispatchEvent('notice', options.id, { code: 'stop_queued' }));
     return 0;
   } catch (error) {
-    stdout.write(`[dispatch] ${error.message.replace(/[\r\n]+/g, ' ')}\n`); return 1;
+    emit(dispatchEvent('failed', null, { message: oneLine(error.message) })); return 1;
   }
 }
 
@@ -321,15 +454,15 @@ const BOOTSTRAP_LIMIT = 256 * 1024;
 
 // The planner is told once per helper process, on run()'s output, that Agentrix did not receive its events: the worker
 // runs on regardless.
-let undeliveredNoted = false, plannerOutput = process.stdout;
+let undeliveredNoted = false;
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
-function eventSink(filename) {
+function eventSink(filename, notice) {
   let bootstrap, outbox, sending = false;
   const queue = [];
   function undelivered(code) {
     if (undeliveredNoted) return;
     undeliveredNoted = true;
-    plannerOutput.write(`[dispatch] events not delivered to Agentrix (${code})\n`);
+    notice('events_undelivered', code);
   }
   function drain() {
     if (sending || !queue.length) return;
@@ -613,10 +746,50 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, menu, refused, needsDecision, routing }) {
-  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }),
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waiting, ownerWait, ownerWaitSequence, menu, refused, needsDecision, routing }) {
+  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waiting && { waiting }),
     ...(ownerWaitSequence && { ownerWait, ownerWaitSequence, menu }), ...(refused && { refused }),
     ...(settled && needsDecision === true && { needsDecision }), ...(routing && { routing }) });
+}
+
+const receiptLines = { started: 'startedLine', waiting: 'waitingLine', startFailed: 'failedLine', ended: 'endedLine' };
+const receiptEvent = (key, event) => ({ [key]: event, [receiptLines[key]]: event && renderDispatchLine(event).trimEnd() });
+const legacyLine = (entry, key) => entry?.legacy ? entry[receiptLines[key]] : null;
+const startFailed = (id, code, message) => dispatchEvent('start-failed', id, { code, message: oneLine(message) });
+const waitingEvent = ({ id, ownerWait, menu, waiting }) => waiting ?? (ownerWait ? dispatchEvent('waiting', id, {
+  kind: menu ? 'menu' : 'owner', message: ownerWait, ...(menu && { menu }),
+}) : null);
+
+function detachedEnd(id, { exitCode = 1, reason = 'error', out = null, source = 'detached', warnings } = {}) {
+  return dispatchEvent('ended', id, { agent: null, model: null, effort: null, fast: null, exitCode, reason, rate: null,
+    scope: { state: 'off', count: 0, files: [] }, refused: { count: 0 }, needsDecision: null, routing: null,
+    result: { source, out }, ...(warnings?.length && { warnings }) });
+}
+
+function reportReceiptStart(entry, emit) {
+  if (entry.started) { emit(entry.started); return; }
+  const line = legacyLine(entry, 'started');
+  if (!line) return;
+  emit(dispatchEvent('started', entry.id, { agent: entry.argv?.[0] ?? null, model: 'unreported', effort: null, fast: null,
+    routing: { verdict: 'unverified', unverified: ['model', 'effort', 'fast'], fallback: false }, pid: entry.helperPid ?? 'broker', session: null }), line);
+}
+
+function reportReceiptEnd(entry, emit, lost = false) {
+  emit(entry.ended ?? detachedEnd(entry.id, { exitCode: entry.exitCode, out: entry.out,
+    source: entry.legacy ? 'legacy' : 'detached', reason: entry.legacy ? 'unknown' : lost ? 'lost' : 'error',
+    warnings: lost ? [{ code: 'helper_lost' }] : [] }), !entry.ended ? legacyLine(entry, 'ended') : null);
+}
+
+function detachedLaunchState(current, emit, onTiming, store, continued) {
+  if (current?.started || legacyLine(current, 'started')) {
+    reportDetachedTiming(onTiming, current);
+    if (store.claimStart(current.id) || continued && onTiming) reportReceiptStart(current, emit);
+    return 0;
+  }
+  const failure = current?.startFailed ?? startFailed(current.id, 'helper-exit', 'helper ended before confirmation');
+  emit(failure, !current.startFailed ? legacyLine(current, 'startFailed') : null);
+  if (current.ended || legacyLine(current, 'ended')) reportReceiptEnd(current, emit);
+  return 1;
 }
 
 async function answerDetachedRole({ id, cwd, agent, allow, readOnly }, { wait, choice }, env) {
@@ -641,8 +814,8 @@ function hasDecisionHeading(answer) {
   return false;
 }
 
-async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming,
-  roleFallback, roleArtifacts } = {}) {
+async function startDetached(argv, { env = process.env, launch = spawn, store, timeout, source = 'dispatch', onTiming,
+  roleFallback, roleArtifacts, stdout, onEvent, jsonl, emit = dispatchOutput({ stdout, onEvent, jsonl }) } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
@@ -677,20 +850,23 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
     child.unref();
   } catch (error) {
     if (roleArtifacts) await require('./role-artifacts.cjs').stampRoleArtifacts(roleArtifacts, 'ended');
-    await store.update(id, { settled: true, exitCode: 1 }).catch(() => {});
-    stdout.write(`[dispatch] failed to start ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`);
+    const failure = startFailed(id, 'spawn', error.message);
+    await store.update(id, { settled: true, exitCode: 1, ...receiptEvent('startFailed', failure) }).catch(() => {});
+    emit(failure);
     return 1;
   } finally { fs.closeSync(descriptor); }
   let announcedWait;
   const observed = store.observe(() => {
     const current = store.read(id);
-    const waiting = current?.waitingLine ?? current?.ownerWait;
-    if (waiting && waiting !== announcedWait) {
-      announcedWait = waiting;
-      reportDetachedTiming(onTiming, current);
-      stdout.write(announcedWait + '\n');
+    const waiting = current && waitingEvent(current), line = waiting ? null : legacyLine(current, 'waiting');
+    const message = waiting?.message ?? line;
+    if (message && message !== announcedWait) {
+      announcedWait = message;
+      const event = waiting ?? dispatchEvent('waiting', id, { kind: 'sandbox', message: 'waiting for sandbox permissions' });
+      reportDetachedTiming(onTiming, { ...current, waiting: event });
+      emit(event, line);
     }
-    return current?.startedLine || current?.settled ? current : undefined;
+    return current?.started || legacyLine(current, 'started') || current?.settled ? current : undefined;
   }, timeout, { signal: controller.signal });
   let failure;
   const entry = await Promise.race([observed, exited.then(result => {
@@ -703,23 +879,17 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
     current = await store.update(id, { settled: true, exitCode: failure.code || 1 }, { unlessEnded: true }).catch(() => null)
       || store.read(id, { fresh: true }) || current;
   }
-  if (current?.startedLine) {
-    reportDetachedTiming(onTiming, current);
-    if (store.claimStart(id) || announcedWait && onTiming) stdout.write(current.startedLine + '\n');
-    return 0;
-  }
-  if (current?.settled || failure) {
-    stdout.write((current.failedLine || `[dispatch] failed to start ${id}: helper ended before confirmation`) + '\n');
-    if (current.endedLine) stdout.write(current.endedLine + '\n');
-    return 1;
+  if (current?.started || legacyLine(current, 'started') || current?.settled || failure) {
+    return detachedLaunchState(current ?? { id }, emit, onTiming, store, announcedWait);
   }
   if (!current?.admitted) {
     child.kill();
-    await store.update(id, { settled: true, exitCode: 1 }, { unlessEnded: true }).catch(() => {});
-    stdout.write(`[dispatch] failed to start ${id}: admission not confirmed within 60 s\n`);
+    const failure = startFailed(id, 'timeout', 'admission not confirmed within 60 s');
+    await store.update(id, { settled: true, exitCode: 1, ...receiptEvent('startFailed', failure) }, { unlessEnded: true }).catch(() => {});
+    emit(failure);
     return 1;
   }
-  stdout.write(`[dispatch] detached ${id} · session follows in wait\n`);
+  emit(dispatchEvent('detached', id));
   return 0;
 }
 
@@ -740,30 +910,36 @@ async function runDetached(file, deps = {}) {
   let pending = Promise.resolve(), warned = false;
   const receipt = changes => {
     pending = Promise.resolve().then(() => store.update(id, changes)).catch(error => {
-      if (!warned) { warned = true; try { process.stderr.write(`[dispatch] receipt unavailable ${id}: ${error.code || 'write_error'}\n`); } catch {} }
+      if (warned) return;
+      warned = true;
+      const event = dispatchEvent('notice', id, { code: 'receipt_unavailable', detail: error.code || 'write_error' });
+      try { dispatchOutput({ stdout: process.stderr, onEvent: deps.onEvent })(event); } catch {}
     });
     return pending;
   };
   await receipt({ helperPid: process.pid, helperStartedAt: Date.now() - Math.floor(process.uptime() * 1000), lease: { port: server.address().port, token } });
   let startTiming;
-  const stdout = { write(text) {
-    try { (deps.stdout || process.stdout).write(text); } catch { /* Planner receipts cannot interrupt signed events or worker cleanup. */ }
-    const line = String(text).trimEnd(), changes = { activityAt: Date.now() };
-    if (line.startsWith(`[dispatch] waiting ${id}: `)) changes.waitingLine = line;
-    if (line.startsWith(`[dispatch] started ${id} `)) Object.assign(changes, startTiming, { startedLine: line, waitingLine: null });
-    if (line.startsWith(`[dispatch] failed to start ${id}:`)) Object.assign(changes, { failedLine: line, waitingLine: null });
-    if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
+  const output = dispatchOutput(deps);
+  const onEvent = event => {
+    const changes = { activityAt: event.at };
+    if (event.type === 'dispatch.waiting') Object.assign(changes, receiptEvent('waiting', event));
+    if (event.type === 'dispatch.started') Object.assign(changes, startTiming, receiptEvent('started', event), receiptEvent('waiting', null));
+    if (event.type === 'dispatch.start-failed') Object.assign(changes, receiptEvent('startFailed', event), receiptEvent('waiting', null));
+    if (event.type === 'dispatch.ended') Object.assign(changes, receiptEvent('ended', event));
     void receipt(changes);
-  } };
+    try { output(event); } catch { /* Planner output cannot interrupt signed events or worker cleanup. */ }
+  };
   let ownerWaitSequence = 0, needsDecision = false;
-  const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt({ waitingLine: null }),
+  const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt(receiptEvent('waiting', null)),
     ownerWaiting: (detail, menu = null) => {
       const ownerWait = menu ? `waiting on ${menu.kind} [${menu.id}]: ${menu.title}`
         + menu.options.map(({ number, label }) => ` · ${number}. ${label}`).join('')
         + (menu.answerable || menu.kind === 'permission' ? '' : ' · no supported answer')
         : detail ? 'waiting for the owner: ' + detail : null;
       if (ownerWait) ownerWaitSequence++;
-      return receipt({ ownerWait, ownerWaitSequence, menu, activityAt: Date.now() });
+      const waiting = ownerWait ? waitingEvent({ id, ownerWait, menu }) : null;
+      // The legacy waitingLine was reserved for sandbox prompts.
+      return receipt({ waiting, ownerWait, ownerWaitSequence, menu, activityAt: Date.now() });
     },
     refusals: refused => receipt({ refused: [...refused] }),
     routing: routing => receipt({ routing }),
@@ -773,12 +949,12 @@ async function runDetached(file, deps = {}) {
     confirmed: (startedAt, confirmedAt, routing) => { startTiming = { startedAt, confirmedAt, ...(routing && { routing }) }; } };
   let code = 1;
   try {
-    code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback });
+    code = await run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback });
     return code;
   } finally {
     const endedAt = Date.now();
     if (artifacts && !processExitUnconfirmed) await artifacts.stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
-    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null, menu: null,
+    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, ...receiptEvent('waiting', null), ownerWait: null, menu: null,
       ...(needsDecision && { needsDecision }) }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
@@ -797,16 +973,18 @@ function helperAlive(pid, entry) {
   });
 }
 
-async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe, onTiming,
-  alive = helperAlive, untilAny = false, signal } = {}) {
+async function waitDetached(options, { store = detachedRuns(options.cwd), observe, onTiming,
+  alive = helperAlive, untilAny = false, signal, stdout, onEvent, jsonl, emit = dispatchOutput({ stdout, onEvent, jsonl }) } = {}) {
   const pending = new Set(options.ids); let unknown = false;
   let completed = false, observing = true;
   const done = () => !pending.size || (untilAny && (completed || unknown));
   const finish = (id, entry, lost = false) => {
     reportDetachedTiming(onTiming, entry);
-    if (entry.failedLine && !entry.startedLine) stdout.write(entry.failedLine + '\n');
-    const detail = lost ? ' (helper exited without a final receipt)' : '';
-    stdout.write((entry.endedLine || `[dispatch] ended ${id} · exit ${entry.exitCode ?? 1} reason error${detail}`) + '\n');
+    const line = legacyLine(entry, 'startFailed');
+    if (!(entry.started || legacyLine(entry, 'started')) && (entry.startFailed || line)) {
+      emit(entry.startFailed ?? startFailed(id, 'unconfirmed', 'helper ended before confirmation'), !entry.startFailed ? line : null);
+    }
+    reportReceiptEnd(entry, emit, lost);
     pending.delete(id);
     completed = true;
   };
@@ -814,9 +992,9 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
     const entries = [...pending].map(id => [id, store.read(id)]);
     const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled || entry?.ownerWait);
     await Promise.all(entries.map(async ([id, entry]) => {
-      if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; }
+      if (entry === null) { emit(dispatchEvent('unknown-run', id)); pending.delete(id); unknown = true; }
       if (!entry) return;
-      if (entry.startedLine && store.claimStart(id)) stdout.write(entry.startedLine + '\n');
+      if ((entry.started || legacyLine(entry, 'started')) && store.claimStart(id)) reportReceiptStart(entry, emit);
       if (entry.settled) { finish(id, entry); return; }
       if ((hasResult && !entry.ownerWait) || signal?.aborted || !Number.isSafeInteger(entry.helperPid) || entry.helperPid < 1) return;
       if (await alive(entry.helperPid, entry) === false && observing) finish(id, entry, true);
@@ -828,22 +1006,20 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
   observing = false;
   for (const id of pending) {
     const entry = store.read(id);
-    if (!entry) { stdout.write(`[dispatch] still running ${id} · receipt temporarily unavailable\n`); continue; }
+    if (!entry) { emit(dispatchEvent('running', id, { seconds: null, lastActivityAt: null })); continue; }
     if (entry.settled) { finish(id, entry); continue; }
     reportDetachedTiming(onTiming, entry);
     let activity = entry.activityAt || entry.createdAt;
     try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
-    const prefix = `[dispatch] waiting ${id}: `;
-    const waiting = entry.ownerWait ?? (entry.waitingLine?.startsWith(prefix) ? entry.waitingLine.slice(prefix.length) : null);
-    stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}${waiting ? ' · ' + waiting : ''}\n`);
+    const waiting = waitingEvent(entry) ?? (legacyLine(entry, 'waiting')
+      ? dispatchEvent('waiting', id, { kind: 'sandbox', message: 'waiting for sandbox permissions' }) : null);
+    emit(dispatchEvent('running', id, { seconds: Math.floor((Date.now() - entry.createdAt) / 1000), lastActivityAt: activity, ...(waiting && { waiting }) }));
   }
   return done() ? (unknown ? 1 : 0) : 75;
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
-  locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal, roleFallback, roleArtifacts,
-  launchTreeStop } = {}) {
+async function run(argv, deps = {}) {
+  const { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, onTiming, untilAny, signal, roleFallback, roleArtifacts } = deps;
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
@@ -851,19 +1027,35 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const leadSeat = model && seatExpectation({ model, effort });
     return serve({ roles: createRoleTools({ env, engine: run, leadAgent, leadSeat, cleanup: true }) }).then(() => 0);
   }
-  if (usesRoundtable(argv)) { stdout.write('[dispatch] ' + roundtablesRemoved + '\n'); return 1; }
+  const { args, jsonl, error } = dispatchArguments(argv);
+  const roundtable = usesRoundtable(args);
+  const emit = dispatchOutput({ ...deps, jsonl, compactFailure: !error && (roundtable || args[0] === 'stop') });
+  const fail = message => { emit(dispatchEvent('failed', null, { message: oneLine(message) })); return 1; };
+  if (error) return fail(error);
+  argv = args;
+  if (roundtable) return fail(roundtablesRemoved);
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'stop', 'wait'].includes(argv[0]))) {
-    stdout.write(USAGE); return 0;
+    if (jsonl) emit(dispatchEvent('notice', randomUUID(), { code: 'usage', detail: USAGE }));
+    else stdout?.write(USAGE);
+    return 0;
   }
-  if (argv[0] === 'stop') return stopWorker(argv, stdout);
+  if (argv[0] === 'stop') return stopWorker(argv, emit);
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
-      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, signal: waitSignal });
-      return await startDetached(argv, { env, stdout, launch, source, onTiming, roleFallback, roleArtifacts });
-    } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
+      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { emit, onTiming, untilAny, signal });
+      return await startDetached(argv, { env, emit, launch, source, onTiming, roleFallback, roleArtifacts });
+    } catch (error) { return fail(error.message); }
   }
-  plannerOutput = stdout;
-  const id = detached?.id || randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
+  return runWorker(argv, deps, emit);
+}
+
+async function runWorker(argv, { env = process.env, source = 'dispatch', launch = spawn, resolveExecutable = executable,
+  locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
+  requestTimeout = REQUEST_TIMEOUT, detached = null, roleFallback, launchTreeStop }, emit) {
+  const id = detached?.id || randomUUID();
+  const signal = (type, fields) => emit(dispatchEvent(type, id, fields));
+  const notice = (code, detail) => signal('notice', { code, ...(detail !== undefined && { detail }) });
+  const send = eventSink(env.AGENTRIX_BOOTSTRAP, notice);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   let workerEnv = workerEnvironment(env);
   for (const name of Object.keys(workerEnv)) if (name.toUpperCase() === 'AGENTRIX_SEATS') delete workerEnv[name];
@@ -877,7 +1069,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   const stoppedOnRequest = () => killed || segmentStopped || noResume;
   const recordTreeStopFailure = error => { treeStopError ||= error; spawnError ||= error; };
   const stopFailureFor = reason => reason === 'killed' && treeStopError ? diagnosticLine(treeStopError.message) || 'Unknown error' : null;
-  const stopFailureNote = failure => failure ? ` · tree stop failed: ${failure}` : '';
   function trackWorker(process) {
     workerProcess = process;
     try { detached?.trackProcess?.(process.pid); }
@@ -888,10 +1079,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
   let controlFailure = 'bootstrap/missing_environment', controlLeadMode = null, transportFallback = false, lastControlFailure, lastControlNotice;
   let nativeBilling = null;
-  let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
+  let boardWatch, scopeRestoreBlocked = false, scopeRestoreReport;
   const controlReceipts = new Map(), requestTimers = new Map();
   const refused = [], refusedItems = new Set();
-  const refusalNote = () => refused.length ? ' · refused ' + refused.length + ': ' + refused[0].action : '';
   function recordRefusal(refusal, itemId) {
     if (refused.length >= REFUSAL_LIMIT || !validRefusal(refusal)) return;
     if (refusal.reason === 'provider_declined' && itemId && refusedItems.has(itemId)) return;
@@ -922,10 +1112,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     controlReceipts.set(messageId, status);
     if (['queued', 'delivered'].includes(status)) unreadControls.add(messageId);
     if (['consumed', 'rejected'].includes(status)) unreadControls.delete(messageId);
-    signal(`intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}`);
+    const event = dispatchEvent('intervention', id, { messageId, status, ...(reason && { reason }) });
+    emit(event);
     receiptTail = receiptTail.catch(() => {}).then(() => team?.locked(() => {
       team.append({ type: 'control-receipt', id, messageId, status, ...(reason ? { reason } : {}), at: Date.now() });
-      fs.appendFileSync(team.memory, `\n\n[dispatch] intervention ${id} ${messageId} ${status}${reason ? `: ${reason}` : ''}\n`);
+      fs.appendFileSync(team.memory, '\n\n' + renderDispatchLine(event) + '\n');
     })).then(() => { send({ type: 'dispatch-receipt', id, messageId, status }); });
     return receiptTail;
   }
@@ -953,42 +1144,35 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     }
     return total;
   };
-  const interventionNote = () => (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '');
   const restoreSkills = changedFiles => {
     if (!skillGuard || options.readOnly) return;
     const total = skillGuard.finish(id, changedFiles);
     skillProposals = skillGuard.restoredCount;
     skillChangesLeftLive = total - skillProposals;
   };
-  const proposalNote = () => (skillProposals ? ` · ${skillProposals} skill proposals restored and awaiting the lead` : '')
-    + (skillChangesLeftLive ? ` · ${skillChangesLeftLive} skill changes left live (author unknown)` : '')
-    + [...(skillGuard?.notes || [])].map(note => ` · ${note}`).join('');
   const recordTeam = async report => {
-    if (!registered || teamFinished) return '';
+    if (!registered || teamFinished) return null;
     teamFinished = true;
     try {
       await team.finish(options, { id, session: resumeSession || output.sessionId, model: unconfirmed ? 'unreported' : output.routing().model,
         kind: taskKind(options), ...usage(), ...report });
-      return '';
+      return null;
     } catch (error) {
-      return ' · WARNING: team bookkeeping failed: ' + String(error.message || error).replace(/[\r\n]+/g, ' ');
+      return { code: 'team_bookkeeping_failed', detail: oneLine(error.message || error) };
     }
   };
   let drained = new Promise(resolve => { drain = resolve; });
-  const signal = line => stdout.write(`[dispatch] ${line}\n`);
-  const fallbackNote = () => options.fallbackFrom
-    ? ` · ${options.fallbackFrom} → ${output.model || options.model}，${env.AGENTRIX_REMOTE_ROLE_TOOLS === '1'
-      ? '因为远端 Codex 或其 Linux 沙箱不可用。' : '因为这台电脑尚未完成 Codex 沙箱设置。'}`
-    : '';
+  const fallback = () => options.fallbackFrom && { from: options.fallbackFrom, to: output.model || options.model,
+    reason: env.AGENTRIX_REMOTE_ROLE_TOOLS === '1' ? 'remote_sandbox_unavailable' : 'local_sandbox_unavailable' };
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: options.role, title: options.title,
     ...billing(),
     kind: taskKind(options),
     seat: options.seat ?? null, cwd: options.cwd, brief: options.brief, out: options.out, log: options.out + '.log',
     requestedModel: options.model, sessionId: output.sessionId, startedAt: Date.now() });
-  const failed = (reason, exitCode = null) => {
+  const failed = (reason, exitCode = null, code = 'unconfirmed') => {
     if (unconfirmed || started) return;
-    unconfirmed = true; signal(`failed to start ${id}: ${reason.replace(/[\r\n]+/g, ' ')}`);
+    unconfirmed = true; emit(startFailed(id, code, reason));
     if (!options) return;
     // Even without a session, the pane needs a declared row before it can retain the failure.
     send({ ...assignment(), model: 'unreported', effort: null, fast: null, declared: declared(), unconfirmed: true });
@@ -999,9 +1183,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', skillProposals, skillChangesLeftLive, endedAt: Date.now() });
     endSent = true;
   };
-  const reported = () => {
-    const route = unconfirmed ? declared() : output.routing();
-    return `${options.agent} model ${route.model} effort ${route.effort || 'unreported'} fast ${route.fast === null ? 'unreported' : route.fast ? 'on' : 'off'}`;
+  const reported = () => ({ agent: options.agent, ...(unconfirmed ? declared() : output.routing()) });
+  const ended = ({ exitCode, reason, rate = null, scope = scopeReport(false), bookkeeping, restore, needsDecision = null, routing = null, treeStopFailure }) => {
+    const warnings = [restore, bookkeeping, ...Array.from(skillGuard?.notes ?? [], detail => ({ code: 'skill_proposal', detail }))].filter(Boolean);
+    const routeFallback = fallback();
+    const result = { source: needsDecision ? 'legacy-heading' : 'final-text', out: options.out };
+    signal('ended', { ...reported(), exitCode, reason, rate, scope, needsDecision, routing, result,
+      refused: { count: refused.length, ...(refused.length && { first: refused[0] }) }, skillProposals, skillChangesLeftLive, interventions, stops,
+      ...(treeStopFailure && { treeStopFailure }), ...(warnings.length && { warnings }), ...(routeFallback && { fallback: routeFallback }) });
   };
   const routeVerdict = () => workerOf(agentOfModel(options.model)).routingVerdict(output, declared(), options.fallbackFrom);
   const roleRouting = () => worker.pinEffort && output.model !== null
@@ -1018,15 +1207,13 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
     const decision = routeVerdict(), mismatch = decision === 'mismatch';
-    const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : decision;
-    const fallback = options.fallbackFrom && decision === 'ok' ? ' · fallback' : '';
-    const notes = unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '';
-    const routing = verdict + fallback + notes;
+    const routeFallback = fallback();
+    const routing = { verdict: decision, unverified, fallback: Boolean(routeFallback), ...(mismatch && { declared: requested }) };
     if (!started) {
       started = true;
       detached?.confirmed?.(workerStartedAt, Date.now(), roleRouting());
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
-      signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${fallbackNote()}`);
+      signal('started', { ...reported(), routing, pid: child.pid, session: output.sessionId, ...(routeFallback && { fallback: routeFallback }) });
       for (const fact of inputFacts.values()) send(fact);
       if (heldLimits !== undefined) { reportAccount(heldLimits); heldLimits = undefined; }
     }
@@ -1140,7 +1327,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       for (const control of controls) {
         if (control.type === 'stop') {
           stops++; segmentStopped = true; noResume ||= !!control.noResume;
-          signal(`stop requested ${id}${control.reason ? ': ' + JSON.stringify(control.reason).slice(1, -1) : ''}${control.noResume ? ' · no resume' : ''}`);
+          notice('stop_requested', { reason: control.reason, noResume: control.noResume });
           const direct = !!activeRuntime;
           stop('SIGTERM', false);
           if (direct) {
@@ -1159,12 +1346,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
             catch (error) { receipt = { status: error.message === 'control_unavailable' ? 'rejected' : 'unknown', reason: error.message }; }
             if (receipt?.status === 'rejected' && ['worker_ended', 'control_unavailable'].includes(receipt.reason)) {
               messages.push(control.text); deferredControlIds.push(control.id); receipt.status = 'queued';
-              signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+              notice('intervened', control.text);
             }
             await recordReceipt(control.id, receipt?.status);
           } else {
             messages.push(control.text); deferredControlIds.push(control.id);
-            signal(`intervened ${id}: ${JSON.stringify(control.text).slice(1, -1)}`);
+            notice('intervened', control.text);
             await recordReceipt(control.id, 'queued');
           }
         }
@@ -1262,9 +1449,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     }
     function restoreScope(files) {
       if (!files?.length) return;
-      if (scopeRestoreBlocked || !skillGuard.restoreRoot) { scopeRestoreNote = ' · out-of-scope changes left live (shared checkout or worktree; author unknown)'; return; }
+      if (scopeRestoreBlocked || !skillGuard.restoreRoot) { scopeRestoreReport = { code: 'scope_left_live', detail: true }; return; }
       let restored = 0, quarantine;
-      const restoredNote = () => { scopeRestoreNote = ` · restored ${restored} out-of-scope paths${quarantine ? ` · quarantined scope changes: ${quarantine}` : ''}`; };
+      const restoredNote = () => { scopeRestoreReport = { code: 'scope_restored', count: restored, quarantine }; };
       const preserveCurrent = (filename, file) => {
         if (!fs.lstatSync(filename, { throwIfNoEntry: false })) return;
         quarantine ||= path.join(team.directory, 'scope-quarantine', id);
@@ -1292,7 +1479,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         if (dirtyBytes.has(file)) replace(dirtyBytes.get(file));
         else if (before.files.has(file)) {
           if (before.files.get(file) === 'deleted') preserveCurrent(filename, file);
-          else if (before.files.get(file) !== 'deleted') { signal(`scope restore unavailable for pre-existing file: ${file}`); continue; }
+          else if (before.files.get(file) !== 'deleted') { notice('scope_restore_unavailable', file); continue; }
         }
         else {
           let contents;
@@ -1342,14 +1529,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       }
       finally {
         controlOpening = false;
-        const notice = controlClient ? null : controlFailure;
-        if (lastControlNotice !== notice) {
-          lastControlNotice = notice;
-          send({ type: 'dispatch-notice', id, controlFailure: notice, at: Date.now() });
+        const controlNotice = controlClient ? null : controlFailure;
+        if (lastControlNotice !== controlNotice) {
+          lastControlNotice = controlNotice;
+          send({ type: 'dispatch-notice', id, controlFailure: controlNotice, at: Date.now() });
         }
         if (usesAppServer && !controlClient && lastControlFailure !== controlFailure) {
           lastControlFailure = controlFailure;
-          signal(`transport ${id} app-server: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
+          notice('codex_control_unavailable', `Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
         } else if (controlClient) lastControlFailure = null;
       }
     }
@@ -1357,17 +1544,16 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (worker.brokerMethod && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
     function requestOpened({ itemId, payload: { requestId, kind, blocking, preview, questions } }) {
       const text = detached ? '' : (preview || questions?.[0]?.question || '').slice(0, 160);
-      signal(`request ${id} ${requestId} ${kind} opened${text ? ': ' + JSON.stringify(text).slice(1, -1) : ''}`);
+      signal('request', { requestId, resolution: { state: 'opened', kind, preview: text } });
       if (!blocking) { requestTimers.set(requestId, null); return; }
       const action = kind === 'command' && preview ? 'command approval: ' + commandPhrase(preview).phrase : kind + ' request';
       recordRefusal({ action, reason: 'approval_required' }, itemId);
       const decline = () => {
         if (!requestTimers.has(requestId)) return;
-        const detail = detached ? 'requires owner approval' : `unanswered for ${requestTimeout / 1000} s`;
-        signal(`request ${id} ${requestId} ${detail}; declining`);
+        signal('request', { requestId, resolution: { state: 'declining', timeout: detached ? null : requestTimeout / 1000 } });
         // Cancelling a command or file approval interrupts its turn. Declining lets it continue.
         try { if (['command', 'file-change'].includes(kind)) activeRuntime?.answer(requestId, { decision: 'deny' }); else activeRuntime?.cancel(requestId); }
-        catch (error) { signal(`request ${id} ${requestId} not declined: ${error.message}`); }
+        catch (error) { signal('request', { requestId, resolution: { state: 'decline-failed', message: error.message } }); }
       };
       requestTimers.set(requestId, detached ? null : setTimeout(decline, requestTimeout));
       if (detached) queueMicrotask(decline);
@@ -1409,7 +1595,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!(options.resume || resumeSession));
       else if (event.type === 'limits.updated' && !event.replay && usesAppServer) reportAccount(event.payload);
       else if (event.type === 'error' && (event.payload.code === 'billing_identity_mismatch' || event.payload.stage === 'startup'
-        && ['sdk_initialization_timeout', 'sdk_startup_failed', 'native_cli_required', 'native_cli_outdated'].includes(event.payload.code))) signal(`transport ${id} claude-sdk: ${event.payload.message}`);
+        && ['sdk_initialization_timeout', 'sdk_startup_failed', 'native_cli_required', 'native_cli_outdated'].includes(event.payload.code))) {
+        signal('transport', { path: 'claude-sdk', reason: event.payload.message });
+      }
       else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
         const content = event.payload.content;
         if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;
@@ -1426,12 +1614,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       } else if (event.type === 'path.changed' && event.payload.selected === 'terminal-worker' && !nativeTurn) {
         // Main runs this worker in a hidden terminal of the lead's own: billed like that terminal.
         nativeBilling = 'subscription';
-        signal(`transport ${id} claude-terminal: ${String(event.payload.reason || 'terminal lead').replace(/[\r\n]+/g, ' ')}`);
+        signal('transport', { path: 'claude-terminal', reason: oneLine(event.payload.reason || 'terminal lead') });
       } else if (event.type === 'transcript.record' && nativeBilling === 'subscription') {
         if (meterRecord(event.payload)) output.record(event.payload);
       } else if (event.type === 'request.resolved' && requestTimers.has(event.payload.requestId)) {
         clearTimeout(requestTimers.get(event.payload.requestId)); requestTimers.delete(event.payload.requestId);
-        signal(`request ${id} ${event.payload.requestId} ${event.payload.resolution}`);
+        signal('request', { requestId: event.payload.requestId, resolution: { state: 'reported', message: event.payload.resolution } });
       }
       if (event.providerSessionId && output.confirmed && !usesAppServer) confirm();
       log.write(JSON.stringify(event) + '\n');
@@ -1447,7 +1635,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       // Drain board notifications before taking the lock for the final exclusive check.
       await new Promise(resolve => setImmediate(resolve));
       try { if (team) await team.locked(restore); else restore(); }
-      catch (error) { signal(`scope restore failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
+      catch (error) { notice('scope_restore_failed', oneLine(error.message)); }
       await rejectDeferredControls();
       await receiptTail;
       const route = output.routing();
@@ -1469,11 +1657,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       await inputTail.catch(() => {});
       if (!team) { try { recordFindings(options, answer, header); } catch {} }
       const filesChanged = options.readOnly ? changed : null;
-      const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
-        : filesChanged?.length ? ` · files changed during run: ${filesChanged.length} (author unknown)`
-        : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
+      const scope = scopeReport(checking, changed, outOfScope, options.readOnly, team);
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
-      const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
+      const measured = usage(), { outputTokens, activeMs } = measured;
+      const rate = outputTokens !== null && activeMs > 0 ? { outputTokens, activeMs } : null;
       const stopFailure = stopFailureFor(reason);
       if (!endSent) send(reportChangedFiles({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
         ...(stopFailure && { treeStopFailure: stopFailure }),
@@ -1482,9 +1669,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() },
       filesChanged));
       endSent = true;
-      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
-        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`
-        + `${worker.brokerMethod && !unconfirmed ? ' · routing ' + routeVerdict() : ''}${needsDecision ? ' · needs decision' : ''}`);
+      ended({ exitCode, reason, rate, scope, bookkeeping, restore: scopeRestoreReport, needsDecision,
+        routing: worker.brokerMethod && !unconfirmed ? routeVerdict() : null, treeStopFailure: stopFailure });
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1533,7 +1719,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
             },
           }).create({ ...spec, policy: worker.policy(readOnly), onSandboxWait: message => {
             sandboxWaitReported = true;
-            signal(`waiting ${id}: ${message}`);
+            signal('waiting', { kind: 'sandbox', message });
             log.write(message + '\n');
           } }, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
@@ -1586,7 +1772,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           if (nativeFallback) {
             activeRuntime = null; nativeBilling = null; controlClient?.close(); controlClient = null;
             transportFallback = true;
-            signal(`transport ${id} claude-cli: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
+            signal('transport', { path: 'claude-cli', reason: oneLine(nativeFallback) }); continue;
           }
           if (!result) result = await completion;
           activeRuntime.finished = remote;
@@ -1617,12 +1803,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           // The rejected correction is known not to have executed; resume only that input, on the same billing path.
           await new Promise(resolve => setTimeout(resolve, 20)); await openControl();
           if (!controlClient && !usesAppServer) throw new Error('native_resume_control_unavailable');
-          signal(`resuming ${id}: native worker ended before correction`);
+          signal('resume', { state: 'resuming', message: 'native worker ended before correction' });
           continue;
         }
         break;
       }
-      if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
+      if (!resumeSession && !transportFallback) signal('transport', { path: 'claude-cli', reason: `Agentrix control unavailable (${controlFailure || 'control/disconnected'})` });
       const claudeFile = resolveExecutable === executable ? await findClaude(env) : null;
       if (resolveExecutable === executable && !claudeFile) throw Object.assign(new Error('Claude Code was not found outside the Agentrix shim folder'), { code: 'ENOENT' });
       const command = resolveExecutable(options.agent, commandOf(effective), env, claudeFile);
@@ -1636,7 +1822,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (!resumeSession) log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
       startTimer = setTimeout(() => {
         if (started) spawnError = new Error('Resumed session not reported within 30 s');
-        else failed('session not reported within 30 s');
+        else failed('session not reported within 30 s', null, 'timeout');
         stop('SIGTERM', false);
       }, startTimeout);
       const segmentOutput = output, segmentDrain = drained;
@@ -1663,9 +1849,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       clearInterval(pollTimer);
       confirm(true); drain();
       clearTimeout(startTimer); await treeStop;
-      if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'), result.code === 0 ? 1 : result.code);
+      if (!started) failed(spawnError?.message || (output.capacity ? 'at capacity' : 'worker exited without a confirmed session'),
+        result.code === 0 ? 1 : result.code, spawnError ? 'spawn' : 'unconfirmed');
       if (resumeSession && !segmentConfirmed) { spawnError ||= new Error('Resumed worker exited without a confirmed session'); result.code = result.code || 1; }
-      if (resumeSession && spawnError) signal(`resume failed ${id}: ${String(spawnError.message).replace(/[\r\n]+/g, ' ')}`);
+      if (resumeSession && spawnError) signal('resume', { state: 'failed', message: oneLine(spawnError.message) });
       if (output.result !== null && output.result !== undefined) fs.writeFileSync(options.out, output.result);
       // A confirmed successful CLI continuation has processed its stdin brief;
       // launch confirmation alone is only delivery, never consumption.
@@ -1686,14 +1873,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   } catch (error) {
     if (finalize && child) {
       spawnError ||= error;
-      signal(`runtime failed ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}`);
+      notice('runtime_failed', oneLine(error.message));
       try { stop('SIGTERM', false); await treeStop; await activeRuntime?.finished; } catch {}
-      if (!started) failed(error.message, 1);
+      if (!started) failed(error.message, 1, 'runtime');
       try { return await finalize({ code: 1, killedBy: killed || segmentStopped ? 'SIGTERM' : null }); }
-      catch (failure) { signal(`finalization failed: ${String(failure.message).replace(/[\r\n]+/g, ' ')}`); }
+      catch (failure) { notice('finalization_failed', oneLine(failure.message)); }
     }
-    try { restoreSkills(); } catch (recovery) { signal(`skill recovery failed: ${String(recovery.message).replace(/[\r\n]+/g, ' ')}`); }
-    failed(error.message, 1);
+    try { restoreSkills(); } catch (recovery) { notice('skill_recovery_failed', oneLine(recovery.message)); }
+    failed(error.message, 1, options ? 'runtime' : 'admission');
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
       const reason = unconfirmed ? 'unconfirmed' : stoppedOnRequest() ? 'killed' : 'error';
@@ -1703,8 +1890,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         ...(stopFailure && { treeStopFailure: stopFailure }),
         verdict: routingVerdict(output, declared(), options.fallbackFrom), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${refusalNote()}${bookkeeping}`
-        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`);
+      ended({ exitCode: 1, reason, bookkeeping, treeStopFailure: stopFailure });
     }
     log?.destroy();
     return 1;
@@ -1715,7 +1901,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
     for (const timer of requestTimers.values()) clearTimeout(timer);
     await inboxRead; await treeStop;
-    await rejectDeferredControls().catch(() => { signal('deferred control receipts unavailable'); });
+    await rejectDeferredControls().catch(() => notice('deferred_control_unavailable'));
     await receiptTail; clearTimeout(forceTimer);
     await rollout?.pending;
     try { await activeRuntime?.close(); }
@@ -1730,6 +1916,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 }
 
 module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, dispatchCompanions,
+  dispatchEvent, detachedEnd, renderDispatchLine, renderDispatchStart,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
   localWindowsCodex, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole };
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });

@@ -10,7 +10,6 @@
   "scripts/native-session-smoke.mjs :: tests/packaged-startup.test.cjs :: source-execution": 1,
   "scripts/native-session-smoke.mjs :: tests/packaged-startup.test.cjs :: source-slice": 1,
   "scripts/reading-live.mjs :: positional-lines": 2,
-  "scripts/routing-acceptance.mjs :: dispatch-text": 4,
   "scripts/routing-acceptance.mjs :: positional-lines": 1,
   "scripts/skills-probe.mjs :: tests/skills-probe.test.cjs :: source-regex": 1,
   "scripts/smoke.mjs :: whole-word": 2,

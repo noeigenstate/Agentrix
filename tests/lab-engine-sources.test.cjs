@@ -344,7 +344,10 @@ test('generic references and the runner use the provider context and bind the br
     async root(args, options) {
       await this.handler({ argv: ['pwd'], timeoutMs: 1000 }); this.modelStarted = true;
       await fs.writeFile(args[args.indexOf('--out') + 1], 'fixture answer');
-      const stdout = '[dispatch] ended fixture claude model claude-sonnet-5-5'; options.onLine(stdout);
+      const { ended } = require('./helpers/dispatch-events.cjs');
+      const event = ended('fixture', 'exit', { agent: 'claude', model: 'claude-sonnet-5-5' });
+      options.onEvent(event);
+      const stdout = JSON.stringify(event) + '\n';
       return { code: 0, stdout, stderr: '' };
     },
     async close() { events.push('closed'); },

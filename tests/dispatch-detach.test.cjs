@@ -7,7 +7,8 @@ const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter, once } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
-const { argumentsOf, startDetached, waitDetached, run } = require('../integration/dispatch.cjs');
+const { argumentsOf, startDetached, waitDetached, run, renderDispatchLine } = require('../integration/dispatch.cjs');
+const { started: startEvent, ended: endEvent, waiting: waitingEvent } = require('./helpers/dispatch-events.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 const { updateDispatchSeats, updateDispatchLaunchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 
@@ -49,12 +50,27 @@ test('receipt readers retain the last complete value across missing and partial 
 
 test('wait reports an unknown id and still collects a known run, printing its start once across waits', async t => {
   const store = receipts(t), id = randomUUID(), unknown = randomUUID(); let text = '';
-  store.create({ id, createdAt: Date.now(), settled: true, exitCode: 0, startedLine: `[dispatch] started ${id} session synthetic`, endedLine: `[dispatch] ended ${id} exit 0` });
+  store.create({ id, createdAt: Date.now(), settled: true, exitCode: 0, started: startEvent(id), ended: endEvent(id),
+    startedLine: 'stale start', endedLine: 'stale end' });
   const output = { write: value => { text += value; } };
   assert.equal(await waitDetached({ ids: [unknown, id], timeout: 0 }, { store, stdout: output }), 1);
   assert.match(text, new RegExp(`unknown run ${unknown}`)); assert.match(text, new RegExp(`ended ${id}`));
   await waitDetached({ ids: [id], timeout: 0 }, { store: new DetachedRuns(store.directory), stdout: output });
   assert.equal(text.split(`[dispatch] started ${id}`).length, 2);
+  assert.doesNotMatch(text, /stale/);
+});
+
+test('legacy receipt text remains opaque and cannot set the machine-readable outcome', async t => {
+  const store = receipts(t), id = randomUUID(), events = [];
+  const endedLine = `[dispatch] ended ${id} · exit 0 reason permission`;
+  fs.writeFileSync(store.file(id), JSON.stringify({ id, settled: true, exitCode: 0, endedLine }));
+  assert.equal(store.read(id).legacy, true);
+  let text = '';
+  assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, onEvent: event => events.push(event), stdout: { write: value => { text += value; } } }), 0);
+  assert.equal(text, endedLine + '\n');
+  assert.deepEqual(events.map(event => [event.type, event.reason, event.result.source]), [['dispatch.ended', 'unknown', 'legacy']]);
+  fs.writeFileSync(store.file(id), JSON.stringify({ id, format: 'agentrix.detached-run', version: 3, endedLine }));
+  assert.throws(() => store.read(id), { code: 'wire.unsupported_version' });
 });
 
 test('wait for any returns on a missing receipt while ordinary wait keeps observing the other runs', async t => {
@@ -85,10 +101,10 @@ test('detached startup reports the sandbox wait while status can read it and cla
   };
   store.observe = async (check, timeout) => {
     assert.equal(timeout, process.platform === 'win32' ? 9 * 60_000 : 60_000);
-    await store.update(id, { admitted: true, waitingLine: `[dispatch] waiting ${id}: waiting for sandbox permissions` });
+    await store.update(id, { admitted: true, waiting: waitingEvent(id) });
     assert.equal(check(), undefined);
     assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, stdout: { write: line => { status += line; } } }), 75);
-    await store.update(id, { startedLine: `[dispatch] started ${id} session synthetic`, waitingLine: null });
+    await store.update(id, { started: startEvent(id), waiting: null });
     assert.equal(store.claimStart(id), true);
     return check();
   };
@@ -99,8 +115,8 @@ test('detached startup reports the sandbox wait while status can read it and cla
   assert.equal(code, 0);
   assert.match(status, /still running.*waiting for sandbox permissions/);
   assert.match(text, /waiting for sandbox permissions\n\[dispatch\] started/);
-  assert.match(statuses[0].waitingLine, /waiting for sandbox permissions/);
-  assert.equal(store.read(id).waitingLine, null);
+  assert.equal(statuses[0].waiting.message, 'waiting for sandbox permissions');
+  assert.equal(store.read(id).waiting, null);
 });
 
 test('detached launcher saves absolute cwd and notices a helper load failure immediately', async t => {
@@ -317,7 +333,8 @@ test('a fast helper exit cannot overwrite a finished receipt through the parent 
       const child = new EventEmitter(); child.unref = () => {};
       queueMicrotask(() => {
         child.emit('spawn');
-        void disk.update(id, { startedLine: `[dispatch] started ${id} session synthetic`, endedLine: `[dispatch] ended ${id} exit 0`, settled: true, exitCode: 0 }).then(() => child.emit('exit', 0, null));
+        const ended = endEvent(id);
+        void disk.update(id, { started: startEvent(id), ended, endedLine: renderDispatchLine(ended), settled: true, exitCode: 0 }).then(() => child.emit('exit', 0, null));
       }); return child;
     },
   });
@@ -364,7 +381,7 @@ test('wait prints both normal end receipts, including nonzero worker exit codes,
   const store = receipts(t), ids = [randomUUID(), randomUUID()];
   let text = '';
   for (const [index, id] of ids.entries()) store.create({ id, createdAt: Date.now(), settled: true, exitCode: index,
-    endedLine: `[dispatch] ended ${id} claude model synthetic · exit ${index} reason exit` });
+    ended: endEvent(id, 'exit', { agent: 'claude', exitCode: index }) });
   assert.equal(await waitDetached({ ids, timeout: 0 }, { store, stdout: { write: value => { text += value; } } }), 0);
   for (const id of ids) assert.equal(text.split(`[dispatch] ended ${id}`).length, 2);
   assert.match(text, /exit 1 reason exit/);
@@ -394,8 +411,8 @@ test('receipt replacement wakes wait and each ended line is printed only once', 
   const waiting = waitDetached({ ids, timeout: 10 }, { store, stdout: { write: value => { text += value; } },
     observe: check => new Promise(resolve => { inspect = async () => { if (await check()) resolve(true); }; registered(); void inspect(); }) });
   await ready;
-  await store.update(ids[1], { settled: true, endedLine: `[dispatch] ended ${ids[1]} · exit 0 reason exit` }); await inspect(); await inspect();
-  await store.update(ids[0], { settled: true, endedLine: `[dispatch] ended ${ids[0]} · exit 0 reason exit` }); await inspect();
+  await store.update(ids[1], { settled: true, ended: endEvent(ids[1]) }); await inspect(); await inspect();
+  await store.update(ids[0], { settled: true, ended: endEvent(ids[0]) }); await inspect();
   assert.equal(await waiting, 0);
   assert.equal(text.split('[dispatch] ended ').length, 3);
   assert.ok(text.indexOf(ids[1]) < text.indexOf(ids[0]));
@@ -414,7 +431,7 @@ test('wait for any detached run returns when the first settles and reports the o
       return observed;
     } });
   await watching.promise;
-  await store.update(ids[1], { settled: true, endedLine: `[dispatch] ended ${ids[1]} · exit 0` });
+  await store.update(ids[1], { settled: true, ended: endEvent(ids[1]) });
   assert.equal(await waiting, 0);
   assert.ok(text.includes(`[dispatch] ended ${ids[1]} `));
   assert.ok(text.includes(`[dispatch] still running ${ids[0]} `));
@@ -452,7 +469,7 @@ test('detached helper uses an independent process group, file stdio and the orig
     child.unref = () => {}; child.kill = () => assert.fail('A confirmed detached helper must survive');
     queueMicrotask(() => {
       child.emit('spawn');
-      void store.update(id, { admitted: true, startedAt: 1000, confirmedAt: 2000, startedLine: `[dispatch] started ${id} claude model synthetic · pid 123 session synthetic` });
+      void store.update(id, { admitted: true, startedAt: 1000, confirmedAt: 2000, started: startEvent(id, 'claude', { model: 'synthetic', pid: 123 }) });
     });
     return child;
   } });
@@ -521,8 +538,8 @@ async function fixture(t) {
     if (process.platform === 'win32') {
       const live = new Map();
       for (const id of ids) {
-        const { helperPid, startedLine } = store.read(id);
-        const workerPid = Number(startedLine?.match(/\bpid (\d+) session /)?.[1]);
+        const { helperPid, started } = store.read(id);
+        const workerPid = started?.pid;
         if (helperPid) live.set(helperPid, 'helper');
         if (workerPid) live.set(workerPid, 'worker');
       }

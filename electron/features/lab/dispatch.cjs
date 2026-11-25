@@ -8,14 +8,14 @@ const { modelKey } = require('../dashboard/cost.cjs');
 
 const CLAUDE_LOGIN_ERROR = '无法登录 Claude';
 
-async function claudeLoginFailed(result, out) {
+async function claudeLoginFailed(result, out, providerError) {
   const login = new RegExp([
     'authentication_error', 'invalid_api_key', 'not logged in',
     'authentication (?:failed|error)', '(?:failed|unable) to (?:authenticate|log in|sign in)',
     '(?:please|must) (?:run |use )?(?:/login|claude auth login)',
     '(?:oauth|refresh token).*(?:expired|invalid)', 'unauthorized.*401',
   ].join('|'), 'i');
-  if (login.test(result.stdout + '\n' + result.stderr)) return true;
+  if (login.test(result.stderr) || typeof providerError === 'string' && login.test(providerError)) return true;
   let file;
   try {
     file = await fs.open(out + '.log', 'r');
@@ -86,24 +86,25 @@ async function dispatch({ arm, cwd, directory, session, usage, signal, timeoutMs
   await fs.writeFile(brief, briefText || taskBrief(task, arm, helper, session?.workspaceRoot, session?.control), { mode: 0o600 });
   aborted(signal);
   if (!session) throw new Error('A trusted isolated lab session is required.');
-  let mismatch = false, reportedModel = null;
+  let mismatch = false, startFailed, ended;
   try {
     const args = workerArguments({ arm, cwd, brief, out, helper, kind: task?.kind, review });
-    const result = await session.root(args.slice(1), {
+    const result = await session.root([...args.slice(1), '--events', 'jsonl'], {
       cwd, review, timeoutMs, log: path.join(directory, prefix + '.log'),
-      onLine(line) {
-        const ended = /^\[dispatch\] ended [\w-]+ (?:codex|claude) model (\S+)/.exec(line);
-        if (ended) reportedModel = ended[1];
-        if (/^\[dispatch\].*routing MISMATCH/.test(line)) { mismatch = true; session.controller.abort(); }
+      onEvent(event) {
+        if (event.type === 'dispatch.ended') ended = event;
+        if (event.type === 'dispatch.start-failed' || event.type === 'dispatch.failed') startFailed ??= event;
+        if (event.type === 'dispatch.started' && event.routing.verdict === 'mismatch') {
+          mismatch = true; session.controller.abort();
+        }
       },
     });
-    const failed = /\bOUT OF SCOPE:|\[dispatch\] failed to start| · exit -?\d+ reason (?:error|scope|unconfirmed|capacity|killed)/;
-    if (result.code !== 0 || failed.test(result.stdout)) {
-      if ((review || arm !== 'sol') && await claudeLoginFailed(result, out)) throw new Error(CLAUDE_LOGIN_ERROR);
+    if (result.code !== 0 || startFailed || ended?.scope.state === 'out-of-scope' || ['error', 'scope', 'unconfirmed', 'capacity', 'killed', 'lost'].includes(ended?.reason)) {
+      if ((review || arm !== 'sol') && await claudeLoginFailed(result, out, startFailed?.message)) throw new Error(CLAUDE_LOGIN_ERROR);
       throw new Error('实验模型执行失败，请查看运行日志。');
     }
     const call = [...usage.calls.values()].findLast(call => call.cwd === cwd && call.role === (review ? '审查' : '执行'));
-    const actual = reportedModel || call?.model;
+    const actual = ended?.model || call?.model;
     if (!actual || actual === 'unreported' || modelKey(actual) !== MODELS[review ? 'opus' : arm]) {
       throw new Error('实验模型与指定方案不匹配。');
     }

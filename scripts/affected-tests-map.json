@@ -431,7 +431,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "0f51f712d7ef0c767843314db236f268b902a7c82fdc9b3378c609dd4529d925",
+      "digest": "6bb2e930db25841cb726eb9ed7b260c44029394f3dd8bdbae999761c87565847",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -470,19 +470,19 @@
       "reason": "App-shell composition root: edits force full coverage, while provider changes do not fan out through the host inputs. The bootstrap dynamically loads the installed intercept module."
     },
     "integration/dispatch-outbox.cjs": {
-      "digest": "ffb94e25593947baf8f80268440163c8387f09654285abfcdae0c6660dd91650",
+      "digest": "ad62ca66b2f47fd78c59723c78e11aaeca038f72b35fa04922eb358cd22ca767",
       "targets": [
         "electron/features/agents/dispatch-events.cjs"
       ],
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "33836be80376c230063a1a1c7c0d43acffdc147b9810b1d373b763eefb9d7cd8",
+      "digest": "ffe0c7b5980d787c868f49c9085b72513e5d84f6cd796e01cdabbc626d74c9eb",
       "targets": [
         "integration/shims/intercept.cjs",
         "integration/dispatch.cjs"
       ],
-      "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
+      "reason": "The lab bundles intercept beside the private helper and renders delegated events with the configured source or packaged dispatch helper."
     },
     "integration/shims/intercept.cjs": {
       "digest": "8007884d24316140de5aaffea61295d598cbc663ce6fb8fea3601e68495df387",

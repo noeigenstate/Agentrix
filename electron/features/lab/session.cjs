@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
+const { readEnvelope, WIRE_FIELDS } = require('../agents/dispatch-events.cjs');
 const { command, killMarked, aborted } = require('./process.cjs');
 const { inside, cleanupWorktrees } = require('./workspace.cjs');
 const { removePath } = require('./disk.cjs');
@@ -20,7 +21,7 @@ async function copyHelper(helper, directory) {
     const rate = "send({ type: 'dispatch-rate', id, ...lastRate });";
     if (!source.includes(rate)) throw new Error('The dispatch helper cannot provide authenticated live cost measurements.');
     instrumented = source.replace(rate, "send({ type: 'dispatch-rate', id, ...lastRate, ...output.usage() });");
-    const meter = 'send = eventSink(env.AGENTRIX_BOOTSTRAP);';
+    const meter = 'send = eventSink(env.AGENTRIX_BOOTSTRAP, notice);';
     if (!instrumented.includes(meter)) throw new Error('The dispatch helper cannot isolate its metering credentials.');
     instrumented = instrumented.replace(meter, 'send = globalThis.__AGENTRIX_LAB_SINK;');
     instrumented = instrumented.replace(
@@ -53,6 +54,20 @@ async function copyHelper(helper, directory) {
   modules['dispatch.cjs'] = instrumented;
   await fs.writeFile(destination, JSON.stringify(modules), { mode: 0o600 });
   return destination;
+}
+
+function dispatchLine(line) {
+  let row;
+  try { row = JSON.parse(line); } catch { return null; }
+  if (!Object.hasOwn(WIRE_FIELDS.dispatch, row?.type)) return null;
+  return readEnvelope(row, { channel: 'dispatch events', legacy: false }).value;
+}
+
+function boundedDispatchMessage(event) {
+  const bound = value => typeof value === 'string' ? value.slice(0, 4096) : value;
+  if (event.type !== 'dispatch.request') return { ...event, message: bound(event.message) };
+  const resolution = Object.fromEntries(Object.entries(event.resolution).map(([key, value]) => [key, bound(value)]));
+  return { ...event, resolution };
 }
 
 async function localPath(file, cwd, roots, existing = false) {
@@ -208,13 +223,16 @@ class LabSession {
       if (submitted || !buffer.includes('\n')) return;
       submitted = true;
       void (async () => {
+        let jsonl = false;
         try {
           const request = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
           if (!this.active || this.closed || !this.allowDelegation || request.capability !== this.capability) {
             throw new Error('Invalid lab dispatch request.');
           }
+          jsonl = Array.isArray(request.args) && request.args.includes('--events');
           const args = await this.checkArguments(request.args, request.cwd);
           const options = {
+            jsonl,
             cwd: await fs.realpath(request.cwd), signal: requestControl.signal, onLine: line => {
               if (!socket.destroyed) socket.write(JSON.stringify({ output: line + '\n' }) + '\n');
             },
@@ -223,12 +241,14 @@ class LabSession {
           if (args[0] === 'wait') result = await this.waitDispatch(args, options);
           else if (args[0] === 'stop') result = await this.stopDispatch(args, options);
           else if (args.includes('--detach')) result = this.detachDispatch(args, options);
-          else result = await this.launch(args, options);
+          else result = await this.launch(args, options.jsonl ? { ...options, onLine: undefined, onEvent: event => options.onLine(JSON.stringify(event)) } : options);
           finished = true;
           if (!socket.destroyed) socket.end(JSON.stringify({ exitCode: result.code ?? 1 }) + '\n');
         } catch (error) {
           finished = true;
-          if (!socket.destroyed) socket.end(JSON.stringify({ output: String(error.message), exitCode: 1 }) + '\n');
+          const message = String(error.message);
+          const output = jsonl ? JSON.stringify({ v: 1, type: 'dispatch.failed', id: null, at: Date.now(), message }) + '\n' : message;
+          if (!socket.destroyed) socket.end(JSON.stringify({ output, exitCode: 1 }) + '\n');
         }
       })();
     });
@@ -272,15 +292,16 @@ class LabSession {
     for (let i = 1; i < args.length; i++) {
       const option = args[i];
       if (option.startsWith('--')) {
-        if (seen.has(option) || !(option === '--cwd' || option === '--timeout' && args[0] === 'wait'
+        if (seen.has(option) || !(option === '--cwd' || option === '--events' || option === '--timeout' && args[0] === 'wait'
           || ['--reason', '--no-resume'].includes(option) && args[0] === 'stop')) throw new Error('Unknown or repeated lab dispatch option.');
         seen.add(option);
         if (option === '--no-resume') continue;
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error('Missing lab dispatch option value.');
+        if (option === '--events' && value !== 'jsonl') throw new Error('Expected --events jsonl.');
         if (option === '--timeout') timeout = Number(value);
         else if (option === '--cwd') cwd = value;
-        else reason = value;
+        else if (option === '--reason') reason = value;
       } else if (/^[\w.-]{1,128}$/.test(option)) { if (!ids.includes(option)) ids.push(option); }
       else throw new Error('Invalid lab dispatch run id.');
     }
@@ -289,21 +310,32 @@ class LabSession {
     }
     return { ids, timeout, cwd, reason };
   }
+  dispatchOutput({ jsonl, onLine }) {
+    // The configured trusted helper also supplies the human presentation for delegated jobs.
+    return jsonl ? event => onLine(JSON.stringify(event)) : event => onLine(this.dispatchFormat().renderDispatchLine(event));
+  }
+  dispatchFormat() {
+    return require(this.helper);
+  }
   detachDispatch(args, options) {
     const id = randomUUID(), control = new AbortController(), now = this.now || Date.now;
-    const entry = { id, control, createdAt: now(), activityAt: now(), settled: false, endedLine: null,
-      startedLine: null, startReported: false, messages: [], listeners: new Set() };
+    const { dispatchEvent, detachedEnd } = this.dispatchFormat(), emit = this.dispatchOutput(options);
+    const entry = { id, control, createdAt: now(), activityAt: now(), settled: false, ended: null,
+      started: null, startReported: false, messages: [], listeners: new Set() };
     // Retain the job in this session; the short-lived RPC is not its lifetime or its meter authority.
-    const running = this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,
-      signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {
+    const workerArgs = args.filter(arg => arg !== '--detach');
+    if (!options.jsonl) workerArgs.push('--events', 'jsonl');
+    const running = this.launch(workerArgs, { ...options, onLine: undefined, dispatchId: id,
+      signal: AbortSignal.any([control.signal, this.controller.signal]), onEvent: event => {
+        if (event.id !== id && event.type !== 'dispatch.failed') return;
         entry.activityAt = now();
-        if (line.startsWith(`[dispatch] started ${id} `)) entry.startedLine ||= line.slice(0, 8192);
-        else if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line.slice(0, 8192);
-        else if (line.startsWith(`[dispatch] failed to start ${id}:`) || line.startsWith('[dispatch] failed:')
-          || line.startsWith(`[dispatch] request ${id} `) || line.startsWith('[dispatch] request:')) {
-          entry.messages.push(line.slice(0, 4096));
+        if (event.type === 'dispatch.started') entry.started ||= event;
+        else if (event.type === 'dispatch.ended') entry.ended = event;
+        else if (['dispatch.start-failed', 'dispatch.failed', 'dispatch.request'].includes(event.type)) {
+          const message = boundedDispatchMessage(event);
+          entry.messages.push(message);
           if (entry.messages.length > 16) entry.messages.shift();
-          if (line.startsWith('[dispatch] failed')) entry.error ||= line.slice(0, 1000);
+          if (event.type !== 'dispatch.request') entry.failure ||= message;
         }
         for (const listener of entry.listeners) listener();
       } });
@@ -312,18 +344,21 @@ class LabSession {
       entry.code = 1; entry.error ||= String(error.message).replace(/[\r\n]/g, ' ').slice(0, 500);
     }).then(() => {
       entry.settled = true; entry.activityAt = now();
-      entry.endedLine ||= `[dispatch] ended ${id} · exit ${entry.code} reason ${control.signal.aborted ? 'stopped' : 'error'}${entry.error ? ' · ' + entry.error : ''}`;
+      entry.ended ||= detachedEnd(id, { source: 'lab', exitCode: entry.code, reason: control.signal.aborted ? 'killed' : 'error',
+        warnings: entry.failure ? [{ code: 'lab_dispatch_failed', event: entry.failure }]
+          : entry.error ? [{ code: 'lab_dispatch_failed', detail: entry.error }] : [] });
     });
-    options.onLine(`[dispatch] detached ${id} · session follows in wait`);
+    emit(dispatchEvent('detached', id));
     return { code: 0 };
   }
-  async waitDispatch(args, { signal, onLine }) {
+  async waitDispatch(args, options) {
+    const { signal } = options, emit = this.dispatchOutput(options), { dispatchEvent } = this.dispatchFormat(), now = this.now || Date.now;
     const { ids, timeout } = this.dispatchSelection(args), entries = [];
     let unknown = false;
     for (const id of ids) {
       const entry = this.dispatches.get(id);
       if (entry) entries.push(entry);
-      else { onLine(`[dispatch] unknown run ${id}`); unknown = true; }
+      else { emit(dispatchEvent('unknown-run', id)); unknown = true; }
     }
     let timer, cancel;
     const schedule = this.schedule || setTimeout, clear = this.cancel || clearTimeout;
@@ -337,8 +372,8 @@ class LabSession {
     const listeners = entries.map(entry => {
       const flush = () => {
         if (!open) return;
-        if (entry.startedLine && !entry.startReported) { entry.startReported = true; onLine(entry.startedLine); }
-        for (const line of entry.messages.splice(0)) onLine(line);
+        if (entry.started && !entry.startReported) { entry.startReported = true; emit(entry.started); }
+        for (const event of entry.messages.splice(0)) emit(event);
       };
       entry.listeners.add(flush); flush();
       return flush;
@@ -346,11 +381,11 @@ class LabSession {
     try {
       const complete = Promise.all(entries.map(async (entry, index) => {
         await entry.done;
-        if (open) { listeners[index](); onLine(entry.endedLine); }
+        if (open) { listeners[index](); emit(entry.ended); }
       })).then(() => unknown ? 1 : 0);
       const code = await Promise.race([complete, stopped]);
       if (code === 75) for (const entry of entries) if (!entry.settled) {
-        onLine(`[dispatch] still running ${entry.id} · ${Math.floor(((this.now || Date.now)() - entry.createdAt) / 1000)} s · last activity ${new Date(entry.activityAt).toISOString()}`);
+        emit(dispatchEvent('running', entry.id, { seconds: Math.floor((now() - entry.createdAt) / 1000), lastActivityAt: entry.activityAt }));
       }
       return { code };
     } finally {
@@ -358,10 +393,11 @@ class LabSession {
       entries.forEach((entry, index) => entry.listeners.delete(listeners[index]));
     }
   }
-  async stopDispatch(args, { onLine }) {
+  async stopDispatch(args, options) {
     const { ids, reason } = this.dispatchSelection(args), entry = this.dispatches.get(ids[0]);
-    if (!entry) { onLine(`[dispatch] unknown run ${ids[0]}`); return { code: 1 }; }
-    entry.control.abort(reason); await entry.done; onLine(entry.endedLine);
+    const emit = this.dispatchOutput(options);
+    if (!entry) { emit(this.dispatchFormat().dispatchEvent('unknown-run', ids[0])); return { code: 1 }; }
+    entry.control.abort(reason); await entry.done; emit(entry.ended);
     return { code: 0 };
   }
   launch(args, options = {}) {
@@ -372,7 +408,7 @@ class LabSession {
     return running;
   }
   async launchJob(job, args, {
-    cwd, log, onLine, timeoutMs = 20 * 60000, command: executable, review = false, signal, network = true, dispatchId,
+    cwd, log, onLine, onEvent, timeoutMs = 20 * 60000, command: executable, review = false, signal, network = true, dispatchId,
   }) {
     const root = review ? path.join(this.labRoot, 'reviews', this.runId) : this.workspaceRoot;
     await localPath(cwd, cwd, [root], true);
@@ -420,7 +456,7 @@ class LabSession {
     const host = process.platform === 'win32' ? 'sandbox-win32-host.cjs' : 'host.cjs';
     const running = command(this.nodePath || process.execPath, [path.join(this.privateDirectory, host), config], {
       cwd, env, signal: signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
-      timeoutMs, log, onLine, ipc: true,
+      timeoutMs, log, onLine: onEvent ? line => { const event = dispatchLine(line); if (event) onEvent(event); } : onLine, ipc: true,
       onMessage: message => { if (message?.type === 'lab-model-started') this.modelStarted = true; },
     });
     try {

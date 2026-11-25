@@ -4,7 +4,10 @@ const path = require('node:path');
 // The lab's private bundle runs from memory with nothing on disk to find: it carries the runtime beside this module.
 const runtime = [__dirname, path.join(__dirname, 'electron'), path.join(__dirname, '../electron')]
   .find(folder => fs.existsSync(path.join(folder, 'features/agents/dispatch-events.cjs'))) ?? __dirname;
-const { dispatchFrame, verifyDispatchFrame } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const { dispatchFrame, verifyDispatchFrame, readEnvelope, WIRE_FIELDS } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const receiptFormat = 'agentrix.detached-run';
+const receiptVersion = WIRE_FIELDS.files[receiptFormat].version;
+const receiptTypes = { started: 'dispatch.started', waiting: 'dispatch.waiting', startFailed: 'dispatch.start-failed', ended: 'dispatch.ended' };
 
 class DispatchOutbox {
   constructor({ directory, id, projectId, sessionKey, wake = () => {} }) {
@@ -67,8 +70,17 @@ class DetachedRuns {
     try {
       const file = this.file(id), stat = fs.lstatSync(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Unreadable detached run');
-      const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const { value: entry, legacy } = readEnvelope(fs.readFileSync(file, 'utf8'), { format: receiptFormat });
       if (entry.id !== id) throw new Error('Invalid detached run');
+      Object.defineProperty(entry, 'legacy', { value: legacy, enumerable: false });
+      for (const [key, type] of Object.entries(receiptTypes)) {
+        if (entry[key] == null) continue;
+        const event = entry[key];
+        readEnvelope(event, { channel: receiptFormat + '.' + key, legacy: false });
+        if (typeof event !== 'object' || event.type !== type || event.id !== id || !WIRE_FIELDS.dispatch[type].required.every(field => Object.hasOwn(event, field))) {
+          throw new Error(`Invalid detached run event ${key}`);
+        }
+      }
       this.cache.set(id, entry); return entry;
     } catch (error) {
       if (error instanceof SyntaxError || ['ENOENT', 'EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
@@ -78,6 +90,7 @@ class DetachedRuns {
     }
   }
   create(entry) {
+    entry = { ...entry, format: receiptFormat, version: receiptVersion };
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     if (fs.lstatSync(this.directory).isSymbolicLink()) throw new Error('Unreadable detached directory');
     fs.writeFileSync(this.file(entry.id), JSON.stringify(entry), { flag: 'wx', mode: 0o600 });
@@ -86,9 +99,10 @@ class DetachedRuns {
   update(id, changes, { unlessEnded = false } = {}) {
     const pending = (this.writes.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
       const previous = unlessEnded ? this.read(id, { fresh: true }) : this.latest.get(id) || this.read(id);
-      if (unlessEnded && (!previous || previous.endedLine || previous.settled)) return previous;
+      if (unlessEnded && (!previous || this.isEnded(previous))) return previous;
       if (!previous) throw new Error(`unknown run ${id}`);
       const entry = { ...previous, ...changes }, file = this.file(id), temporary = file + '.' + process.pid + '.tmp';
+      if (previous.legacy) Object.defineProperty(entry, 'legacy', { value: true });
       // Keep all changes after an exhausted retry; a later successful update also persists them.
       this.latest.set(id, entry);
       try {
@@ -96,7 +110,7 @@ class DetachedRuns {
         for (let attempt = 0; ; attempt++) {
           if (unlessEnded) {
             const current = this.read(id, { fresh: true });
-            if (!current || current.endedLine || current.settled) {
+            if (!current || this.isEnded(current)) {
               if (current) this.latest.set(id, current);
               return current;
             }
@@ -113,6 +127,9 @@ class DetachedRuns {
     });
     this.writes.set(id, pending);
     return pending;
+  }
+  isEnded(entry) {
+    return entry.settled || entry.ended || entry.legacy && entry.endedLine;
   }
   claimStart(id) {
     try { fs.closeSync(fs.openSync(this.file(id) + '.announced', 'wx', 0o600)); return true; }

@@ -7,7 +7,8 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { validateSmallScope, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole } = require('./dispatch.cjs');
+const { validateSmallScope, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole,
+  renderDispatchLine, renderDispatchStart } = require('./dispatch.cjs');
 const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
@@ -167,12 +168,12 @@ function elapsedSeconds(run) {
 
 function summarize(run) {
   const title = Array.from(run.title);
-  const reason = run.lost ? 'lost' : /\bexit -?\d+ reason ([a-z]+)\b/.exec(run.end)?.[1] ?? 'exit';
   return { id: run.id, seat: run.seat, title: title.length <= SUMMARY_TITLE_LIMIT ? run.title : title.slice(0, SUMMARY_TITLE_LIMIT - 1).join('') + '…',
-    state: run.end ? 'ended' : 'running', seconds: elapsedSeconds(run), ...(run.end && { reason }),
+    state: run.end ? 'ended' : 'running', seconds: elapsedSeconds(run), ...(run.end && { reason: run.reason }),
+    ...(run.legacy && { legacy: true }),
     ...(!run.end && run.ownerWait && { waiting: run.ownerWait }),
     ...(!run.end && run.ownerWait && run.menu && { menu: { id: run.menu.id, kind: run.menu.kind } }),
-    ...(run.needsDecision && { needsDecision: true }), refusedCount: run.refused?.length ?? 0 };
+    ...(run.needsDecision && { needsDecision: true }), refusedCount: run.refusedCount ?? run.refused?.length ?? 0 };
 }
 
 function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
@@ -216,13 +217,13 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     return leadWorker.sandboxFallback({ ssh, env, reason, lead: matchingLead, seat, elevatedSetupMessage });
   }
   const call = async (args, options) => {
-    let output = '';
+    const events = [];
     const timing = new Map();
-    await engine(args, { ...options, env, stdout: { write: chunk => { output += chunk; return true; } }, onTiming: status => {
+    await engine(args, { ...options, env, onEvent: event => events.push(event), onTiming: status => {
       timing.set(status.id, status);
       options?.onTiming?.(status);
     } });
-    return { lines: output.split('\n'), timing };
+    return { events, timing };
   };
   const conductor = () => {
     try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim() === 'conductor'; } catch { return false; }
@@ -242,13 +243,14 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       refused: run.refused ?? [],
       ...(run.routing && { routing: run.routing }),
       ...(run.needsDecision && { needsDecision: true }),
+      ...(run.legacy && { legacy: true, reason: run.reason }),
       ...(run.end ? { end: run.end } : { activity: run.activity ?? null, ...(run.ownerWait && { waiting: run.ownerWait }), ...(run.menu && { menu: run.menu }) }) };
   };
 
   async function refreshGroup(folder, open, seconds, untilAny, signal) {
     const args = ['wait', ...open.map(run => run.id), '--cwd', folder, '--timeout', String(seconds)];
-    const { lines, timing } = await call(args, { untilAny, signal });
-    const failure = lines.find(line => line.startsWith('[dispatch] failed:'))?.slice('[dispatch] failed:'.length).trim();
+    const { events, timing } = await call(args, { untilAny, signal });
+    const failure = events.find(event => event.type === 'dispatch.failed')?.message;
     for (const run of open) {
       if (run.end) continue;
       const status = timing.get(run.id);
@@ -262,16 +264,20 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
           seenOwnerWaits.set(run.id, status.ownerWaitSequence);
         }
       }
-      const end = lines.find(line => line.startsWith(`[dispatch] ended ${run.id} `));
-      const loss = lines.includes(`[dispatch] unknown run ${run.id}`) ? `unknown run ${run.id}` : failure;
+      const relevant = events.filter(event => event.id === run.id);
+      const end = relevant.find(event => event.type === 'dispatch.ended');
+      const loss = relevant.some(event => event.type === 'dispatch.unknown-run') ? `unknown run ${run.id}` : failure;
       if (end) {
-        Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now(), needsDecision: status?.needsDecision === true });
+        const legacy = end.result.source === 'legacy';
+        Object.assign(run, { end: renderDispatchLine(end), endedAt: timestamp(status?.endedAt), observedEndAt: Date.now(),
+          reason: end.reason, legacy, refusedCount: legacy ? null : end.refused.count,
+          needsDecision: end.needsDecision === true || legacy && status?.needsDecision === true });
         sweep();
       }
-      else if (loss) Object.assign(run, { end: `lost: ${loss}`, observedEndAt: Date.now(), lost: true });
+      else if (loss) Object.assign(run, { end: `lost: ${loss}`, observedEndAt: Date.now(), lost: true, reason: 'lost' });
       else {
-        const activity = lines.find(line => line.startsWith(`[dispatch] still running ${run.id} `));
-        if (activity) run.activity = activity;
+        const activity = relevant.find(event => event.type === 'dispatch.running');
+        if (activity) run.activity = renderDispatchLine(activity);
       }
     }
     return open.some(run => run.end || run.ownerWait);
@@ -322,27 +328,30 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         const briefFile = path.join(artifacts.folder, 'brief.md'), out = path.join(artifacts.folder, 'answer.md');
         fs.writeFileSync(briefFile, brief, { mode: 0o600 });
         const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
-        const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
+        const { events, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
           ...(small ? ['--small'] : []),
           ...workerOf(agent).roleArgs(readOnly),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
           roleArtifacts: artifacts, ...(roleFallback && { roleFallback }),
           onTiming: status => {
-            if (waitingId || !(status.waitingLine || status.ownerWait)) return;
+            if (waitingId || !(status.waiting || status.ownerWait)) return;
             waitingId = status.id;
             runs.set(waitingId, { id: waitingId, seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now(),
-              activity: status.waitingLine ?? status.ownerWait, ownerWait: status.ownerWait });
+              activity: status.waiting ? renderDispatchLine(status.waiting) : status.ownerWait, ownerWait: status.ownerWait });
           },
         });
-        const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
-        if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
-        const status = timing.get(started[1]);
-        const run = runs.get(started[1]) || { id: started[1], seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now() };
+        const started = events.find(event => event.type === 'dispatch.started');
+        if (!started) {
+          const failure = events.find(event => event.type === 'dispatch.failed' || event.type === 'dispatch.start-failed');
+          throw new Error(failure ? renderDispatchLine(failure) : 'The role did not start.');
+        }
+        const status = timing.get(started.id);
+        const run = runs.get(started.id) || { id: started.id, seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now() };
         if (status?.routing) run.routing = status.routing;
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
-        runs.set(started[1], run);
+        runs.set(started.id, run);
         lastRoleCwd = work;
-        return { id: started[1], seat, started: started[2],
+        return { id: started.id, seat, started: renderDispatchStart(started),
           ...(reason && { instruction: `${reason} 已将此席位改派给 Claude 模型 ${roleFallback.model}。` }),
           ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base, baseSource: checkout.baseSource }) };
       } catch (error) {
@@ -408,9 +417,10 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     async stop_role({ id }) {
       const run = own(id);
       if (run.end) return describe(run);
-      const { lines } = await call(['stop', id, '--cwd', run.cwd]);
+      const { events } = await call(['stop', id, '--cwd', run.cwd]);
       await refresh([run]);
-      return { ...describe(run), stop: lines.filter(Boolean).pop() ?? null };
+      const stop = events.at(-1);
+      return { ...describe(run), stop: stop ? renderDispatchLine(stop, { compactFailure: true }) : null };
     },
   };
   const available = () => !ssh || conductor();

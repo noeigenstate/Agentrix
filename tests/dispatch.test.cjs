@@ -9,11 +9,12 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createHash, randomUUID } = require('node:crypto');
 const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runDetached, waitDetached, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { renderDispatchLine } = require('../integration/dispatch.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 const { createRoleArtifacts, sweepRoleArtifacts, RETENTION } = require('../integration/role-artifacts.cjs');
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
-const { dispatchDirectory, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
+const { dispatchDirectory, validDispatch, readEnvelope, WIRE_FIELDS } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 const { digest, deliveryMarker } = require('../electron/features/skills/session.cjs');
 
@@ -440,14 +441,42 @@ test('a model app-server reports after the start reaches the called-models row a
   assert.equal(calls.snapshot().find(group => group.model === 'gpt-6.1-mini')?.modelUnconfirmed, undefined);
 });
 
-test('N4: an alias resolving to its full model does not trigger the lab routing alarm, but a different model does', async t => {
+test('N4: the machine-readable routing verdict distinguishes a full alias from a different model', async t => {
   for (const [model, mismatch] of [['claude-sonnet-5-5', false], ['claude-sonnet-5-5-20261031', false], ['claude-opus-5-5', true], ['claude-sonnet-4-6', true]]) {
-    const f = await fixture(t, [{ record: { ...claude[0], model } }, { record: claude.at(-1) }], { agent: 'claude', declaredModel: 'sonnet' });
+    const records = [{ record: { ...claude[0], model } }, { record: claude.at(-1) }];
+    const f = await fixture(t, records, { agent: 'claude', declaredModel: 'sonnet', extra: ['--events', 'jsonl'], hold: 0 });
     const result = await f.finished;
-    // This is the exact abort condition in electron/features/lab/dispatch.cjs.
-    assert.equal(/^\[dispatch\].*routing MISMATCH/m.test(result.stdout), mismatch, model);
+    const started = result.stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'dispatch.started');
+    assert.equal(started.routing.verdict, mismatch ? 'mismatch' : 'ok', model);
     assert.equal(f.events.find(event => event.type === 'dispatch-end').verdict, mismatch ? 'mismatch' : 'ok');
   }
+});
+
+test('CLI JSONL and the default output carry the same events with the original line bytes', async t => {
+  const records = claude.map(record => ({ record }));
+  const human = await fixture(t, records, { agent: 'claude', bootstrap: false, hold: 0 });
+  const machine = await fixture(t, records, { agent: 'claude', bootstrap: false, extra: ['--events', 'jsonl'], hold: 0 });
+  const [plain, structured] = await Promise.all([human.finished, machine.finished]);
+  assert.deepEqual([plain.code, structured.code], [0, 0]);
+  const events = structured.stdout.trimEnd().split('\n').map(line => readEnvelope(line, { legacy: false }).value);
+  assert.deepEqual(events.map(event => event.type), ['dispatch.transport', 'dispatch.started', 'dispatch.ended']);
+  for (const event of events) {
+    const fields = WIRE_FIELDS.dispatch[event.type];
+    assert.ok(fields.required.every(key => Object.hasOwn(event, key)));
+    assert.ok(Object.keys(event).every(key => fields.required.includes(key) || fields.optional.includes(key)));
+    assert.equal(event.id, events[0].id);
+    assert.ok(Number.isSafeInteger(event.at));
+  }
+  const normalize = (text, out) => text.replaceAll(events[0].id, '<run>')
+    .replace(/(?<=\] (?:transport|started|ended) )[0-9a-f-]{36}/g, '<run>').replace(/ pid \d+ session /g, ' pid <pid> session ').replace(out, '<out>');
+  const rendered = events.map(renderDispatchLine).join('\n') + '\n';
+  assert.equal(normalize(plain.stdout, human.out), normalize(rendered, machine.out));
+  assert.equal(normalize(plain.stdout, human.out), [
+    '[dispatch] transport <run> claude-cli: Agentrix control unavailable (bootstrap/missing_environment)',
+    '[dispatch] started <run> claude model claude-sonnet-5-5 effort high fast off · routing ok · pid <pid> session ' + session,
+    '[dispatch] ended <run> claude model claude-sonnet-5-5 effort high fast off · 38 token/s (150 output tokens in 4 s) · exit 0 reason exit · out <out> · routing ok',
+    '',
+  ].join('\n'));
 });
 
 test('Claude reports the launched effort while verifying model and fast mode from runtime records', async t => {
@@ -674,11 +703,15 @@ test('detached Codex and Claude expose engine timing and a decision heading thro
         return child;
       },
     }), 0, agent);
-    const { createdAt, startedAt, confirmedAt, endedAt, settled, endedLine } = store.read(id);
+    const { format, version, createdAt, startedAt, confirmedAt, endedAt, settled, started, startedLine, ended, endedLine } = store.read(id);
+    assert.deepEqual([format, version], ['agentrix.detached-run', 2]);
+    assert.equal(startedLine, renderDispatchLine(started));
+    assert.equal(endedLine, renderDispatchLine(ended));
+    assert.equal(ended.needsDecision, needsDecision);
     assert.equal(settled, true);
     assert.ok(createdAt <= startedAt && startedAt <= confirmedAt && confirmedAt <= endedAt && endedAt <= Date.now(), agent);
     const timing = [];
-    let output = '';
+    let output = '', jsonl = '';
     assert.equal(await waitDetached({ ids: [id], timeout: 0 }, {
       store, onTiming: status => timing.push(status), stdout: { write: value => { output += value; } },
     }), 0);
@@ -687,6 +720,8 @@ test('detached Codex and Claude expose engine timing and a decision heading thro
     assert.equal(endedLine.endsWith(' · needs decision'), needsDecision);
     assert.doesNotMatch(endedLine, /Private options/);
     assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
+    assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, jsonl: true, stdout: { write: value => { jsonl += value; } } }), 0);
+    assert.deepEqual(JSON.parse(jsonl), ended);
     await sweepRoleArtifacts(cwd, { now: endedAt + RETENTION });
     await assert.rejects(fs.stat(roleArtifacts.folder), { code: 'ENOENT' });
   }

@@ -7,7 +7,8 @@ const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { LabSession, copyHelper } = require('../electron/features/lab/session.cjs');
 const { workerArguments } = require('../electron/features/lab/dispatch.cjs');
-const { argumentsOf } = require('../integration/dispatch.cjs');
+const { argumentsOf, dispatchEvent, renderDispatchLine } = require('../integration/dispatch.cjs');
+const { started: startEvent, ended: endEvent } = require('./helpers/dispatch-events.cjs');
 const os = require('node:os');
 
 test('a routing file in a Lab worktree leaves the worker specs unchanged', t => {
@@ -32,12 +33,13 @@ function sessionFixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   // Match fs/promises.realpath in LabSession.start(); RPCs still use the original spelling.
   const canonicalRoot = fs.realpathSync.native(root);
-  const session = new LabSession({ labRoot: canonicalRoot, workspaceRoot: canonicalRoot, runId: 'fixture', allowDelegation: true });
+  const session = new LabSession({ labRoot: canonicalRoot, workspaceRoot: canonicalRoot, runId: 'fixture', allowDelegation: true,
+    helper: require.resolve('../integration/dispatch.cjs') });
   session.active = true;
   const launched = [];
   session.launchJob = (id, args, options) => new Promise(resolve => {
     const job = { id, args, options, settle: (code = 0) => resolve({ code }), finish: (code = 0) => {
-      options.onLine(`[dispatch] ended ${id} codex model fixture · exit ${code} reason completed`); resolve({ code });
+      options.onEvent(endEvent(id, code ? 'killed' : 'exit', { exitCode: code })); resolve({ code });
     } };
     options.signal.addEventListener('abort', () => job.finish(130), { once: true });
     launched.push(job);
@@ -67,7 +69,7 @@ test('Lab helper instrumentation preserves detached ids and its authenticated me
   const { root } = sessionFixture(t);
   const file = await copyHelper(path.join(__dirname, '../integration/dispatch.cjs'), root);
   const source = JSON.parse(fs.readFileSync(file, 'utf8'))['dispatch.cjs'];
-  assert.match(source, /const id = detached\?\.id \|\| randomUUID\(\), send = globalThis\.__AGENTRIX_LAB_SINK;/);
+  assert.match(source, /const id = detached\?\.id \|\| randomUUID\(\);[\s\S]*const send = globalThis\.__AGENTRIX_LAB_SINK;/);
   assert.match(source, /\.\.\.lastRate, \.\.\.output\.usage\(\)/);
   // Invoke the real executor's execute function without starting an OS process.
   const executor = fs.readFileSync(path.join(__dirname, '../electron/features/lab/executor.cjs'), 'utf8');
@@ -89,6 +91,7 @@ test('Lab detach outlives the start RPC and wait returns its end line', async t 
   assert.match(receipt[0].output, new RegExp(id));
   assert.equal(launched[0].options.signal.aborted, false, 'start socket closed, job still owned by the session');
   assert.equal(launched[0].args.includes('--detach'), false);
+  assert.deepEqual(launched[0].args.slice(-2), ['--events', 'jsonl']);
   assert.equal(launched[0].options.dispatchId, id);
   launched[0].finish();
   const reply = await rpc(session, root, ['wait', id]);
@@ -104,10 +107,10 @@ test('Lab wait delivers the live session start once across timeouts and retains 
   session.schedule = callback => { expire = callback; return 1; };
   session.cancel = () => {};
   const first = session.waitDispatch(['wait', id], { onLine: line => lines.push(line) });
-  const start = `[dispatch] started ${id} codex model fixture · pid 7 session X`;
-  job.options.onLine(start);
-  assert.deepEqual(lines, [start], 'the lead receives the session id before the worker ends');
-  job.options.onLine(`[dispatch] request ${id} question-1 approval opened: fixture`);
+  const start = startEvent(id, 'codex', { session: 'X' });
+  job.options.onEvent(start);
+  assert.deepEqual(lines, [renderDispatchLine(start)], 'the lead receives the session id before the worker ends');
+  job.options.onEvent(dispatchEvent('request', id, { requestId: 'question-1', resolution: { state: 'opened', kind: 'approval', preview: 'fixture' } }));
   assert.match(lines[1], /request .*approval opened/);
   expire(); assert.equal((await first).code, 75);
   assert.equal(session.dispatches.get(id).listeners.size, 0);
@@ -121,17 +124,17 @@ for (const kind of ['failed to start', 'failed:']) test(`Lab wait preserves ${ki
   const { session, root, launched } = sessionFixture(t);
   await detach(session, root, 'claude');
   const [id] = session.dispatches.keys(), job = launched[0];
-  const failure = kind === 'failed:' ? '[dispatch] failed: invalid --model argument'
-    : `[dispatch] failed to start ${id}: worker runtime unavailable`;
-  job.options.onLine(failure);
-  job.options.onLine('[dispatch] request: permission is needed to continue');
+  const failure = kind === 'failed:' ? dispatchEvent('failed', null, { message: 'invalid --model argument' })
+    : dispatchEvent('start-failed', id, { code: 'runtime', message: 'worker runtime unavailable' });
+  job.options.onEvent(failure);
+  job.options.onEvent(dispatchEvent('request', id, { requestId: 'approval', resolution: { state: 'reported', message: 'permission is needed to continue' } }));
   job.settle(1);
   const reply = await rpc(session, root, ['wait', id]);
   const lines = reply.filter(value => value.output).map(value => value.output.trim());
-  assert.equal(lines[0], failure);
-  assert.match(lines[1], /request: permission is needed/);
+  assert.equal(lines[0], renderDispatchLine(failure));
+  assert.match(lines[1], /request .* permission is needed/);
   assert.ok(lines[2].startsWith(`[dispatch] ended ${id} `));
-  assert.ok(lines[2].includes(failure), 'the fallback end retains the actionable refusal');
+  assert.ok(lines[2].includes(lines[0]), 'the fallback end retains the actionable refusal');
   assert.equal(reply.at(-1).exitCode, 0, 'wait reports completion; the worker exit code is in its end line');
 });
 
@@ -139,9 +142,11 @@ test('Lab detached receipts are bounded while the lead is away', async t => {
   const { session, root, launched } = sessionFixture(t);
   await detach(session, root, 'claude');
   const [id] = session.dispatches.keys(), job = launched[0], entry = session.dispatches.get(id);
-  for (let n = 0; n < 30; n++) job.options.onLine(`[dispatch] request ${id} ${n} ` + 'x'.repeat(10000));
+  for (let n = 0; n < 30; n++) job.options.onEvent(dispatchEvent('request', id, {
+    requestId: String(n), resolution: { state: 'reported', message: 'x'.repeat(10000) },
+  }));
   assert.equal(entry.messages.length, 16);
-  assert.ok(entry.messages.every(line => line.length === 4096));
+  assert.ok(entry.messages.every(event => event.resolution.message.length === 4096));
   job.finish(); await entry.done;
 });
 
@@ -153,6 +158,20 @@ test('Lab wait reports unknown ids and still completes known runs with exit 1', 
   assert.match(reply[0].output, /unknown run unknown-run/);
   assert.match(reply[1].output, new RegExp('ended ' + id));
   assert.equal(reply.at(-1).exitCode, 1);
+});
+
+test('Lab detach and wait can relay JSONL, including option errors', async t => {
+  const { session, root, launched } = sessionFixture(t);
+  const start = await rpc(session, root, ['codex', '--detach', '--events', 'jsonl']);
+  const receipt = JSON.parse(start[0].output);
+  assert.equal(receipt.type, 'dispatch.detached');
+  launched[0].finish();
+  const reply = await rpc(session, root, ['wait', receipt.id, '--events', 'jsonl']);
+  const ended = JSON.parse(reply[0].output);
+  assert.deepEqual([ended.v, ended.type, ended.id, ended.reason], [1, 'dispatch.ended', receipt.id, 'exit']);
+  const invalid = await rpc(session, root, ['wait', receipt.id, '--events', 'bad']);
+  assert.equal(JSON.parse(invalid[0].output).type, 'dispatch.failed');
+  assert.equal(invalid[0].exitCode, 1);
 });
 
 test('Lab stop accepts its documented reason and keeps option validation strict', async t => {

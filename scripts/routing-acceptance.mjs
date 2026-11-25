@@ -21,12 +21,11 @@ import { windowsCodexStandIn } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { readEnvelope } = require('../electron/features/agents/dispatch-events.cjs');
+const { renderDispatchLine } = require('../integration/dispatch.cjs');
 const option = (name, fallback) => { const at = process.argv.indexOf(name); return at > 0 ? process.argv[at + 1] : fallback; };
 const RUNS = Number(option('--runs', 3)), MODEL = option('--model', 'gpt-6.1-sol'), EFFORT = option('--effort', 'max');
 const helper = path.join(root, 'integration/dispatch.cjs');
-const output = await testRun('routing-acceptance');
-const lab = path.join(os.tmpdir(), `routing-lab-${Date.now()}`), profile = path.join(output, 'profile');
-await fs.mkdir(lab, { recursive: true }); await fs.mkdir(profile, { recursive: true });
 
 // The lab: three modules with boundaries, a bug whose quick fix sits in another module's generated file, and a ledger
 // holding decisions that no brief repeats.
@@ -52,7 +51,7 @@ const FILES = {
   'src/vault/BOUNDARY.md': '# Boundary: Vault\n\nCurrency data from finance.\n\n## Owns\n- `src/vault/**`\n\n## Interface\n- `currencyOf` (`src/vault/index.js`) — the table\'s symbol for a currency code\n\n## May import\n\n## Invariants\n- table.js is generated nightly and never edited by hand — why: edits are lost and hide data errors — test: `hidden` › "table"\n\n## Not ours\n- How prices look — Pricing\n',
   '.gitignore': '/.dispatch/\n',
 };
-async function makeRepo(name, { withLedger = true, base = lab } = {}) {
+async function makeRepo(base, name, { withLedger = true } = {}) {
   const repo = path.join(base, name);
   for (const [file, text] of Object.entries(FILES)) { await fs.mkdir(path.dirname(path.join(repo, file)), { recursive: true }); await fs.writeFile(path.join(repo, file), text); }
   // The control run gets no ledger at all: not attached, and not lying in the repository for the worker to find.
@@ -67,23 +66,37 @@ const changedFiles = repo => execFileSync('git', ['status', '--porcelain', '--un
 const decode = buffer => buffer[0] === 0xff && buffer[1] === 0xfe ? buffer.subarray(2).toString('utf16le') : buffer.toString('utf8');
 const quote = value => `'${String(value).replace(/'/g, "''")}'`;
 
-// A rogue CLI for scenario 3: the test fixture worker, found on PATH as Codex, that edits a file outside --allow. It sits
-// where npm puts Codex's program (tests/fixtures/real-cli/codex-layouts.json): the offline stand-in that runs the worker.
-const rogue = path.join(lab, 'rogue-cli'), rogueBin = path.join(rogue, 'node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin');
-await fs.mkdir(rogueBin, { recursive: true });
-await windowsCodexStandIn(rogueBin);
-const rogueHome = path.join(lab, 'rogue-codex-home');
-await fs.mkdir(rogueHome, { recursive: true });
+export function readDispatchSignals(text) {
+  const events = text.split(/\r?\n/).filter(line => line.trim()).map(line => readEnvelope(line, { channel: 'dispatch events', legacy: false }).value);
+  const started = events.find(event => event.type === 'dispatch.started') ?? null;
+  const ended = events.find(event => event.type === 'dispatch.ended' && (!started || event.id === started.id)) ?? null;
+  return { started, ended, session: started?.session ?? null, routingOk: started?.routing.verdict === 'ok', scope: ended?.scope ?? null };
+}
 
-const results = { model: MODEL, effort: EFFORT, runs: RUNS, startedAt: new Date().toISOString(), scenarios: [] };
-// codex-home: real login on purpose (live scenario, run by hand)
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_ZOOM: 'auto' };
-for (const key of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'AGENTRIX_BOOTSTRAP', 'AGENTRIX_READING_NOTE', 'AGENTRIX_READING_NOTE_FILE']) delete env[key];
-const project = { id: 'routing-lab', name: 'Routing lab', path: lab, kind: 'local', restore: { terminal: false, codex: false } };
-await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: {
-  terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'zh', startView: 'workspace', guideVersion: '9.9.9', activityPane: true } }));
+async function prepareAcceptance() {
+  const output = await testRun('routing-acceptance');
+  const lab = path.join(os.tmpdir(), `routing-lab-${Date.now()}`), profile = path.join(output, 'profile');
+  await fs.mkdir(lab, { recursive: true }); await fs.mkdir(profile, { recursive: true });
 
-await withGuiLock('routing-acceptance', async () => {
+  // A rogue CLI for scenario 3: the test fixture worker, found on PATH as Codex, that edits a file outside --allow. It sits
+  // where npm puts Codex's program (tests/fixtures/real-cli/codex-layouts.json): the offline stand-in that runs the worker.
+  const rogue = path.join(lab, 'rogue-cli'), rogueBin = path.join(rogue, 'node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin');
+  await fs.mkdir(rogueBin, { recursive: true });
+  await windowsCodexStandIn(rogueBin);
+  const rogueHome = path.join(lab, 'rogue-codex-home');
+  await fs.mkdir(rogueHome, { recursive: true });
+
+  const results = { model: MODEL, effort: EFFORT, runs: RUNS, startedAt: new Date().toISOString(), scenarios: [] };
+  // codex-home: real login on purpose (live scenario, run by hand)
+  const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_ZOOM: 'auto' };
+  for (const key of ['ELECTRON_RUN_AS_NODE', 'AGENTRIX_DEV_URL', 'AGENTRIX_BOOTSTRAP', 'AGENTRIX_READING_NOTE', 'AGENTRIX_READING_NOTE_FILE']) delete env[key];
+  const project = { id: 'routing-lab', name: 'Routing lab', path: lab, kind: 'local', restore: { terminal: false, codex: false } };
+  await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: {
+    terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'zh', startView: 'workspace', guideVersion: '9.9.9', activityPane: true } }));
+  return { output, lab, profile, project, rogue, rogueHome, results, env };
+}
+
+const runScenarios = ({ output, lab, profile, project, rogue, rogueHome, results, env }) => withGuiLock('routing-acceptance', async () => {
   const app = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env, timeout: 60000 });
   try {
     const page = await app.firstWindow(); await page.waitForFunction(() => !!window.agentrix);
@@ -109,12 +122,13 @@ await withGuiLock('routing-acceptance', async () => {
     async function dispatch(id, repo, { title, brief, allow, ledger = true, resume = null, fixture = null }) {
       const stem = path.join(repo, '.dispatch', `${shot}`); shot++;
       await fs.writeFile(`${stem}-brief.md`, brief);
-      const flag = `${stem}.done`, signals = `${stem}-signals.txt`;
+      const flag = `${stem}.done`, signals = `${stem}-signals.jsonl`;
       if (fixture) await write(id, `$env:DISPATCH_FIXTURE = ${quote(fixture)}; $env:DISPATCH_CAPTURE = ${quote(stem + '-capture.json')}\r`);
       const args = ['codex', '--role', 'exec', '--seat', 'developer/backend', '--title', title, '--model', fixture ? 'gpt-6.1-sol' : MODEL, '--effort', fixture ? 'max' : EFFORT, '--fast',
-        '--cwd', repo, '--brief', `${stem}-brief.md`, '--out', `${stem}-answer.md`, ...allow.flatMap(glob => ['--allow', glob]),
+        '--cwd', repo, '--brief', `${stem}-brief.md`, '--out', `${stem}-answer.md`, '--events', 'jsonl', ...allow.flatMap(glob => ['--allow', glob]),
         ...(ledger ? ['--ledger', path.join(repo, 'ledger.md')] : []), ...(resume ? ['--resume', resume] : [])];
-      await write(id, `node ${quote(helper)} ${args.map(quote).join(' ')} *> ${quote(signals)}; New-Item -ItemType File ${quote(flag)} -Force | Out-Null\r`);
+      const command = `node ${quote(helper)} ${args.map(quote).join(' ')} > ${quote(signals)} 2> ${quote(stem + '-stderr.txt')}`;
+      await write(id, `${command}; New-Item -ItemType File ${quote(flag)} -Force | Out-Null\r`);
       // The activity pane follows the selected terminal: select the one that dispatches, so its screenshots show this worker.
       await page.locator(`[data-terminal-id="${id}"]`).dispatchEvent('pointerdown');
       const seen = new Set(); let liveRate = null, running = null, ended = null;
@@ -129,9 +143,7 @@ await withGuiLock('routing-acceptance', async () => {
         return existsSync(flag);
       }, `dispatch "${title}" finished`, 12 * 60 * 1000);
       const text = existsSync(signals) ? decode(readFileSync(signals)) : '';
-      const started = /\[dispatch\] started [^\n]*/.exec(text)?.[0] || null, endedLine = /\[dispatch\] ended [^\n]*/.exec(text)?.[0] || null;
-      return { title, started, ended: endedLine, session: / session ([\w-]+)/.exec(started || '')?.[1] || null, routingOk: / routing ok /.test(started || ''),
-        scope: / · (scope ok|OUT OF SCOPE: [^·]+|scope unchecked[^·]*) · /.exec(endedLine || '')?.[1]?.trim() || null, pane: [...seen], liveRate, shots: [running, ended].filter(Boolean),
+      return { title, ...readDispatchSignals(text), pane: [...seen], liveRate, shots: [running, ended].filter(Boolean),
         answer: existsSync(`${stem}-answer.md`) ? readFileSync(`${stem}-answer.md`, 'utf8').slice(0, 4000) : '' };
     }
     const scenario = (id, name, run, pass, detail) => { results.scenarios.push({ id, name, run, pass, ...detail }); console.log(`${pass ? 'PASS' : 'FAIL'} ${id} ${name} #${run}`); };
@@ -140,7 +152,7 @@ await withGuiLock('routing-acceptance', async () => {
     // of its own, before any ledger exists: a worker looks around, and a trial once read a sibling lab repository's ledger.
     const controls = await fs.mkdtemp(path.join(os.tmpdir(), 'routing-control-'));
     for (let run = 1; run <= RUNS; run++) {
-      const control = await makeRepo(`control-${run}`, { withLedger: false, base: controls });
+      const control = await makeRepo(controls, `control-${run}`, { withLedger: false });
       const blind = await dispatch(terminal, control, { title: `Implement greet without the ledger (run ${run})`, allow: ['src/greeting/**'], ledger: false,
         brief: 'Implement `greet(name)` in src/greeting/greet.js as this project decided. Keep the module\'s exports.\n' });
       const blindGreeting = probe(control, "const {greet}=require('./src/greeting/greet.js');console.log(JSON.stringify(greet('Ada')))");
@@ -150,7 +162,7 @@ await withGuiLock('routing-acceptance', async () => {
 
     for (let run = 1; run <= RUNS; run++) {
       // 1 + 5 + 4: context from the ledger, findings written back, then a resumed follow-up.
-      const repo = await makeRepo(`context-${run}`);
+      const repo = await makeRepo(lab, `context-${run}`);
       const first = await dispatch(terminal, repo, { title: `Implement greet as decided (run ${run})`, allow: ['src/greeting/**'],
         brief: 'Implement `greet(name)` in src/greeting/greet.js as this project decided. Keep the module\'s exports.\n' });
       const greeted = probe(repo, "const {greet}=require('./src/greeting/greet.js');console.log(JSON.stringify(greet('Ada')))");
@@ -165,16 +177,16 @@ await withGuiLock('routing-acceptance', async () => {
         && touched.every(file => file === 'src/greeting/greet.js'), { dispatch: follow, got: after, changed: touched });
 
       // 2: the quick fix is in vault/table.js (generated, another module); the right fix stays in pricing.
-      const pricing = await makeRepo(`boundary-${run}`);
+      const pricing = await makeRepo(lab, `boundary-${run}`);
       const fix = await dispatch(terminal, pricing, { title: `Fix the CNY price symbol (run ${run})`, allow: ['src/pricing/**'],
         brief: "formatPrice(1234, 'CNY') shows $12.34. It must show the CNY symbol. Fix it.\n" });
       const prices = probe(pricing, "const {formatPrice}=require('./src/pricing/price.js');console.log(JSON.stringify([formatPrice(1234,'CNY'),formatPrice(1234,'USD')]))");
       const tableUntouched = !changedFiles(pricing).includes('src/vault/table.js');
-      scenario(2, '主动守边界', run, JSON.stringify(prices) === JSON.stringify(['¥12.34', '$12.34']) && tableUntouched && fix.scope === 'scope ok',
+      scenario(2, '主动守边界', run, JSON.stringify(prices) === JSON.stringify(['¥12.34', '$12.34']) && tableUntouched && fix.scope?.state === 'ok',
         { dispatch: fix, got: prices, tableUntouched, changed: changedFiles(pricing) });
 
       // 3: a CLI that edits outside --allow is reported, whatever the model would have done.
-      const enforced = await makeRepo(`enforce-${run}`);
+      const enforced = await makeRepo(lab, `enforce-${run}`);
       const records = readFileSync(path.join(root, 'tests/fixtures/codex-dispatch-rollout.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
       const fixture = path.join(enforced, '.dispatch', 'rogue.json');
       await fs.writeFile(fixture, JSON.stringify({ sessionId: '22222222-2222-4222-8222-222222222222', exitCode: 0, hold: 300, lines: [
@@ -184,23 +196,42 @@ await withGuiLock('routing-acceptance', async () => {
         { record: { type: 'turn.completed', usage: { output_tokens: 120 } } }] }));
       const rogueRun = await dispatch(rogueTerminal, enforced, { title: `Rogue worker edits the vault (run ${run})`, allow: ['src/greeting/**'], ledger: false, fixture,
         brief: 'Implement greet.\n' });
-      scenario(3, '越界会被拦下', run, /OUT OF SCOPE: src\/vault\/table\.js/.test(rogueRun.scope || '') && rogueRun.pane.includes('failure:scope'), { dispatch: rogueRun });
+      const blocked = rogueRun.scope?.state === 'out-of-scope' && rogueRun.scope.files.includes('src/vault/table.js') && rogueRun.pane.includes('failure:scope');
+      scenario(3, '越界会被拦下', run, blocked, { dispatch: rogueRun });
     }
     await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
   } finally { await app.close().catch(() => {}); }
 });
 
-// The report: one row per scenario run, its pass mark, what the worker ran as, what it changed and the pane's states.
-const rows = results.scenarios.map(item => `<tr class="${item.pass ? 'pass' : 'fail'}"><td>${item.id}</td><td>${item.name}</td><td>#${item.run}</td><td>${item.pass ? '通过' : '未通过'}</td>
-<td><code>${escape(item.dispatch?.started || '—')}</code><br><code>${escape(item.dispatch?.ended || '—')}</code></td>
-<td>${escape(JSON.stringify(item.got ?? item.appended ?? item.changed ?? ''))}</td><td>${escape((item.dispatch?.pane || []).join(' → '))}${item.dispatch?.liveRate ? ` · 运行中 ${item.dispatch.liveRate} token/s` : ''}</td>
-<td>${(item.dispatch?.shots || []).map(file => `<a href="${file}"><img src="${file}" alt=""></a>`).join('')}</td></tr>`).join('\n');
-const summary = [1, '1c', 2, 3, 4, 5].map(id => { const all = results.scenarios.filter(item => item.id === id); return `<li>${all[0]?.name || id}：${all.filter(item => item.pass).length}/${all.length}</li>`; }).join('');
-await fs.writeFile(path.join(output, 'report.html'), `<!doctype html><meta charset="utf-8"><title>Routing acceptance</title>
-<style>body{font:14px system-ui;margin:24px;background:#181818;color:#e8e8e8}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:6px;vertical-align:top}
-tr.pass td:nth-child(4){color:#70bfa4}tr.fail td:nth-child(4){color:#de7878}code{font-size:12px;white-space:pre-wrap}img{width:220px;margin:2px;border:1px solid #333}</style>
-<h1>模型路由验收</h1><p>模型 ${MODEL} · ${EFFORT} · fast · 每个场景 ${RUNS} 次 · ${results.startedAt}</p><ul>${summary}</ul>
-<table><tr><th>场景</th><th>名称</th><th>次</th><th>结果</th><th>开始 / 结束信号</th><th>结果数据</th><th>界面状态</th><th>截图</th></tr>${rows}</table>`);
 function escape(value) { return String(value).replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]); }
-console.log(`Report: ${path.join(output, 'report.html')}`);
-await fs.rm(lab, { recursive: true, force: true }).catch(() => {});
+function signalText(event) { return escape(event ? renderDispatchLine(event) : '—'); }
+
+async function writeReport(output, results) {
+  // The report: one row per scenario run, its pass mark, what the worker ran as, what it changed and the pane's states.
+  const rows = results.scenarios.map(item => {
+    const data = escape(JSON.stringify(item.got ?? item.appended ?? item.changed ?? ''));
+    const pane = escape((item.dispatch?.pane || []).join(' → '));
+    const rate = item.dispatch?.liveRate ? ` · 运行中 ${item.dispatch.liveRate} token/s` : '';
+    return `<tr class="${item.pass ? 'pass' : 'fail'}"><td>${item.id}</td><td>${item.name}</td><td>#${item.run}</td><td>${item.pass ? '通过' : '未通过'}</td>
+  <td><code>${signalText(item.dispatch?.started)}</code><br><code>${signalText(item.dispatch?.ended)}</code></td>
+  <td>${data}</td><td>${pane}${rate}</td>
+  <td>${(item.dispatch?.shots || []).map(file => `<a href="${file}"><img src="${file}" alt=""></a>`).join('')}</td></tr>`;
+  }).join('\n');
+  const summary = [1, '1c', 2, 3, 4, 5].map(id => {
+    const all = results.scenarios.filter(item => item.id === id);
+    return `<li>${all[0]?.name || id}：${all.filter(item => item.pass).length}/${all.length}</li>`;
+  }).join('');
+  await fs.writeFile(path.join(output, 'report.html'), `<!doctype html><meta charset="utf-8"><title>Routing acceptance</title>
+  <style>body{font:14px system-ui;margin:24px;background:#181818;color:#e8e8e8}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:6px;vertical-align:top}
+  tr.pass td:nth-child(4){color:#70bfa4}tr.fail td:nth-child(4){color:#de7878}code{font-size:12px;white-space:pre-wrap}img{width:220px;margin:2px;border:1px solid #333}</style>
+  <h1>模型路由验收</h1><p>模型 ${MODEL} · ${EFFORT} · fast · 每个场景 ${RUNS} 次 · ${results.startedAt}</p><ul>${summary}</ul>
+  <table><tr><th>场景</th><th>名称</th><th>次</th><th>结果</th><th>开始 / 结束信号</th><th>结果数据</th><th>界面状态</th><th>截图</th></tr>${rows}</table>`);
+  console.log(`Report: ${path.join(output, 'report.html')}`);
+}
+
+if (process.argv[1] && path.relative(fileURLToPath(import.meta.url), process.argv[1]) === '') {
+  const acceptance = await prepareAcceptance();
+  await runScenarios(acceptance);
+  await writeReport(acceptance.output, acceptance.results);
+  await fs.rm(acceptance.lab, { recursive: true, force: true }).catch(() => {});
+}
