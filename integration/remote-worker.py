@@ -716,7 +716,8 @@ __pg_read_launch_words() {
 __pg_launch_plan() {
     local agent=$1 action=$2; shift 2
     if [[ -n $__pg_role_node && -n $__pg_role_intercept ]]; then
-        "$__pg_role_node" "$__pg_role_intercept" --launch "$agent" "$action" remote "$@" && return
+        # This wrapper reads the versioned fields; without the flag the planner answers an older wrapper's bare words.
+        AGENTRIX_LAUNCH_WIRE=1 "$__pg_role_node" "$__pg_role_intercept" --launch "$agent" "$action" remote "$@" && return
     fi
     "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" terminal-launch "$agent" "$action" "$@"
 }

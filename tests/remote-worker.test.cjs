@@ -128,6 +128,40 @@ print('remote policy and stand-in Bash OK')
   if (output?.includes('SKIP Bash missing')) t.diagnostic('Bash missing: policy operation tested; shell check skipped');
 });
 
+// Found on a real CentOS host: the host's Node planner saw a bootstrap without a format and answered the old bare word,
+// which the versioned wrapper rejected, so `claude` returned silently.
+test('the SSH Bash wrapper asks the host Node planner for versioned fields even with an unversioned bootstrap', {
+  skip: process.platform === 'win32' && 'the remote worker runs only on POSIX hosts',
+}, t => {
+  const script = String.raw`
+import ast, os, pathlib, shutil, subprocess, sys, tempfile, json
+bash = shutil.which('bash')
+if not bash:
+    print('SKIP Bash missing'); sys.exit(0)
+tree = ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+source = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'BASH_SOURCE' for target in node.targets))
+source = source[source.index('__pg_read_wire()'):source.index('\n__pg_prompt()')]
+with tempfile.TemporaryDirectory(prefix='remote-planner-') as directory:
+    root = pathlib.Path(directory)
+    (root / 'bootstrap.json').write_text(json.dumps({'shims': ''}), encoding='utf-8')
+    rc = root / 'test.bash'
+    rc.write_text('__pg_role_node=$AGENTRIX_TEST_NODE\n__pg_role_intercept=$AGENTRIX_TEST_INTERCEPT\n' + source
+      + '\nreply=$(__pg_launch_plan claude classify --version) || exit 9\nroute=\n__pg_read_wire agentrix.launch-route <<< "$reply" || exit 8\nprintf "%s\\n" "$route"\n')
+    environment = {key:value for key,value in os.environ.items() if key not in ('BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'AGENTRIX_LAUNCH_WIRE')}
+    environment.update(HOME=str(root), AGENTRIX_BOOTSTRAP=str(root / 'bootstrap.json'), AGENTRIX_TEST_NODE=os.environ['AGENTRIX_TEST_NODE'], AGENTRIX_TEST_INTERCEPT=os.environ['AGENTRIX_TEST_INTERCEPT'], ELECTRON_RUN_AS_NODE='1')
+    result = subprocess.run([bash, '--noprofile', '--norc', str(rc)], env=environment, text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    assert result.stdout.splitlines() == ['utility'], (result.stdout, result.stderr)
+print('remote planner fields OK')
+`;
+  process.env.AGENTRIX_TEST_NODE = process.execPath;
+  process.env.AGENTRIX_TEST_INTERCEPT = path.join(__dirname, '../integration/shims/intercept.cjs');
+  t.after(() => { delete process.env.AGENTRIX_TEST_NODE; delete process.env.AGENTRIX_TEST_INTERCEPT; });
+  const output = pythonProbe(t, script);
+  if (output?.includes('SKIP Bash missing')) t.skip('Bash missing');
+  else if (output !== null) assert.match(output, /remote planner fields OK/);
+});
+
 test('the SSH worker replaces a complete Claude lead seat and retains it after invalid updates', t => {
   pythonProbe(t, String.raw`
 import pathlib, runpy, sys, tempfile
