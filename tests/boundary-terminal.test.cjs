@@ -80,6 +80,18 @@ function keydown(key, code, modifiers = {}) {
   return event;
 }
 
+test('OSC 8 modifier clicks pass project paths to the link opener', t => {
+  const opened = [];
+  const { terminal } = paneHarness(t, { remote: true, openLink: (id, target) => opened.push([id, target]) });
+  const { activate } = terminal.options.linkHandler;
+  const paths = ['/srv/fixture/docs/nested', './docs/notes.txt', 'C:\\project\\notes.txt'];
+  const click = { button: 0, ctrlKey: true, preventDefault: noop };
+  activate({ ...click, ctrlKey: false }, paths[0]);
+  activate({ ...click, button: 1 }, paths[0]);
+  for (const target of paths) activate(click, target);
+  assert.deepEqual(opened, paths.map(target => ['terminal', target]));
+});
+
 test('the terminal key handler passes zoom keys and Ctrl+C without a selection to the program', async t => {
   const { calls, terminal } = paneHarness(t);
   for (const [key, code, shiftKey] of [['=', 'Equal'], ['+', 'Equal', true], ['-', 'Minus'], ['0', 'Digit0'], ['c', 'KeyC']]) {
@@ -127,10 +139,10 @@ test('OSC 52 requires a recent gesture and shows a receipt', async t => {
   assert.equal(elements(render()).find(node => node.props?.role === 'status').props.children, '终端已将文字复制到剪贴板');
 });
 
-test('only web and local file OSC links reach the link opener', t => {
+test('OSC 8 allows HTTP(S) and file URLs and blocks other URL schemes', t => {
   const urls = [], { terminal } = paneHarness(t, { openLink: (_, url) => urls.push(url) });
   const event = { ctrlKey: true, button: 0, preventDefault() {} };
-  for (const url of ['javascript:void(0)', 'custom://fixture', 'https://example.test/path', 'file:///fixture.txt']) terminal.options.linkHandler.activate(event, url);
+  for (const url of ['javascript:void(0)', ' custom://fixture', 'https://example.test/path', 'file:///fixture.txt']) terminal.options.linkHandler.activate(event, url);
   assert.deepEqual(urls, ['https://example.test/path', 'file:///fixture.txt']);
 });
 

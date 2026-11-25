@@ -101,7 +101,11 @@ export function TerminalPane({ id, sessionId, agent = null, agentActive = !!agen
       // Bundled ConPTY reflows the prompt on resize; the cursor line must follow
       // that reflow too, or later output can overwrite old prompt characters.
       reflowCursorLine: !remote,
-      linkHandler: { activate: (event, target) => { if (/^(?:https?|file):\/\//i.test(target)) activateLink(event, target); },
+      linkHandler: { activate: (event, target) => {
+        const value = target.trim();
+        if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/^(?:(?:https?|file):\/\/|[a-z]:[\\/])/i.test(value)) return;
+        activateLink(event, target);
+      },
         hover: hoverLink, leave: leaveLink, allowNonHttpProtocols: true },
       theme: terminalTheme(),
     });
