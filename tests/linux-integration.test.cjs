@@ -69,7 +69,7 @@ test('terminals started from an AppImage leave out its folders and variables', (
 
 test('a Bash report becomes the event zsh sends', () => {
   assert.deepEqual(shellEvent(['shell-prompt', '7', '0', 'codex', 'true', 'false', '/h/.codex', '/p/中文 项目'], 'p', 'k'),
-    { projectId: 'p', sessionKey: 'k', type: 'shell-prompt', sequence: 7, exitCode: 0, agent: 'codex', codexAvailable: true, claudeAvailable: false, codexHome: '/h/.codex', cwd: '/p/中文 项目' });
+    { v: 1, projectId: 'p', sessionKey: 'k', type: 'shell-prompt', sequence: 7, exitCode: 0, agent: 'codex', codexAvailable: true, claudeAvailable: false, codexHome: '/h/.codex', cwd: '/p/中文 项目' });
   assert.equal(shellEvent(['agent-exited', '8', '130', 'claude', 'false', 'true', '', '/'], 'p', 'k').exitCode, 130);
   assert.equal(shellEvent(['agent-exited', '8', 'x', 'other', 'yes', 'no', '', '/'], 'p', 'k').agent, 'codex');
   assert.equal(shellEvent(['turn-complete', '1'], 'p', 'k'), null, 'only shell reports');

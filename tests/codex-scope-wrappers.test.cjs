@@ -140,51 +140,72 @@ for (const kind of ['bash', 'zsh']) {
   const shell = kind === 'bash' && process.env.AGENTRIX_TEST_BASH || (process.platform === 'win32' ? kind === 'bash' && 'C:/Program Files/Git/bin/bash.exe' : `/bin/${kind}`);
   // The wrapper alone, with a stand-in CLI that prints its arguments and exits with 7. PROBE_PROGRAM chooses what the
   // user's shell resolves codex to: the program, an alias with options, or nothing.
-  async function typed(t, program, args) {
-    const root = fixture(t), source = fs.readFileSync(path.join(integration, kind === 'bash' ? 'bash-integration.bash' : 'zsh-integration.zsh'), 'utf8').replace(/\r\n/g, '\n');
-    const begin = source.indexOf('__pg_redirect_agent() {'), wrapper = source.slice(begin, source.indexOf('\n\n# Runs first', begin) < 0
-      ? source.indexOf('\n\n__pg_precmd', begin) : source.indexOf('\n\n# Runs first', begin));
-    const jsonStart = source.indexOf('__pg_json() {'), jsonEnd = source.indexOf('\n}', jsonStart) + 2;
+  async function typed(t, cases) {
+    const root = fixture(t), wrapper = path.join(integration, kind === 'bash' ? 'bash-integration.bash' : 'zsh-integration.zsh');
     const probe = path.join(root, 'probe.sh'), cli = path.join(root, 'stand-in-codex'), words = kind === 'bash' ? '__pg_words' : 'reply';
     fs.writeFileSync(cli, '#!/bin/sh\nfor word in "$@"; do printf \'RAN=%s\\n\' "$word"; done\nprintf \'RAN_END\\n\'\nexit 7\n', { mode: 0o755 });
-    fs.writeFileSync(probe, `${source.slice(jsonStart, jsonEnd)}\n${wrapper}\n__pg_node="$PROBE_NODE"\n__pg_intercept="$PROBE_INTERCEPT"\n` +
+    fs.writeFileSync(probe, 'source "$PROBE_WRAPPER" zshrc >/dev/null\n' +
       `__pg_program() { case $PROBE_PROGRAM in program) ${words}=("$PROBE_CLI");; alias) ${words}=("$PROBE_CLI" --model alias-model);; *) return 1;; esac; }\n` +
-      `__pg_send() { printf 'REQUEST=%s\\n' "$6"; }\ncodex "$@"\nprintf 'STATUS=%s\\n' "$?"\n`);
-    const result = await exec(shell, [kind === 'bash' ? '--noprofile' : '-f', ...(kind === 'bash' ? ['--norc'] : []), probe.replace(/\\/g, '/'), ...args],
-      { cwd: root, env: { ...process.env, BASH_ENV: '', PROBE_PROGRAM: program, PROBE_CLI: cli.replace(/\\/g, '/'),
-        PROBE_NODE: process.execPath.replace(/\\/g, '/'), PROBE_INTERCEPT: path.join(integration, 'shims/intercept.cjs').replace(/\\/g, '/') }, windowsHide: true, timeout: 10000 * timeoutScale });
-    const lines = result.stdout.split(/\r?\n/), request = lines.find(line => line.startsWith('REQUEST='));
-    return { stdout: result.stdout, status: Number(lines.find(line => line.startsWith('STATUS=')).slice(7)), request: request ? JSON.parse(request.slice(8)) : null,
-      ran: lines.includes('RAN_END') ? lines.filter(line => line.startsWith('RAN=')).map(line => line.slice(4)) : null };
+      `__pg_send() { printf 'REQUEST=%s\\n' "$6"; }
+while (( $# )); do
+  PROBE_PROGRAM=$1
+  remaining=$2
+  shift 2
+  probe_args=()
+  for (( ; remaining > 0; remaining-- )); do probe_args+=("$1"); shift; done
+  codex "\${probe_args[@]}"
+  printf 'STATUS=%s\\nCASE_END\\n' "$?"
+done
+`);
+    const shellPath = file => file.replace(/\\/g, '/');
+    const flags = kind === 'bash' ? ['--noprofile', '--norc'] : ['-f'];
+    const inputs = cases.flatMap(([program, args]) => [program, String(args.length), ...args]);
+    const result = await exec(shell, [...flags, shellPath(probe), ...inputs],
+      { cwd: root, env: { ...isolatedEnvironment(root), HOME: shellPath(root), MSYS2_ARG_CONV_EXCL: '*',
+        PROBE_CLI: shellPath(cli), PROBE_WRAPPER: shellPath(wrapper),
+        AGENTRIX_NODE: shellPath(process.execPath), AGENTRIX_EVENT_HELPER: shellPath(path.join(integration, 'agent-event.cjs')) },
+      windowsHide: true, timeout: 50000 * timeoutScale });
+    assert.equal(result.stderr, '');
+    const results = result.stdout.split(/^CASE_END\r?\n/gm);
+    assert.equal(results.pop(), '');
+    assert.equal(results.length, cases.length);
+    return results.map(stdout => {
+      const lines = stdout.split(/\r?\n/), request = lines.find(line => line.startsWith('REQUEST='));
+      return { stdout, status: Number(lines.find(line => line.startsWith('STATUS=')).slice(7)), request: request ? JSON.parse(request.slice(8)) : null,
+        ran: lines.includes('RAN_END') ? lines.filter(line => line.startsWith('RAN=')).map(line => line.slice(4)) : null };
+    });
   }
   const available = { skip: !shell || !fs.existsSync(shell), timeout: 60000 * timeoutScale };
 
   test(`${kind} wrapper includes alias options in its native request without executing the alias`, available, async t => {
-    for (const args of [argv, ['login']]) {
-      const result = await typed(t, 'alias', args);
+    const cases = [argv, ['login']], results = await typed(t, cases.map(args => ['alias', args]));
+    for (const [index, args] of cases.entries()) {
+      const result = results[index];
       assert.deepEqual(result.request, ['--model', 'alias-model', ...args], 'an alias with options is no management run even before login');
       assert.equal(result.ran, null); assert.equal(result.status, 0);
     }
   });
 
   test(`${kind} wrapper requests native Codex for every conversation form and never runs the CLI`, available, async t => {
-    for (const args of conversations) {
-      const result = await typed(t, 'program', args);
+    const results = await typed(t, conversations.map(args => ['program', args]));
+    for (const [index, args] of conversations.entries()) {
+      const result = results[index];
       assert.deepEqual(result.request, args); assert.equal(result.ran, null, JSON.stringify(args));
       assert.equal(result.status, 0); assert.match(result.stdout, /原生模式/);
     }
   });
 
   test(`${kind} wrapper runs the Codex CLI's management commands in the terminal: exact argv, its exit status and no native request`, available, async t => {
-    for (const args of managed) {
-      const result = await typed(t, 'program', args);
+    const results = await typed(t, [...managed.map(args => ['program', args]), ['absent', ['--version']], ['absent', ['resume', '--last']]]);
+    for (const [index, args] of managed.entries()) {
+      const result = results[index];
       assert.deepEqual(result.ran, args); assert.equal(result.status, 7, JSON.stringify(args));
       assert.equal(result.request, null); assert.doesNotMatch(result.stdout, /原生模式/);
     }
     // Not installed: said like Claude Code's wrapper says it, and a conversation is still the host's to open.
-    const absent = await typed(t, 'absent', ['--version']);
+    const absent = results.at(-2);
     assert.match(absent.stdout, /Codex CLI was not found in PATH/);
     assert.equal(absent.status, 127); assert.equal(absent.request, null); assert.equal(absent.ran, null);
-    assert.deepEqual((await typed(t, 'absent', ['resume', '--last'])).request, ['resume', '--last']);
+    assert.deepEqual(results.at(-1).request, ['resume', '--last']);
   });
 }

@@ -5,6 +5,7 @@ const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-work.cjs');
 const { createClaudeActivity } = require('../electron/features/terminal-events/claude-activity.cjs');
 const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
+const { sameDirectory } = require('../electron/session-files.cjs');
 
 function fixture(t, agent = 'claude', nativeStructured = false) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 2000 });
@@ -15,7 +16,7 @@ function fixture(t, agent = 'claude', nativeStructured = false) {
     agent, nativeStructured, calls, cliActive: true, activitySince: 1000, claudeSessionId: 'provider', reportedThreadId: 'provider',
     completionWork: new CompletionWork(), promptQueue: { finish() {}, list: () => [] },
     actions: { settle() {} }, conversation: { settle() {}, list: [] } };
-  const deps = { sessions: new Map([[s.terminalId, s]]), callsOf: () => calls,
+  const deps = { AgentCalls, sameDirectory, sessions: new Map([[s.terminalId, s]]),
     store: { projects: [project], setRestore() {}, expectCompletion(_id, value = true) { armed = value; },
       complete(_id, key) { if (!armed || completed.has(key)) return false; completed.add(key); armed = false; return true; } },
     broadcast() {}, scheduleState() {}, summarizeTask: () => '', refreshClaudeAccounts() {}, notifyCompletion() { notifications++; },

@@ -162,8 +162,9 @@ test('partial audit failures append withdrawals and preserve concurrent memory a
     if (file === f.team.journal && !failed) {
       failed = true;
       append(file, String(text).slice(0, 12));
-      append(f.team.memory, '\nConcurrent memory finding.\n');
-      append(file, '\n' + JSON.stringify({ type: 'finding', title: 'Concurrent journal finding.' }) + '\n');
+      append(f.team.memoryJsonl, JSON.stringify({ v: 1, type: 'memory.entry', at: 1000, title: 'Concurrent finding', text: 'Concurrent memory finding.' }) + '\n');
+      append(file, '\n');
+      f.team.append({ type: 'finding', title: 'Concurrent journal finding.' });
       throw new Error('partial audit write');
     }
     return append(file, text, ...args);
@@ -211,7 +212,8 @@ test('a failed inbox append is withdrawn without moving a reader offset backward
 test('a failed partial inbox append retains room for withdrawal and leaves the final empty check usable', async t => {
   const f = await fixture(t), append = fs.appendFileSync;
   const control = { id: randomUUID(), text: 'synthetic failed partial write', at: 1000 };
-  const record = JSON.stringify(control) + '\n', withdrawn = '\n' + JSON.stringify({ id: control.id, type: 'withdrawn', at: control.at }) + '\n';
+  const record = JSON.stringify({ v: 1, ...control }) + '\n';
+  const withdrawn = '\n' + JSON.stringify({ v: 1, id: control.id, type: 'withdrawn', at: control.at }) + '\n';
   fs.writeFileSync(f.inbox.file, '\n'.repeat(MAX_INBOX - Buffer.byteLength(record + withdrawn)));
   let failed = false;
   const failure = t.mock.method(fs, 'appendFileSync', (file, text, ...args) => {

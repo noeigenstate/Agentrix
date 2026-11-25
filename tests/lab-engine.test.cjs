@@ -359,11 +359,15 @@ isolatedTest('all four arms include nested usage, phase evidence and cleanup of 
   assert.ok(Math.abs(orchestrated.costUsd - 0.12) < 1e-8); assert.equal(orchestrated.outputTokens, 150);
   assert.equal(orchestrated.rework, null);
   assert.deepEqual(orchestrated.phases.map(phase => phase.name), ['plan', 'build', 'review']);
-  const folder = path.join(f.userData, 'lab', id, 'runs', orchestrated.id);
+  const folder = await fs.realpath(path.join(f.userData, 'lab', id, 'runs', orchestrated.id));
   const journal = (await fs.readFile(path.join(folder, 'artifacts/journal.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   assert.ok(journal.every(entry => entry.type === 'end'));
-  assert.ok((await f.readCalls()).some(args => args.includes(path.join(folder, 'workspaces/workers/a'))));
-  await assert.rejects(fs.lstat(path.join(folder, 'workspaces/workers/a')), { code: 'ENOENT' });
+  const workerCwd = path.join(folder, 'workspaces/workers/a');
+  const events = (await fs.readFile(path.join(folder, 'artifacts/events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const worker = events.find(event => event.type === 'dispatch-start' && event.cwd === workerCwd);
+  assert.ok(worker, 'the authenticated meter records the nested worker in its own worktree');
+  assert.ok(events.some(event => event.type === 'dispatch-end' && event.id === worker.id && event.exitCode === 0));
+  await assert.rejects(fs.lstat(workerCwd), { code: 'ENOENT' });
   assert.equal(await fs.stat(path.join(f.projectPath, 'node_modules')).then(stat => stat.isDirectory()), true);
 });
 

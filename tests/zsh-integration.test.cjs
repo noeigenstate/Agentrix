@@ -65,12 +65,13 @@ test('a socket path too long for macOS moves to /tmp', () => {
 test('Codex notify and Claude hook payloads become the events notify.ps1 and claude-hook.ps1 send', () => {
   assert.equal(codexEvent(JSON.stringify({ type: 'approval-requested' }), 'p', 'k'), null);
   assert.deepEqual(codexEvent(JSON.stringify({ type: 'agent-turn-complete', 'thread-id': 'thread', 'turn-id': 'turn', 'last-assistant-message': 'x' }), 'p', 'k'),
-    { projectId: 'p', sessionKey: 'k', type: 'turn-complete', eventId: 'thread:turn', threadId: 'thread', turnId: 'turn' });
+    { v: 1, projectId: 'p', sessionKey: 'k', type: 'turn-complete', eventId: 'thread:turn', threadId: 'thread', turnId: 'turn' });
   assert.match(codexEvent(JSON.stringify({ type: 'agent-turn-complete' }), 'p', 'k').eventId, /^[0-9A-F]{64}$/);
   assert.equal(claudeEvent(JSON.stringify({ prompt: 'x' }), 'p', 'k', 'start'), null, 'no session id');
   assert.equal(claudeEvent(JSON.stringify({ session_id: 's' }), 'p', 'k', 'other'), null);
   // SessionStart (a start, /resume, /clear) reports the conversation file Claude writes from now on.
   const session = claudeEvent(JSON.stringify({ session_id: 's2', transcript_path: '/t/s2.jsonl', source: 'clear' }), 'p', 'k', 'session');
+  assert.equal(session.v, 1);
   assert.deepEqual([session.state, session.sessionId, session.transcriptPath, session.prompt], ['session', 's2', '/t/s2.jsonl', null]);
   const working = claudeEvent(JSON.stringify({ session_id: 's', transcript_path: '/t/s.jsonl', prompt: '长'.repeat(3000) }), 'p', 'k', 'start');
   assert.equal(working.state, 'working'); assert.equal(working.prompt.length, 2000); assert.equal(working.transcriptPath, '/t/s.jsonl');

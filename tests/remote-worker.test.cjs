@@ -205,22 +205,25 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
 });
 
 test('the SSH Python launcher writes keyed routes and NUL-delimited arguments for both manifest versions', t => {
-  pythonProbe(t, String.raw`
-import json, os, pathlib, runpy, subprocess, sys, tempfile
+  const output = pythonProbe(t, String.raw`
+import json, os, pathlib, runpy, subprocess, sys, tempfile, threading
 worker = runpy.run_path(sys.argv[1])
 wire = json.loads(sys.argv[2])
+raw_note = 'SSH reading note. Agentrix skill delivery: remote. Skill instructions.'
+expected_note = 'SSH reading note. Agentrix delivers skill instructions through its SessionStart hook.'
 with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
     root = pathlib.Path(directory)
     notifier = root / 'notify.py'
     notifier.write_bytes(worker['NOTIFY_SOURCE'].encode('utf-8'))
     manifest = root / 'terminal-wire.json'
-    def launch(agent, action, *args):
+    def launch(agent, action, *args, note='hello\nworld=a=b'):
         return subprocess.run([sys.executable, str(notifier), 'terminal-launch', agent, action, *args],
-                              env=dict(os.environ, AGENTRIX_LAUNCH_NOTE='hello\nworld=a=b',
+                              env=dict(os.environ, AGENTRIX_LAUNCH_NOTE=note,
                                        AGENTRIX_LAUNCH_MODEL='sonnet', AGENTRIX_LAUNCH_EFFORT='high'),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
     legacy = {key: value for key, value in wire.items() if key not in ('format', 'version')}
-    for document in (legacy, dict(legacy, format='agentrix.terminal-wire', version=1)):
+    legacy['claude'] = dict(wire['claude'], note=dict(wire['claude']['note'], marker=' Agentrix skill delivery: '))
+    for document in (legacy, wire):
         manifest.write_text(json.dumps(document), encoding='utf-8')
         for agent, args, route in (('claude', ('--model=sonnet',), 'refused'), ('claude', ('--version',), 'utility'),
                                   ('claude', ('-p',), 'print'), ('claude', ('--', '--model=sonnet'), 'conversation'),
@@ -232,11 +235,33 @@ with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
         assert result.returncode == 0, result.stderr
         assert result.stdout.split(b'\0') == [b'format=agentrix.launch-words', b'version=1', b'arg=--append-system-prompt',
                                                b'arg=hello\nworld=a=b', b'arg=--model', b'arg=sonnet', b'arg=--effort', b'arg=high', b'']
-    manifest.write_text(json.dumps(dict(legacy, format='agentrix.terminal-wire', version=19)), encoding='utf-8')
+        result = launch('claude', 'words', note=raw_note)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split(b'\0')[2:4] == [b'arg=--append-system-prompt', ('arg=' + expected_note).encode('utf-8')]
+    session = object.__new__(worker['Worker'])
+    session.temp = directory
+    session.skill_note_sequence = 1
+    session.skill_note_ready = threading.Event()
+    session.skill_paths = {}
+    session.startup_note = lambda note: note
+    session.terminal_manifest = lambda: worker['read_terminal_wire'](wire)
+    assert session.write_launch_note(raw_note, None) == raw_note  # Native startup still gets its full context.
+    literal = 'Earlier work. Agentrix skill delivery: a literal phrase.'
+    assert session.write_launch_note(literal, session.terminal_manifest()) == literal
+    assert session.write_launch_note(raw_note, session.terminal_manifest()) == expected_note
+    session.update_skill_note(1, raw_note, {})
+    assert session.skill_note_ready.is_set()
+    print((root / 'skill-note.txt').read_text(encoding='utf-8'))
+    manifest.write_text(json.dumps(dict(wire, version=19)), encoding='utf-8')
     result = launch('claude', 'classify')
     assert result.returncode != 0 and not result.stdout
     assert result.stderr.decode('utf-8').splitlines() == ['agentrix.terminal-wire: unsupported version 19']
 `);
+  if (output === null) return;
+  const { terminalLaunch } = require('../integration/shims/intercept.cjs');
+  const env = { AGENTRIX_LAUNCH_NOTE: output.trimEnd() };
+  assert.deepEqual(JSON.parse(terminalLaunch(env, 'claude', 'json', 'remote', [])).argv,
+    ['--append-system-prompt', 'SSH reading note. Agentrix delivers skill instructions through its SessionStart hook.']);
 });
 
 test('the SSH lookup requires a supported version and preserves exact path bytes amid login noise', t => {

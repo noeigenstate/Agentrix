@@ -6,7 +6,7 @@ $OutputEncoding = [Console]::OutputEncoding
 $global:AgentrixSession = Get-Content -LiteralPath $env:AGENTRIX_BOOTSTRAP -Raw -Encoding UTF8 | ConvertFrom-Json
 $bootstrapVersion = $global:AgentrixSession.version
 if ($global:AgentrixSession.PSObject.Properties['version'] -and
-    (($bootstrapVersion -isnot [int] -and $bootstrapVersion -isnot [double]) -or $bootstrapVersion -ne 1 -or
+    (($bootstrapVersion -isnot [int] -and $bootstrapVersion -isnot [long] -and $bootstrapVersion -isnot [double]) -or $bootstrapVersion -ne 1 -or
         $global:AgentrixSession.format -cne 'agentrix.bootstrap')) {
     throw 'Unsupported Agentrix bootstrap format or version.'
 }
@@ -156,7 +156,7 @@ function global:Set-AgentrixPlanner([string]$Agent, $Launch, [string]$SettingsFi
     }
     foreach ($name in $Launch.Env.Keys) { $fields[$name] = $Launch.Env[$name] }
     $words = Invoke-AgentrixLaunchPlan (@('--launch', $Agent, 'json', $target) + $Arguments) $fields | ConvertFrom-Json
-    if ($words.v -isnot [int] -or $words.v -ne 1 -or $words.type -cne 'launch.words' -or
+    if (($words.v -isnot [int] -and $words.v -isnot [long]) -or $words.v -ne 1 -or $words.type -cne 'launch.words' -or
         $words.unset -isnot [array] -or $words.env -isnot [pscustomobject] -or $words.argv -isnot [array]) {
         throw 'Unsupported Agentrix terminal launch plan.'
     }

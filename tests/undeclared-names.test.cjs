@@ -34,7 +34,8 @@ function undeclaredNames() {
     const file = program.getSourceFile(name);
     return program.getSemanticDiagnostics(file).flatMap(diagnostic => {
       const match = unresolved.exec(ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')), found = match?.[1] || match?.[2];
-      if (!found || hostGlobals.has(found)) return [];
+      // Node supplies require in the CommonJS wrapper, even where TypeScript cannot infer it from a call.
+      if (!found || hostGlobals.has(found) || found === 'require' && name.endsWith('.cjs')) return [];
       return [`${name.slice(root.length + 1)}:${file.getLineAndCharacterOfPosition(diagnostic.start).line + 1} ${found}`];
     });
   });

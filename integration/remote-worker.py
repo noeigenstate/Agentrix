@@ -314,6 +314,11 @@ def write_key_value(values, format=None, versions=(1,)):
 def read_terminal_wire(value):
     return read_wire_envelope(value, format="agentrix.terminal-wire")
 
+def terminal_launch_note(text, layout):
+    note = layout["note"]
+    prefix, marker, _ = text.partition(note["marker"])
+    return prefix + note["suffix"] if marker else text
+
 def write_shell_fields(format, **fields):
     return write_key_value(dict({"format": format, "version": "1"}, **fields), format)
 '''
@@ -399,9 +404,7 @@ def launch_route(words, layout, args):
 
 def launch_words(layout):
     fields = {key: os.environ.get("AGENTRIX_LAUNCH_" + key.upper()) for key in layout["flags"]}
-    note = fields["note"] or ""
-    marker = layout["note"]["marker"]
-    if marker in note: note = note.split(marker, 1)[0] + layout["note"]["suffix"]
+    note = terminal_launch_note(fields["note"] or "", layout)
     error = os.environ.get("AGENTRIX_LAUNCH_ROLE_ERROR")
     if error and error not in note: note = error + (" " + note if note else "")
     if note: fields["note"] = note
@@ -2256,12 +2259,17 @@ class Worker:
         if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
         try:
             self.skills_bundle = bundle
-            text = self.startup_note(note)
-            filename = os.path.join(self.temp, "skill-note.txt")
-            with open(filename, "w", encoding="utf-8") as output: output.write(text)
-            os.chmod(filename, 0o600)
+            self.write_launch_note(self.startup_note(note), self.terminal_manifest())
             return self.skill_paths
         finally: self.skill_note_ready.set()
+
+    def write_launch_note(self, note, document):
+        # Both terminal launchers receive the same note. SessionStart reads its own skill manifest.
+        if document: note = terminal_launch_note(note, document["value"]["claude"])
+        filename = os.path.join(self.temp, "skill-note.txt")
+        with open(filename, "w", encoding="utf-8") as output: output.write(note)
+        os.chmod(filename, 0o600)
+        return note
 
     def update_prompt_note(self, name, note):
         # What the running Claude Code is told with the owner's next prompt; an empty note withdraws it.
@@ -2299,8 +2307,7 @@ class Worker:
             reading_note = (reading_note + " " + self.dispatch_error).strip()
         with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
         prune_skill_state(self.skill_state_dir, current_key)
-        with open(os.path.join(self.temp, "skill-note.txt"), "w", encoding="utf-8") as output: output.write(reading_note)
-        os.chmod(os.path.join(self.temp, "skill-note.txt"), 0o600)
+        launch_note = self.write_launch_note(reading_note, None if native else document)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
         if wire: self.write_routing_file("terminal-wire.json", json.dumps(wire))
@@ -2330,7 +2337,7 @@ class Worker:
                     env["AGENTRIX_ROLE_INTERCEPT"] = os.path.join(os.path.dirname(server["args"][0]), "electron", "shims", "intercept.cjs")
         elif self.dispatch_error and not native: env["AGENTRIX_ROLE_ERROR"] = self.dispatch_error
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
-        if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
+        if launch_note: env["AGENTRIX_READING_NOTE"] = launch_note
         env["AGENTRIX_READING_NOTE_FILE"] = os.path.join(self.temp, "skill-note.txt")
         env["AGENTRIX_SKILL_KEY_FILE"] = os.path.join(self.temp, "skill-key.txt")
         env["AGENTRIX_SKILL_STATE_DIR"] = os.path.join(self.skill_state_dir, "delivered")

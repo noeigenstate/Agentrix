@@ -7,7 +7,7 @@ if ($Kind -ceq 'envelope') {
     $key = if ($Expected) { 'version' } else { 'v' }
     $legacy = -not $value.PSObject.Properties[$key]
     $version = if ($legacy) { 0 } else { $value.PSObject.Properties[$key].Value }
-    if (-not $legacy -and ($version -isnot [int] -or $version -ne 1)) { exit 3 }
+    if (-not $legacy -and (($version -isnot [int] -and $version -isnot [long]) -or $version -ne 1)) { exit 3 }
     if ($Expected -and (-not $legacy -or $value.PSObject.Properties['format']) -and $value.format -cne $Expected) { exit 2 }
     [Console]::Write((@{ value = $value; version = $version; legacy = $legacy } | ConvertTo-Json -Depth 12 -Compress))
     exit 0
