@@ -16,6 +16,106 @@
     "id": "electron/app/platform-startup.cjs:49ddd8fb24835a8236eeaec1"
   },
   {
+    "text": "run(disposeDispatchInbox)",
+    "id": "electron/app/process-lifecycle.cjs:d87e24add8ea5f4ddcef95b6"
+  },
+  {
+    "text": "run(() => dashboardWindow?.dispose())",
+    "id": "electron/app/process-lifecycle.cjs:fea30961e3a4d4ab6b96ee35"
+  },
+  {
+    "text": "run(() => labWindow?.dispose())",
+    "id": "electron/app/process-lifecycle.cjs:de9bd2482e04e2ac2fc5f966"
+  },
+  {
+    "text": "run(() => voiceManager?.close())",
+    "id": "electron/app/process-lifecycle.cjs:b9059675b68b284ec8c18d31"
+  },
+  {
+    "text": "run(() => fileOperations?.cancel())",
+    "id": "electron/app/process-lifecycle.cjs:f54e03d3957e699f19b2e5f4"
+  },
+  {
+    "text": "run(() => skills?.close())",
+    "id": "electron/app/process-lifecycle.cjs:527243d8593017ac7a3fc56c"
+  },
+  {
+    "text": "run(() => nativeSessions?.close())",
+    "id": "electron/app/process-lifecycle.cjs:1e6af3bf6ac885800ec86301"
+  },
+  {
+    "text": "run(() => claudeRuntime?.close())",
+    "id": "electron/app/process-lifecycle.cjs:f20f3861e4140082c1cc73eb"
+  },
+  {
+    "text": "run(() => updateManager?.dispose())",
+    "id": "electron/app/process-lifecycle.cjs:22d9ca9883e72f78777e8266"
+  },
+  {
+    "text": "run(() => projectAccounts.close())",
+    "id": "electron/app/process-lifecycle.cjs:0c25b0a46561be7c7c68b021"
+  },
+  {
+    "text": "run(() => codexAccounts.dispose())",
+    "id": "electron/app/process-lifecycle.cjs:0078af048ee5c16dd97f9e87"
+  },
+  {
+    "text": "run(() => claudeAccounts.dispose())",
+    "id": "electron/app/process-lifecycle.cjs:c342864bf8b8ae523184d239"
+  },
+  {
+    "text": "run(disposeClaudeAccounts)",
+    "id": "electron/app/process-lifecycle.cjs:a81afd19a3912ce6b8950920"
+  },
+  {
+    "text": "run(() => disposeTerminal(id))",
+    "id": "electron/app/process-lifecycle.cjs:61e20e11898e05fdffc8200d"
+  },
+  {
+    "text": "run(() => host.flushRestore?.())",
+    "id": "electron/app/process-lifecycle.cjs:c3b27de6bd6d6597297a0e9b"
+  },
+  {
+    "text": "run(() => workerTerminals.closeAll())",
+    "id": "electron/app/process-lifecycle.cjs:766773bad46b8aa7a8c05637"
+  },
+  {
+    "text": "run(() => sshAuth?.close())",
+    "id": "electron/app/process-lifecycle.cjs:000e5a4a417729f15e37b52e"
+  },
+  {
+    "text": "run(() => eventServer?.close())",
+    "id": "electron/app/process-lifecycle.cjs:64441777350b505192df0258"
+  },
+  {
+    "text": "run(() => hookServer?.close())",
+    "id": "electron/app/process-lifecycle.cjs:a97fb1298a2b828f7528a30b"
+  },
+  {
+    "text": "run(() => dispatchControl?.close())",
+    "id": "electron/app/process-lifecycle.cjs:a180335585bca5e5f8743fc6"
+  },
+  {
+    "text": "run(() => tray?.destroy())",
+    "id": "electron/app/process-lifecycle.cjs:2ff930bc28b1d1d8f9211522"
+  },
+  {
+    "text": "run(cleanupAskpass)",
+    "id": "electron/app/process-lifecycle.cjs:9b5c86ce5dd6835ce3e6ee25"
+  },
+  {
+    "text": "run(() => removeRuntimeFolder(host, fs.realpathSync(app.getPath('userData')),\n    path.join(fs.realpathSync(path.dirname(runtimeDir)), path.basename(runtimeDir))))",
+    "id": "electron/app/process-lifecycle.cjs:559855892ce6edd9d3761f59"
+  },
+  {
+    "text": "run(() => dashboard.waitForQuit())",
+    "id": "electron/app/process-lifecycle.cjs:a785dda1bbd52e43dbea3163"
+  },
+  {
+    "text": "run(() => labWindow?.waitForQuit())",
+    "id": "electron/app/process-lifecycle.cjs:38857967db727c07c46fabdd"
+  },
+  {
     "text": "session.gate.input(plan.command)",
     "id": "electron/app/terminal-lifecycle.cjs:514c91a5cd929ecb641a75d3"
   },
@@ -400,8 +500,12 @@
     "id": "electron/project-git.cjs:ba938fe9dcd210c4d0c1f9ff"
   },
   {
-    "text": "run(['log', '--topo-order', '-z', `--format=${FORMAT}`, `--max-count=${PAGE_SIZE + 1}`, `--skip=${value}`, ...(prefix ? ['--full-history', '--', '.'] : ['--'])])",
-    "id": "electron/project-git.cjs:b239136ef07d4df8c1b3e313"
+    "text": "run(['rev-parse', '--verify', '--quiet', 'HEAD'], { exitCodes: [1] })",
+    "id": "electron/project-git.cjs:1e1d41cdb7ba44dc1ea419d3"
+  },
+  {
+    "text": "run(['log', '--topo-order', '-z', `--format=${FORMAT}`, `--max-count=${PAGE_SIZE + 1}`, `--skip=${value}`,\n        ...(prefix ? ['--full-history', '--', '.'] : ['--'])])",
+    "id": "electron/project-git.cjs:7b060854cb9237b7b13e02a4"
   },
   {
     "text": "run(['show', '-s', '--format=%P', `${value}^{commit}`, '--'])",
@@ -592,8 +696,8 @@
     "id": "src/features/agents/SubagentInput.tsx:9d7f4475067877d886e282dc"
   },
   {
-    "text": "terminal.write(data, () => {\n      if (screens.get(epoch)?.seq !== seq) return;\n      const buffer = terminal.buffer.active;\n      const lines = Array.from({ length: rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');\n      bridge.reportWorkerMenu(epoch, seq, parseWorkerMenu(lines));\n    })",
-    "id": "src/features/agents/worker-menu-screen.ts:49c2b783bb7000b0be8307b6"
+    "text": "terminal.write(data, () => {\n      if (screens.get(epoch)?.seq !== seq) return;\n      const buffer = terminal.buffer.active;\n      const lines = Array.from({ length: rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');\n      screen.version ??= screenOf(hiddenWorkerAgent)?.version?.(lines);\n      bridge.reportWorkerMenu(epoch, seq, parseWorkerMenu(lines, hiddenWorkerAgent, screen.version));\n    })",
+    "id": "src/features/agents/worker-menu-screen.ts:55017ca28035c627a1e1f383"
   },
   {
     "text": "terminal.write(packet.data)",
@@ -604,8 +708,8 @@
     "id": "src/features/agents/WorkerTerminal.tsx:35709bb77a051233d0b750f2"
   },
   {
-    "text": "facet?.input(rows)",
-    "id": "src/features/cli-screens/index.ts:b097596f63afdeabce2d4d65"
+    "text": "input(rows)",
+    "id": "src/features/cli-screens/claude.ts:3686404391dab0ade5811620"
   },
   {
     "text": "lookup(agent)?.input(rows)",
