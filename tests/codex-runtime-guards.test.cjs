@@ -11,16 +11,13 @@ const { fakeFiles, fakeProbe } = require('./helpers/claude-files.cjs');
 // candidate.
 const root = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+const { stringUnion } = require('./helpers/source-structure.cjs');
+const { CODEX_VIA_WORDS } = require('../src/features/agents/codex-via-words.ts');
 const sorted = list => [...list].sort();
 
 test('every way Codex can be found is in the locator, the shared type and the words, and nowhere else', () => {
-  const type = /export type CodexVia = ([^;]+);/.exec(read('src/shared/types.ts'));
-  assert.ok(type, 'CodexVia is a union of string literals');
-  const block = /const CODEX_VIA_WORDS: Record<string, string> = \{([\s\S]*?)\n\};/.exec(read('src/features/agents/AgentsSettings.tsx'));
-  assert.ok(block, 'CODEX_VIA_WORDS is an object literal');
-  const worded = [...block[1].matchAll(/(?:^|[\s,{])(?:'([a-z-]+)'|([a-z]+)):\s*'/g)].map(match => match[1] ?? match[2]);
-  assert.deepEqual(sorted([...type[1].matchAll(/'([a-z-]+)'/g)].map(match => match[1])), sorted(VIAS), 'types.ts CodexVia and the locator VIAS');
-  assert.deepEqual(sorted(worded), sorted(VIAS), 'AgentsSettings CODEX_VIA_WORDS and the locator VIAS');
+  assert.deepEqual(sorted(stringUnion('src/shared/types.ts', 'CodexVia')), sorted(VIAS), 'types.ts CodexVia and the locator VIAS');
+  assert.deepEqual(sorted(Object.keys(CODEX_VIA_WORDS)), sorted(VIAS), 'AgentsSettings CODEX_VIA_WORDS and the locator VIAS');
   assert.equal(new Set(VIAS).size, VIAS.length, 'no way is listed twice');
   // Nowhere else: no other product source names Codex's npm platform packages or its program inside one, so a second
   // search cannot grow beside the locator; the probes' resolveCli takes the locator's layout table. (Test and lab

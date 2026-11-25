@@ -1,20 +1,56 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
-const fs = require('node:fs');
-const path = require('node:path');
+const { hookHarness } = require('./helpers/hook-harness.cjs');
+const { elements, stubGlobals } = require('./helpers/renderer-fixtures.cjs');
 const en = require('../electron/locales/en.json');
 
-const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-
-test('the decision page with nothing to decide is one stage: the guide, a 760px white box and a hint, the picked project always driving it', () => {
-  const home = read('src/features/home/DecisionHome.tsx');
-  assert.match(home, /items\.find\(item => item\.decision\) \?\? items\[0\]/, 'with no decision the first project is picked');
-  assert.match(home, /<NewWork stage projects=\{projects\} selectedProjectId=\{selected\.project\.id\}/);
-  assert.match(home, /takeFocus=\{picked === null\}/, 'the box takes the focus on arrival only: a picked row keeps it for the arrow keys');
-  assert.match(home, /onChange=\{pickProject\}/, 'the box\'s picker picks the same row the list does');
-  assert.match(home, /event\.key === 'Enter' && !event\.shiftKey && !event\.nativeEvent\.isComposing/, 'Enter starts, Shift+Enter breaks the line, an IME composition is left alone');
-  assert.match(home, /new-work-hint[^\n]*输入需求后按 Enter 开始/);
+test('the decision page with nothing to decide is one stage: the guide, a 760px white box and a hint, the picked project always driving it', async t => {
+  const Select = () => null, DecisionInbox = () => null;
+  const projects = ['a', 'b'].map(id => ({ id, name: id, kind: 'local', terminals: [{ id, cliActive: true, sessionId: id }] }));
+  const items = projects.map(project => ({ id: project.id, project, terminal: project.terminals[0], group: 'other' }));
+  const sent = [];
+  let acknowledge;
+  const delivered = new Promise(resolve => { acknowledge = resolve; });
+  stubGlobals(t, { window: { agentrix: { getState: async () => ({ ok: true, value: { projects } }) } } });
+  const overrides = {
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './Select': { Select }, './DecisionInbox': { DecisionInbox }, './DecisionCard': {}, './SessionLine': { SessionLine: () => null },
+    './inbox-items': { inboxItems: () => items, newWorkProjects: () => projects }, './review-history': { acceptedToday: () => 0 },
+    './send-to-agent': { sendToAgent: async (...args) => { sent.push(args); acknowledge(); } }, './image-thumbnail': {}, './VoiceButton': { VoiceButton: () => null },
+    './voice-input': { useDictatedBox() {} }, './file-popup': {}, './i18n': { t: text => text },
+  };
+  const view = hookHarness('src/features/home/DecisionHome.tsx', overrides);
+  t.after(() => view.dispose());
+  const props = { projects, decisions: [], snoozed: 0, onError: assert.fail };
+  const render = () => elements(view.render('DecisionHome', props).result);
+  let nodes = render(), stage = nodes.find(node => node.props.stage);
+  assert.deepEqual([stage.props.selectedProjectId, stage.props.takeFocus], ['a', true]);
+  nodes.find(node => node.type === DecisionInbox).props.onSelect('b');
+  stage = render().find(node => node.props.stage);
+  assert.deepEqual([stage.props.selectedProjectId, stage.props.takeFocus], ['b', false]);
+  const composer = hookHarness('src/features/home/DecisionHome.tsx', overrides);
+  t.after(() => composer.dispose());
+  const work = () => elements(composer.render('NewWork', stage.props).result);
+  const picker = work().find(node => node.type === Select && node.props.label === '项目');
+  assert.equal(picker.props.value, 'b');
+  picker.props.onChange('a');
+  nodes = render();
+  assert.equal(nodes.find(node => node.type === DecisionInbox).props.selectedId, 'a');
+  stage = nodes.find(node => node.props.stage);
+  assert.equal(work().find(node => node.type === Select && node.props.label === '项目').props.value, 'a');
+  assert.ok(work().find(node => node.props.className === 'new-work-hint').props.children.includes('输入需求后按 Enter 开始'));
+  work().find(node => node.type === 'textarea').props.onChange({ target: { value: 'Goal' } });
+  const press = (shiftKey, isComposing, preventDefault) => work().find(node => node.type === 'textarea').props.onKeyDown({
+    key: 'Enter', shiftKey, nativeEvent: { isComposing }, preventDefault,
+  });
+  press(true, false, assert.fail);
+  press(false, true, assert.fail);
+  assert.deepEqual(sent, []);
+  let prevented = false;
+  press(false, false, () => { prevented = true; });
+  assert.equal(prevented, true);
+  await delivered;
+  assert.deepEqual(sent, [['a', 'a', 'claude', 'Goal']]);
   const css = readCss('src/features/home/home.css');
   assertRule(css, '.new-work.is-stage', { width: 'min(760px, 100%)' });
   assertRule(css, '.new-work-title', { 'font-size': '24px', 'font-weight': '600' });
@@ -41,10 +77,26 @@ test('the send button is a quiet grey square until there is text, then the brand
   assert.ok(ratio('#5686c4', '#ffffff') >= 3, 'the focused border reads against the white box');
 });
 
-test('the project list recedes: idle sessions are plain names, only the picked one has its fill, its state line and a bold name', () => {
-  const inbox = read('src/features/home/DecisionInbox.tsx'), css = readCss('src/features/home/home.css');
-  assert.match(inbox, /group === 'working' \? sessionLine\(item\) : item\.id === selectedId \? tag : ''/);
-  assert.match(inbox, /\(decision \|\| group === 'working'\) && <span className=\{`inbox-tag/, 'an idle session has no tag in the list');
+test('the project list recedes: idle sessions are plain names, only the picked one has its fill, its state line and a bold name', t => {
+  const css = readCss('src/features/home/home.css');
+  const view = hookHarness('src/features/home/DecisionInbox.tsx', {
+    './DecisionCard': { kindLabel: () => 'Approval', waited: () => '1s' },
+    './inbox-items': { isWorking: () => true, sessionTask: () => 'Working task' },
+    './review-history': {}, './action-text': {}, './i18n': { t: text => text },
+  });
+  t.after(() => view.dispose());
+  const terminal = { sessionId: 'session', cliActive: true };
+  const items = ['picked', 'idle', 'working'].map(id => ({
+    id, terminal, project: { name: id, terminals: [terminal] }, group: id === 'working' ? 'working' : 'other',
+  }));
+  items.push({ ...items[0], id: 'approval', group: 'decide', decision: { kind: 'approval', since: 0, context: ['Review this'] } });
+  const rows = elements(view.render('DecisionInbox', { items, selectedId: 'picked', now: 1 }).result)
+    .filter(node => node.props.role === 'option');
+  assert.deepEqual(rows.map(row => row.props['aria-selected']), [false, false, true, false]);
+  assert.deepEqual(rows.map(row => elements(row.props.children).find(node => node.type === 'small')?.props.children),
+    ['1s · Review this', 'Working task', '等待指令', undefined]);
+  assert.deepEqual(rows.map(row => elements(row.props.children).find(node => node.props.className?.startsWith('inbox-tag'))?.props.children),
+    ['Approval', '等待指令', undefined, undefined]);
   assertRule(css, '.inbox-text b', { 'font-weight': '400', color: 'var(--text-2)' });
   assertRule(css, '.inbox-row:is([aria-selected="true"], .has-decision) .inbox-text b', { color: 'var(--text-1)', 'font-weight': '600' });
   assertRule(css, '.inbox-row.is-compact', { height: '36px' });

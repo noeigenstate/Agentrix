@@ -3,21 +3,52 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const ts = require('typescript');
+const { elements } = require('./helpers/renderer-fixtures.cjs');
+const { hookHarness } = require('./helpers/hook-harness.cjs');
+const { appView } = require('./helpers/app-view.cjs');
+const { explorerView } = require('./helpers/explorer-view.cjs');
+const { quotaView } = require('./helpers/quota-view.cjs');
+const { identifiers, sourceNodes } = require('./helpers/source-structure.cjs');
+
+const splitControls = ['openSplit', 'toggleSplit'];
+const terminalWrites = ['writeTerminal', 'writeApproval', 'answerTerminal', 'resizeTerminal', 'startTerminal', 'closeTerminal', 'restartTerminal', 'sendToAgent'];
+const filesIn = folder => fs.readdirSync(path.join(__dirname, '..', folder), { recursive: true })
+  .map(name => path.posix.join(folder, name.replaceAll('\\', '/')))
+  .filter(name => name.endsWith('.ts') || name.endsWith('.tsx'));
+const member = (node, receiver) => ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === receiver;
+const bridgeMembers = (file, receiver) => sourceNodes(file, node => member(node, receiver)).map(node => node.name.text);
 
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
 // The pane only observes. Owner-authorized automatic resets are admitted by a
 // separate main-process action, never by rendering a quota bar.
-test('the pane never acts on its own: one /usage after the countdown, read-only account calls, no completion or editor controls', () => {
-  const pane = read('src/features/agents/ResetQuota.tsx');
-  assert.equal(pane.match(/\bsendToAgent\(/g).length, 1, 'one place types into the agent');
-  assert.equal(pane.match(/new CustomEvent\('agentrix:command'/g).length, 1, 'one command event');
-  assert.match(pane, /const command = '\/usage';/, 'and what it types is /usage');
-  assert.deepEqual(pane.match(/\brun\(\)/g), ['run()'], 'which only the countdown starts');
-  assert.match(pane, /if \(count === 0\) \{[^}]*void run\(\);/, 'when it reaches zero');
-  assert.doesNotMatch(pane, /window\.agentrix\b|\bipcRenderer\b/, 'the pane calls no main-process action');
-  for (const file of ['src/features/agents/ActivityPane.tsx', 'src/features/agents/ResetQuota.tsx', 'src/features/agents/ResetCountdown.tsx'])
-    assert.doesNotMatch(read(file), /vs ?code|code\.cmd|openInEditor|markComplete|mark-complete|完成项目|标记完成/i, `${file} has no manual completion or editor launch control`);
+test('the pane never acts on its own: one /usage after the countdown, read-only account calls, no completion or editor controls', t => {
+  const view = quotaView(t);
+  view.render();
+  assert.deepEqual(view.commands, []);
+  view.row().props.onClick();
+  view.render();
+  for (let seconds = 0; seconds < 9; seconds++) view.tick();
+  assert.deepEqual(view.commands, []);
+  view.countdown().props.onCancel();
+  view.render();
+  view.tick();
+  assert.deepEqual(view.sends, []);
+  view.row().props.onClick();
+  view.render();
+  for (let seconds = 0; seconds < 10; seconds++) view.tick();
+  assert.deepEqual(view.commands.map(event => [event.type, event.detail, event.cancelable]), [
+    ['agentrix:command', { terminalId: 'terminal', text: '/usage' }, true],
+  ]);
+  assert.deepEqual(view.sends, [['terminal', 'session', 'codex', '/usage']]);
+  for (const name of ['ActivityPane', 'ResetQuota', 'ResetCountdown']) {
+    const file = 'src/features/agents/' + name + '.tsx';
+    assert.deepEqual(identifiers(file, ['openInEditor', 'markComplete', 'agentrix', 'ipcRenderer']), []);
+    const forbidden = ['vs code', 'vscode', 'code.cmd', 'mark-complete', '完成项目', '标记完成'];
+    const labels = sourceNodes(file, node => ts.isStringLiteralLike(node) || ts.isJsxText(node)).map(node => node.text.toLowerCase());
+    assert.ok(labels.every(label => forbidden.every(word => !label.includes(word))), file);
+  }
   // Codex only reads identity (without refresh) and limits; Claude's usage is one GET.
   const source = read('electron/features/agents/codex-account-usage.cjs');
   const codex = source.slice(source.indexOf('function readCodexAccount('), source.indexOf('// Scope only to'));
@@ -34,54 +65,71 @@ test('the pane never acts on its own: one /usage after the countdown, read-only 
 // A sub-agent's view is the owner's to open and its conversation only reads: nothing opens one by itself, nothing in it writes to a terminal,
 // and the owner's word for the agent leaves through two main-process calls only.
 test('a sub-agent view opens only on the owner’s click on a row, reads the sub-agent’s record and speaks to it through the main process only', () => {
-  const walk = dir => fs.readdirSync(path.join(__dirname, '..', dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`]);
-  const callers = walk('src').filter(file => /\.tsx?$/.test(file) && /\b(openSplit|toggleSplit)\(/.test(read(file)));
-  assert.deepEqual(callers, ['src/features/agents/AgentCalls.tsx', 'src/features/agents/subagent-splits.ts'], 'only the list’s row and the store itself');
-  const pane = read('src/features/agents/AgentCalls.tsx');
-  assert.equal(pane.match(/\btoggleSplit\(/g).length, 2, 'a worker row and a background task row');
-  assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, item\.id\)\}/, 'each is its row button click');
-  assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, callId\)\}/);
-  assert.doesNotMatch(read('src/features/terminal/ProjectTerminals.tsx'), /\b(openSplit|toggleSplit)\(/, 'the grid shows the views, it never opens one');
-  const code = file => read(`src/features/agents/${file}`).replace(/\/\/.*$/gm, ''), view = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts', 'BackgroundPane.tsx'].map(code).join('\n');
-  assert.doesNotMatch(view, /writeTerminal|writeApproval|answerTerminal|resizeTerminal|startTerminal|closeTerminal|restartTerminal|sendToAgent|readClipboard|workerTerminalKeys|\.copy\(/, 'no write to a terminal, no input, no clipboard outside the worker terminal');
-  assert.deepEqual([...view.matchAll(/window\.agentrix\.?(\w*)/g)].map(match => match[1]).sort(), ['', 'interveneAgent', 'stopAgent'], 'the bridge is handed to followFeed whole; the input only intervenes or stops');
-  assert.deepEqual([...new Set([...view.matchAll(/bridge\.(\w+)/g)].map(match => match[1]))].sort(), ['onSubagentFeed', 'subagentFeed'], 'whose only calls are the two feed ones');
-  // The worker's terminal is the one place keys and the clipboard are touched: keys to its own worker with the epoch, a copy of a selection, no clipboard read, no planner terminal.
-  const worker = code('WorkerTerminal.tsx');
-  assert.deepEqual([...new Set([...worker.matchAll(/bridge\.(\w+)/g)].map(match => match[1]))].sort(), ['attachWorkerTerminal', 'copy', 'detachWorkerTerminal', 'onWorkerTerminalData', 'resizeWorkerTerminal', 'workerTerminalKeys'], 'the worker terminal’s whole bridge');
-  assert.match(worker, /bridge\.workerTerminalKeys\(terminalId, callId, epoch!, data\)/, 'keys carry this worker’s own address and epoch');
-  assert.doesNotMatch(worker, /readClipboard|writeTerminal|answerTerminal|sendToAgent|interveneAgent|stopAgent|\.paste\(/, 'no clipboard read, no planner terminal, no paste of its own');
-  assert.equal(worker.match(/bridge\.copy\(/g).length, 1, 'one clipboard write, for an explicit copy of a selection');
-  assert.match(worker, /event\.code === 'KeyC'[\s\S]*terminal\.hasSelection\(\)/, 'Ctrl+C copies only with a selection; without one it reaches the CLI');
-  assert.match(code('SubagentPane.tsx'), /feed\?\.awaiting === 'owner'/, 'the terminal shows only while the worker awaits the owner');
-  assert.doesNotMatch(code('BackgroundPane.tsx'), /window\.agentrix|<textarea|<input/, 'a background view calls no bridge and takes no typing');
-  assert.doesNotMatch(code('SubagentPane.tsx'), /<textarea|<input|contentEditable|interveneAgent|stopAgent/, 'the view itself takes no typing; its input is SubagentInput');
-  assert.equal(code('SubagentInput.tsx').match(/<textarea/g).length, 1, 'one text box, for the owner’s word to the agent');
+  const callers = filesIn('src').filter(file => sourceNodes(file, node =>
+    ts.isCallExpression(node) && ts.isIdentifier(node.expression) && splitControls.includes(node.expression.text)).length).sort();
+  assert.deepEqual(callers, ['src/features/agents/AgentCalls.tsx', 'src/features/agents/subagent-splits.ts']);
+  const pane = 'src/features/agents/AgentCalls.tsx';
+  const calls = sourceNodes(pane, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'toggleSplit');
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(node => ts.isArrowFunction(node.parent) && ts.isJsxExpression(node.parent.parent)
+    && node.parent.parent.parent.name.text === 'onClick'));
+
+  const files = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts', 'BackgroundPane.tsx'].map(name => 'src/features/agents/' + name);
+  for (const file of files) assert.deepEqual(identifiers(file, [...terminalWrites, 'readClipboard', 'workerTerminalKeys', 'copy']), []);
+  assert.deepEqual([...new Set(files.flatMap(file => bridgeMembers(file, 'bridge')))].sort(), ['onSubagentFeed', 'subagentFeed']);
+  assert.deepEqual(files.flatMap(file => sourceNodes(file, node => ts.isPropertyAccessExpression(node)
+    && member(node.expression, 'window') && node.expression.name.text === 'agentrix').map(node => node.name.text)).sort(), ['interveneAgent', 'stopAgent']);
+
+  const worker = 'src/features/agents/WorkerTerminal.tsx';
+  assert.deepEqual([...new Set(bridgeMembers(worker, 'bridge'))].sort(),
+    ['attachWorkerTerminal', 'copy', 'detachWorkerTerminal', 'onWorkerTerminalData', 'resizeWorkerTerminal', 'workerTerminalKeys']);
+  assert.deepEqual(identifiers(worker, [...terminalWrites, 'readClipboard', 'interveneAgent', 'stopAgent', 'paste']), []);
+  for (const [index, tags] of [[0, []], [1, ['textarea']], [3, []]]) {
+    const fields = sourceNodes(files[index], node => (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
+      && ['textarea', 'input'].includes(node.tagName.text));
+    assert.deepEqual(fields.map(node => node.tagName.text), tags);
+    assert.deepEqual(identifiers(files[index], ['contentEditable']), []);
+  }
 });
 
 // The API card shows state and changes nothing; a word for a sub-agent goes to the worker, so the relay into the planner's input is gone.
 test('the API usage card only reads the main process, and the parent relay can no longer type into a terminal', () => {
-  const code = file => read(file).replace(/\/\/.*$/gm, '');
-  const card = code('src/features/agents/ApiUsage.tsx');
-  assert.deepEqual([...new Set([...card.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))], ['usage'], 'its only bridge call is the usage read');
-  assert.doesNotMatch(card, /sendToAgent|writeTerminal|setSettings|keySave|keyClear|\.answer\(|\.interrupt\(|\.send\(|\.start\(/, 'no write, no setting, no key, no answer');
-  assert.match(read('src/features/agents/ActivityPane.tsx'), /<ApiUsage terminal=\{terminal\} projectId=\{projectId\} \/>/, 'and the pane shows it');
+  const card = 'src/features/agents/ApiUsage.tsx';
+  assert.deepEqual([...new Set(bridgeMembers(card, 'bridge'))], ['usage']);
+  assert.deepEqual(identifiers(card, [...terminalWrites, 'setSettings', 'keySave', 'keyClear', 'answer', 'interrupt', 'send', 'start']), []);
   assert.equal(fs.existsSync(path.join(__dirname, '../src/features/agents/parent-relay.ts')), false);
+  const ApiUsage = () => null;
+  const view = hookHarness('src/features/agents/ActivityPane.tsx', {
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: text => text },
+    './terminal-screen.ts': { useScreen: () => null, cliStateFor: () => ({ working: false }) }, './ApiUsage': { ApiUsage }, './RoutingKeyCard': { RoutingKeyCard: () => null }, './SeatsHost': {},
+  });
+  const terminal = { id: 'terminal', cliActive: true, agent: 'codex' };
+  const nodes = elements(view.render('ActivityPane', { terminal, projectId: 'project' }).result);
+  assert.deepEqual(nodes.find(node => node.type === ApiUsage).props, { terminal, projectId: 'project' });
 });
 
 // The left bar's Agent tab shows the called models without the files module knowing the agents module: the node and the running count come from the agents module and the app only passes them.
-test('the files module imports nothing from the agents module: the Agent tab gets its list as a node and a count from the app', () => {
-  const code = file => read(file).replace(/\/\/.*$/gm, '');
-  const walk = dir => fs.readdirSync(path.join(__dirname, '..', dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(dir + '/' + entry.name) : [dir + '/' + entry.name]);
-  assert.deepEqual(walk('src/features/files').filter(file => /\.tsx?$/.test(file) && /from '\.\.\/agents\//.test(code(file))), [], 'no file of the files module reaches into agents');
-  const explorer = code('src/features/files/ProjectExplorer.tsx');
-  assert.match(explorer, /agentPanel: ReactNode; agentRunning: number;/, 'the tab takes a ready node and a count');
-  assert.match(explorer, /\{tab === 'agent' && !collapsed && <div className="explorer-agent">\{agentPanel\}<\/div>\}/);
-  assert.match(explorer, /const openTab = \(next: Tab\) => \{ window\.agentrix\.fileTreeFocus\(project\.id, false\); setTab\(next\);/, 'switching to any tab, Agent included, takes the file-tree focus away');
-  assert.match(explorer, /enabled=\{!collapsed && filesOpen\}/, 'a hidden tree does not load');
-  assert.match(explorer, /useState<Tab>\('agent'\)/, 'a project opens on Agent');
-  const app = code('src/App.tsx');
-  assert.match(app, /<AgentSidebar project=\{focus\}>\{agent => <ProjectExplorer key=\{focus\.id\} project=\{focus\} agentPanel=\{agent\.panel\} agentRunning=\{agent\.running\}/, 'the app hands the agents module’s node to the explorer');
-  const sidebar = code('src/features/agents/AgentSidebar.tsx');
-  assert.doesNotMatch(sidebar, /window\.agentrix|toggleSplit|openSplit|writeTerminal/, 'the bridge between the two modules only passes the list on');
+test('the files module imports nothing from the agents module: the Agent tab gets its list as a node and a count from the app', t => {
+  const imports = file => sourceNodes(file, ts.isImportDeclaration).map(node => node.moduleSpecifier.text);
+  assert.deepEqual(filesIn('src/features/files').flatMap(imports).filter(name => name.startsWith('../agents/')), []);
+  assert.deepEqual(identifiers('src/features/agents/AgentSidebar.tsx', ['agentrix', ...splitControls, 'writeTerminal']), []);
+  const app = appView(t);
+  const sidebar = app.render().find(node => node.type === app.AgentSidebar);
+  const panel = require('react').createElement('div', { id: 'agent-panel' });
+  const explorer = sidebar.props.children({ panel, running: 3, background: 2 });
+  assert.equal(explorer.type, app.ProjectExplorer);
+  assert.deepEqual([explorer.props.project, explorer.props.agentPanel, explorer.props.agentRunning, explorer.props.agentBackground],
+    [app.project, panel, 3, 2]);
+  const view = explorerView(t);
+  const rows = () => view.render({ agentPanel: panel, agentRunning: 3, agentBackground: 2 });
+  const button = label => rows().find(node => node.type === 'button' && node.props['aria-label'] === label);
+  const treeEnabled = () => rows().find(node => node.props.projectId === 'p' && 'enabled' in node.props).props.enabled;
+  assert.equal(button('Agent').props['aria-pressed'], true);
+  assert.equal(rows().find(node => node.props.className === 'explorer-agent').props.children, panel);
+  assert.equal(treeEnabled(), false);
+  button('资源管理器').props.onClick();
+  assert.equal(treeEnabled(), true);
+  button('Agent').props.onClick();
+  assert.deepEqual(view.focus, [['p', false], ['p', false]]);
+  assert.equal(treeEnabled(), false);
 });

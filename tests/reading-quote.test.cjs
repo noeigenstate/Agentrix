@@ -1,8 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
-const fs = require('node:fs');
-const path = require('node:path');
+const { hookHarness, rendererLoader } = require('./helpers/hook-harness.cjs');
+const { elements, stubGlobals } = require('./helpers/renderer-fixtures.cjs');
+const { identifiers } = require('./helpers/source-structure.cjs');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 const { QUOTE_LINES, QUOTE_CHARS, splitQuote, quoteExcerpt, plainExcerpt, withQuote } = require('../src/features/reading/message-quote.ts');
 
@@ -68,15 +69,23 @@ test('the quote styles use theme tokens and the spacing scale only', () => {
   for (const value of spacing) assert.ok(scale.has(Math.abs(parseFloat(value))), `${value} is off the spacing scale`);
 });
 
-test('the message menu is the standard dropdown at the pointer; the old corner button and its reserved column are gone', () => {
+test('the message menu is the standard dropdown at the pointer; the old corner button and its reserved column are gone', t => {
   const css = readCss('src/features/reading/reading-quote.css');
   assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('reading-quote-action')), [], 'no quote button styles');
   assert.deepEqual(css.declarations.filter(({ property, value }) => property === 'padding-right' && value === '40px'), [], 'no column reserved for a button');
   assertRule(css, '.reading-message-menu', { position: 'fixed' });
   assertRule(css, '.reading-user:focus-visible, .reading-assistant:focus-visible', { outline: '2px solid var(--focus-ring)' }, 'a focused message shows the standard ring');
-  const source = name => fs.readFileSync(path.join(__dirname, '../src/features/reading', name), 'utf8');
-  assert.doesNotMatch(source('ReadingQuote.tsx'), /QuoteAction|reading-quote-action/);
-  assert.match(source('MessageMenu.tsx'), /className="dropdown reading-message-menu"/, 'the existing dropdown, no new menu component');
+  assert.deepEqual(identifiers('src/features/reading/ReadingQuote.tsx', ['QuoteAction']), []);
+  const noop = () => {};
+  const menu = hookHarness('src/features/reading/MessageMenu.tsx', {
+    '@phosphor-icons/react': new Proxy({}, { get: () => noop }), './i18n': { t: text => text }, './NativeToast': {}, './reply-links.ts': {},
+    './message-menu': require('../src/features/reading/message-menu.ts'), 'react-dom': { createPortal: node => node },
+  });
+  stubGlobals(t, { document: { body: {}, addEventListener: noop, removeEventListener: noop } }, () => menu.dispose());
+  const tree = menu.render('MessageMenu', { place: { x: 20, y: 40, selected: '' }, quote: { disabled: null }, text: 'reply' }).result;
+  assert.equal(tree.props.className, 'dropdown reading-message-menu');
+  assert.equal(tree.props.role, 'menu');
+  assert.deepEqual(tree.props.style, { left: 20, top: 40 });
 });
 
 test('the message menu rules: the selection inside the message wins, links and controls keep their own menu, keys open it, it stays in the window', () => {
@@ -111,10 +120,24 @@ test('the chip shows the excerpt as one clean line: Markdown markers dropped, li
 });
 
 test('the quote block is laid out by the Markdown renderer and the chip is one line with an ellipsis', () => {
-  const read = file => fs.readFileSync(path.join(__dirname, '../src/features/reading', file), 'utf8');
   const css = readCss('src/features/reading/reading-quote.css');
   assert.notEqual(css.rule('.reading-user-quote')['white-space'], 'pre-wrap', 'not raw pre-wrapped text');
   assertRule(css, '.reading-quote > span', { 'white-space': 'nowrap', 'text-overflow': 'ellipsis' });
-  assert.match(read('PendingPromptEntries.tsx'), /<blockquote className="reading-user-quote"><Markdown text=\{quote\} \/><\/blockquote>/);
-  assert.match(read('ReadingQuote.tsx'), /plainExcerpt\(quote\.excerpt\)/);
+  const icons = new Proxy({}, { get: () => () => null });
+  const quote = rendererLoader({
+    '@phosphor-icons/react': icons, './i18n': { t: text => text }, './message-quote': require('../src/features/reading/message-quote.ts'),
+  })('src/features/reading/ReadingQuote.tsx');
+  const chip = elements(quote.QuoteChip({ quote: { who: 'Claude', excerpt: '**Excerpt**\n- important' } }));
+  assert.ok(chip.every(node => !node.props.className?.split(' ').includes('reading-quote-action')));
+  const text = chip.find(node => node.type === 'span').props;
+  assert.deepEqual([text.children, text.title], ['Excerpt important', 'Excerpt important']);
+  const Markdown = () => null, { UserMessage } = rendererLoader({
+    '@phosphor-icons/react': icons, './i18n': { t: text => text }, './UserAvatar': {}, './Timeline': {}, './Markdown': { Markdown },
+    './file-popup': {}, './message-quote': require('../src/features/reading/message-quote.ts'),
+    './pasted-pictures': require('../src/features/reading/pasted-pictures.ts'),
+  })('src/features/reading/PendingPromptEntries.tsx');
+  const block = elements(UserMessage({ text: '> quoted\n\nwords' })).find(node => node.type === 'blockquote');
+  assert.equal(block.props.className, 'reading-user-quote');
+  assert.equal(block.props.children.type, Markdown);
+  assert.equal(block.props.children.props.text, 'quoted');
 });

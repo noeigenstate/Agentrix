@@ -2,6 +2,7 @@
 // other test covered.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { identifiers } = require('./helpers/source-structure.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const jsx = require('react/jsx-runtime');
@@ -136,8 +137,7 @@ test("typing, selecting or copying in a small card's terminal never expands the 
   for (const value of Object.values(pane.props)) if (typeof value === 'function') value('agent', 'target');
   assert.deepEqual(selected, ['agent', 'agent']);
   assert.deepEqual(expanded, [], 'only the project header, the waiting-status action and explicit expand buttons expand');
-  const source = fs.readFileSync(path.join(__dirname, '../src/features/terminal/TerminalPane.tsx'), 'utf8');
-  assert.doesNotMatch(source, /expand|onFocus\s*\(/i, 'the terminal itself has no way to expand its project');
+  assert.deepEqual(identifiers('src/features/terminal/TerminalPane.tsx', ['expand', 'onExpand', 'onFocus']), []);
 });
 
 test('native session tests inject a fake CLI and never start the one installed on the machine', () => {

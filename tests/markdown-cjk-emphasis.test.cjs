@@ -116,19 +116,14 @@ test('a long paragraph of inline code scales close to marked without the extensi
 test('the real Markdown worker handles long Markdown before its existing timeout', async t => {
   const previous = globalThis.Worker, workers = [];
   const workerFile = path.join(__dirname, '../src/features/reading/markdown.worker.ts');
-  const source = ts.transpileModule(fs.readFileSync(workerFile, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
   globalThis.Worker = class {
     constructor() {
       const worker = new Thread(`
         const { parentPort, workerData } = require('node:worker_threads');
-        const self = { postMessage: data => parentPort.postMessage(data) };
-        require('node:vm').runInNewContext(workerData.source, {
-          exports: {}, require: () => require(workerData.reading), self,
-        });
+        globalThis.self = { postMessage: data => parentPort.postMessage(data) };
+        require(workerData);
         parentPort.on('message', data => self.onmessage({ data }));
-      `, { eval: true, workerData: { source, reading: path.join(__dirname, '../src/features/reading/markdown-escape.ts') } });
+      `, { eval: true, workerData: workerFile });
       workers.push(worker); this.worker = worker;
       worker.on('message', data => this.onmessage({ data }));
     }

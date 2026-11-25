@@ -228,20 +228,19 @@ test('observation guard still rejects stale epochs, competing transactions and c
 });
 
 test('Decide Open terminal switches the source terminal after accepted navigation, without sending input', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8').replace(/\r\n/g, '\n'), start = source.indexOf('  const openDecision =');
-  const body = source.slice(start, source.indexOf('\n\n', start)).replace('const openDecision =', 'globalThis.openDecision =');
+  const { openDecisionTerminal } = require('../src/open-decision.ts');
   const calls = [], frames = [];
   let accepted = true;
-  const context = vm.createContext({ useCallback: fn => fn, focusProject: async id => { calls.push(['project', id]); return accepted; },
-    setReading: (...args) => calls.push(['reading', ...args]), focusTerminalWhenReady: id => calls.push(['focus', id]), requestAnimationFrame: fn => frames.push(fn) });
-  vm.runInContext(ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  const open = decision => openDecisionTerminal(decision,
+    async id => { calls.push(['project', id]); return accepted; },
+    (...args) => calls.push(['reading', ...args]), id => calls.push(['focus', id]), fn => frames.push(fn));
   const decision = { kind: 'approval', projectId: 'project', terminalId: 'source-split' };
-  context.openDecision(decision); await Promise.resolve();
+  open(decision); await Promise.resolve();
   assert.deepEqual(calls, [['project', 'project'], ['reading', 'source-split', false]]);
   assert.equal(frames.length, 1); frames.shift()(); assert.deepEqual(calls.at(-1), ['focus', 'source-split']);
-  calls.length = 0; accepted = false; context.openDecision(decision); await Promise.resolve();
+  calls.length = 0; accepted = false; open(decision); await Promise.resolve();
   assert.deepEqual(calls, [['project', 'project']]); assert.deepEqual(frames, []);
-  calls.length = 0; accepted = true; context.openDecision({ ...decision, kind: 'signin' }); await Promise.resolve();
+  calls.length = 0; accepted = true; open({ ...decision, kind: 'signin' }); await Promise.resolve();
   assert.deepEqual(calls, [['project', 'project']]); assert.deepEqual(frames, []);
 });
 test('queued ordinary input still invalidates observation epochs at InputGate release', () => {

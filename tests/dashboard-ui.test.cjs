@@ -1,6 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
+const { importsOf, usesWindowMember } = require('./helpers/source-structure.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -416,8 +417,6 @@ test('the heat map legend names its low end honestly: 45% while every rate is on
 }));
 
 test('the heat map hints are theme-neutral: the darkest cell is the highest in light and the lightest in dark, so neither says dark', () => {
-  const tabs = fs.readFileSync(path.join(dashboardDir, 'Tabs.tsx'), 'utf8');
-  assert.doesNotMatch(tabs, /颜色越深/);
   for (const language of ['zh', 'en']) {
     applyLanguage(language);
     const [models, team] = [view(), view({ tab: 'team' })];
@@ -817,9 +816,9 @@ test('the donut’s centre figure and its 子任务 caption both take a text tok
 });
 
 test('the page reads only the dashboard bridge and never the main window’s', () => {
-  const files = fs.readdirSync(dashboardDir).filter(name => /\.tsx?$/.test(name));
-  for (const name of files) assert.doesNotMatch(fs.readFileSync(path.join(dashboardDir, name), 'utf8'), /window\.agentrix\b(?!Dashboard)/, name);
-  const imports = files.flatMap(name => [...fs.readFileSync(path.join(dashboardDir, name), 'utf8').matchAll(/from '(\.\.\/\.\.\/[^']+|\.\.\/[^']+)'/g)].map(match => match[1]));
+  const files = fs.readdirSync(dashboardDir).filter(name => /\.tsx?$/.test(name)).map(name => 'src/features/dashboard/' + name);
+  assert.deepEqual(files.filter(file => usesWindowMember(file, 'agentrix')), []);
+  const imports = files.flatMap(importsOf).filter(specifier => specifier.startsWith('../'));
   assert.deepEqual([...new Set(imports.filter(spec => !spec.startsWith('../../shared/')))], [], 'only src/shared is imported from outside the feature');
 });
 
@@ -852,8 +851,10 @@ test('the speed chart writes every end label in a gutter right of the plot, leve
     assert.ok(tail[2][0] < plotRight + 24 && tail[2][0] > tail[1][0], 'then into the gutter, short of the text');
   }
   assert.ok(labels.every(label => label.text.length <= 16), 'a long name is cut');
-  const chartMath = fs.readFileSync(path.join(dashboardDir, 'SpeedChart.tsx'), 'utf8');
-  assert.match(chartMath, /const clip = \(name: string\) => name\.length > NAME_MAX/, 'with an ellipsis');
+  const model = 'abcdefghijklmnopqr';
+  const long = fixture({ speed: fixture().speed.map(point => ({ ...point, model })) });
+  const labelled = view({ summary: long });
+  assert.match(labelled, /<text class="end"[^>]*>abcdefghijk… \d+<\/text>/);
   assertRule(readCss('src/features/dashboard/dashboard.css'), '.chart .tail', { fill: 'none', 'stroke-width': '1', 'stroke-dasharray': '2 3' });
 }));
 

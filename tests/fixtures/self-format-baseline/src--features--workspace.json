@@ -1,4 +1,0 @@
-{
-  "src/features/workspace/ProjectPanel.tsx :: tests/agent-tab-rows.test.cjs :: source-regex": 1,
-  "src/features/workspace/useProjectReorder.ts :: tests/project-reorder-release.test.cjs :: source-execution": 1
-}

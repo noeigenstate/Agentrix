@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
+const { quotaView } = require('./helpers/quota-view.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -858,18 +859,22 @@ test('the reset countdown is one large overlay: a draining ring with the seconds
   assert.deepEqual(css.declarations.filter(({ property, value }) => property.includes('animation') || /bounce|scale\(/.test(value)), []);
 });
 
-test('the reset row stays the trigger: it never turns into a countdown row, and the old row countdown is gone', () => {
+test('the reset row stays the trigger: it never turns into a countdown row, and the old row countdown is gone', t => {
   const html = usageMarkup('zh', { agent: 'codex', agentUsage: { limits: [], resets: { left: 2, total: null }, resetQuery: { state: 'ready' } } });
   assert.match(html, /<button type="button" class="activity-reset-row activity-estop" title="点击后开始 10 秒倒计时，期间可取消；结束后打开 Codex 的 \/usage，由你选择并确认重置"><span class="activity-row-icon">[\s\S]*?<\/span><span class="activity-reset-label">重置额度<\/span><small>剩余 2 次<\/small><\/button>/);
   assert.doesNotMatch(html, /reset-countdown|role="timer"|倒计时中/, 'nothing counts before the click');
-  const source = fs.readFileSync(path.join(__dirname, '../src/features/agents/ResetQuota.tsx'), 'utf8');
-  assert.ok(source.includes("status = counting ? t('倒计时中…')"), 'while it counts the row says so quietly, in the same slot');
-  assert.ok(source.includes('disabled={counting ||'), 'and cannot start a second countdown');
-  // The countdown is a state of the live component, so its hover is pinned in the source and the translations.
-  assert.ok(source.includes("const title = counting ? t('倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消')"), 'while it counts the hover says how to cancel');
+  const view = quotaView(t);
+  view.row().props.onClick();
+  const row = view.row().props;
+  assert.equal(row.className, 'activity-reset-row activity-estop');
+  assert.equal(row.children.at(-1).props.children, '倒计时中…');
+  assert.equal(row.disabled, true);
+  assert.equal(row.title, '倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消');
+  assert.deepEqual([view.countdown().props.count, view.countdown().props.total], [10, 10]);
+  view.countdown().props.onCancel();
+  assert.equal(view.countdown(), undefined);
+  assert.equal(view.row().props.disabled, false);
   assert.equal(en['倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消'], 'The countdown is in progress. Cancel it with the button, Esc, or a click outside.');
-  assert.ok(source.includes('{!!count && <ResetCountdown count={count} total={COUNTDOWN} onCancel={() => setCount(null)} />}'));
-  assert.doesNotMatch(source, /activity-reset-cancel|is-counting|'\{seconds\} 秒后重置'/);
   const css = readCss('src/features/agents/activity-pane.css');
   assert.deepEqual(css.blocks.filter(({ selector }) => /activity-reset-cancel|is-counting/.test(selector)), []);
   assert.ok(!('{seconds} 秒后重置' in en), 'the old row label is gone from the translations');

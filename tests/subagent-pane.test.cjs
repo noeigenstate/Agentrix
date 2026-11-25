@@ -1,6 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
+const { identifiers } = require('./helpers/source-structure.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -559,6 +560,7 @@ test('open views take cells of the expanded grid after the terminals, are not te
   assert.doesNotMatch(gridMarkup(one, false), /has-splits/);
   assert.doesNotMatch(single, /has-terminals/, 'a lone conversation beside views is not picked out by the active-split edge');
   const two = gridMarkup([terminal('t-grid'), terminal('t-grid-2')], true);
+  assert.match(two, /class="subagent-slot" style="grid-column:span 2"/, 'the last split fills both columns of a short row');
   assert.match(two, /has-terminals/, 'with several terminals the one in use is');
   assert.match(two, /terminal-split-tools/, 'with several terminals the terminals keep their own tools'); assert.doesNotMatch(two, /grid-row/);
   s.closeSplit('t-grid', 'agent:b');
@@ -673,17 +675,21 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
 }));
 
 test("the chip's popover is the Agent tab's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
-  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = readCss('src/features/agents/subagent-chip.css');
+  const css = readCss('src/features/agents/subagent-chip.css');
   assertRule(css, '.subagent-menu', {
     '--flow-line': 'var(--divider)', '--flow-ink': 'var(--text-1)', '--flow-muted': 'var(--text-2)', '--flow-faint': 'var(--text-3)', background: 'var(--bg-menu)',
   }, "the pane's ink levels and the menu fill");
   assert.equal(css.rule('.subagent-menu')['box-shadow'], undefined, 'no new shadow');
-  assert.doesNotMatch(read('features/agents/SubagentChip.tsx').replace(/\/\/.*$/gm, ''), /\b(openSplit|toggleSplit|closeSplit)\(|window\.agentrix|writeTerminal|onFocus|onExpand/);
+  assert.deepEqual(identifiers('src/features/agents/SubagentChip.tsx',
+    ['openSplit', 'toggleSplit', 'closeSplit', 'agentrix', 'writeTerminal', 'onFocus', 'onExpand']), []);
 });
 
 test("a sub-agent view's hint stays on one line, so the box keeps its 36px at any width while typed text still grows it", () => {
   const css = readCss('src/features/reading/reading.css');
-  assert.match(fs.readFileSync(path.join(src, 'features/agents/SubagentInput.tsx'), 'utf8'), /subagent-input-row reading-composer/);
+  const view = inputView({});
+  try {
+    assert.ok(view.tree().some(node => node.props.className === 'subagent-input-row reading-composer'));
+  } finally { view.done(); }
   assertRule(css, '.reading-composer textarea::placeholder', { color: 'var(--text-2)', 'white-space': 'nowrap', overflow: 'hidden' });
   assertRule(css, '.reading-composer textarea', { 'field-sizing': 'content', 'min-height': '32px' });
 });

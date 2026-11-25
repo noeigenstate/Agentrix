@@ -1,27 +1,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const ts = require('typescript');
-
-// Like mac-menu-commands.test.cjs: App.tsx is too large to render here, so the title-bar navigation handler and the guard it shares with the key handler are cut out of its source and run against stubs.
-const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8').replace(/\r\n/g, '\n');
-const guard = source.slice(source.indexOf('const dialogOpen ='), source.indexOf('\n', source.indexOf('const dialogOpen =')));
-const handlerStart = source.indexOf('api.onTitlebarNavigate(') + 'api.onTitlebarNavigate('.length;
-const handler = source.slice(handlerStart, source.indexOf('\n    });', handlerStart) + '\n    }'.length);
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
+const { handleTitlebarNavigate } = rendererLoader({}, /\/shortcuts$/)('src/app-commands.ts');
 
 function titlebar(open = '', inPopup = false) {
   const views = [];
-  const context = vm.createContext({
-    document: {
-      activeElement: { closest: selector => inPopup && selector === '.reading-terminal-popup' ? {} : null },
-      querySelector: selector => selector.split(', ').includes(open) ? {} : null,
-    },
-    setView: view => views.push(view),
-  });
-  vm.runInContext(ts.transpileModule(`${guard}\nglobalThis.navigate = ${handler};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
-  return { navigate: context.navigate, views };
+  const document = {
+    activeElement: { closest: selector => inPopup && selector === '.reading-terminal-popup' ? {} : null },
+    querySelector: selector => selector.split(', ').includes(open) ? {} : null,
+  };
+  return { navigate: target => handleTitlebarNavigate(document, target, view => views.push(view)), views };
 }
 
 test('the native title-bar buttons switch the page', () => {

@@ -540,8 +540,8 @@ test('/permissions failures are told in the owner’s words, and a probe thread 
 test('the three permissions names are one list: main’s module, the window’s constant, the Settings store and the runtime agree', async t => {
   const { CODEX_PERMISSIONS } = require('../electron/codex-permissions.cjs');
   assert.equal(require('../electron/state.cjs').CODEX_PERMISSIONS, CODEX_PERMISSIONS, 'state.cjs takes the shared module');
-  const shared = fs.readFileSync(path.join(__dirname, '../src/shared/codex-permissions.ts'), 'utf8');
-  assert.deepEqual(JSON.parse(/CODEX_PERMISSIONS = (\[[^\]]*\])/.exec(shared)[1].replace(/'/g, '"')), [...CODEX_PERMISSIONS]);
+  const { CODEX_PERMISSIONS: rendererPermissions } = require('../src/shared/codex-permissions.ts');
+  assert.deepEqual(rendererPermissions, [...CODEX_PERMISSIONS]);
   // Each name is one the runtime honours as itself, not by falling back to full.
   for (const permissions of CODEX_PERMISSIONS) {
     const { session } = runtime(t, { spec: { permissions } });

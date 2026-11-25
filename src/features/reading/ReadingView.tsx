@@ -32,6 +32,7 @@ import './reading-flow.css';
 import { t } from '../../shared/i18n';
 import { isRoutingCommand, openSeats, readRoutingCommand } from '../../shared/routing-command.ts';
 import { termWords } from '../../shared/reason-words/term.ts';
+import { composerHints } from './composer-hints';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { useMentions } from './useMentions';
 import { MentionPalette } from './MentionPalette';
@@ -992,9 +993,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
   const commandReason = blockedCommand(draft, visibleScreen);
   const reasonInPalette = palette.open && palette.matches.some(item => item.name === draft.trim() && disabledCommand(item));
-  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续'), t('正在切换运行方式'), t('切换中')] : preview ? [t('历史预览，等待会话输入就绪'), t('历史预览'), t('预览')] : !live ? [t('会话未启动或已退出'), t('会话未运行'), t('未运行')] : hasChoice ? [t('等终端处理完后发送'), t('等终端处理完'), t('等终端')] : shownBlocked ? [t('等待终端输入就绪后发送'), t('等输入就绪后发送'), t('等输入就绪')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.cliActive
-    ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent }), t('输入消息…')]
-    : [t('输入命令，Enter 发送'), t('输入命令')];
+  const hints = composerHints({ locked: handoff?.locked, preview, live, hasChoice, shownBlocked, result: !!result, cliActive: terminal.cliActive, agent });
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
   const shownOutbox = outbox.filter(message => message.id !== directPaste.current);
   const head = shownOutbox[0];

@@ -1,7 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), Module = require('node:module'), vm = require('node:vm');
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), Module = require('node:module');
 const ts = require('typescript');
+const { conversationView } = require('./helpers/conversation-view.cjs');
 const { replyFiles } = require('../src/features/reading/reply-files.ts');
 const { createFileCards } = require('../electron/features/files/file-cards.cjs');
 
@@ -67,13 +68,15 @@ test('changing reply inputs or project invalidates resolutions and ignores late 
   assert.equal(render({ files: ['a.png', './a.png', 'new.png'], projectId: 'b' }).length, 3);
 });
 
-test('the shared assistant reply passes its generated image path to the named cards for either provider', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
-  const functionSource = source.slice(source.indexOf('function AssistantReply('), source.indexOf('// The native view hides'));
-  const FileCards = () => null, context = { require, exports: {}, useMemo: fn => fn(), replyFiles, withoutDelivery: require('../src/features/home/delivery.ts').withoutDelivery, FileCards, Markdown: () => null, GeneratedImage: () => null, Message: () => null, t: value => value };
-  vm.runInNewContext(ts.transpileModule(functionSource + '\nexport { AssistantReply };', { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
+test('the shared assistant reply passes its generated image path to the named cards for either provider', t => {
+  const FileCards = () => null, view = conversationView({ './FileCards': { FileCards } });
+  t.after(() => view.dispose());
+  const entry = {
+    id: 'reply', text: '`eastern-dragon.png`', generated: { path: 'C:/project/eastern-dragon.png', prompt: '' },
+    images: ['data:image/png;base64,SMALL'],
+  };
   for (const agent of ['claude', 'codex']) for (const result of [false, true]) {
-    const tree = context.exports.AssistantReply({ agent, result, projectId: 'p', onError: assert.fail, entry: { id: 'reply', text: '`eastern-dragon.png`', generated: { path: 'C:/project/eastern-dragon.png', prompt: '' }, images: ['data:image/png;base64,SMALL'] } });
+    const { result: tree } = view.render('AssistantReply', { agent, result, projectId: 'p', onError: assert.fail, entry });
     const child = tree.props.children.find(child => child?.type === FileCards);
     assert.deepEqual([...child.props.excludeImages], ['C:/project/eastern-dragon.png']);
   }

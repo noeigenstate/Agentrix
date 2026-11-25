@@ -1,4 +1,0 @@
-{
-  "src/features/home/DecisionHome.tsx :: tests/decision-stage.test.cjs :: source-regex": 6,
-  "src/features/home/DecisionInbox.tsx :: tests/decision-stage.test.cjs :: source-regex": 2
-}

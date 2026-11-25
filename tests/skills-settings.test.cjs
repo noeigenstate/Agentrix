@@ -6,6 +6,8 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
+const { settingsView } = require('./helpers/settings-view.cjs');
+const { translationKeys } = require('./helpers/source-structure.cjs');
 
 const root = path.join(__dirname, '../src');
 const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => values[key]);
@@ -438,14 +440,15 @@ test('the diff keeps two lines of context, marks the rest with a gap, and says w
   assert.deepEqual(diffLines('', 'x').map(line => line.kind), ['del', 'add']);
 });
 
-test('Settings lists 技能 after 编码助手 and English strings exist for every new phrase', () => {
-  const dialog = fs.readFileSync(path.join(root, 'features/settings/SettingsDialog.tsx'), 'utf8');
-  assert.ok(dialog.indexOf("id: 'agents'") < dialog.indexOf("id: 'skills'") && dialog.indexOf("id: 'skills'") < dialog.indexOf("id: 'shortcuts'"));
+test('Settings lists 技能 after 编码助手 and English strings exist for every new phrase', t => {
+  const dialog = settingsView(t);
+  const tabs = dialog.render({ initialSection: 'skills' }).flatMap(node => node.props['data-settings-tab'] ?? []);
+  assert.deepEqual(tabs.filter(tab => ['agents', 'skills', 'shortcuts'].includes(tab)), ['agents', 'skills', 'shortcuts']);
   const en = require('../electron/locales/en.json');
   const phrases = ['Agent 提议了修改', '查看变更', '回退到 v{n}', '生效证据', '还没有 Agent 用过', '最近一次生效：{time} · 项目 {project} · {agent}', '再点一次确认删除', '系统自带 · 只读'];
   for (const phrase of phrases) assert.ok(en[phrase], phrase);
   for (const file of ['SkillsSettings.tsx', 'SkillsList.tsx', 'SkillEditForm.tsx', 'SkillDetailPane.tsx', 'skill-text.ts']) {
-    for (const [, phrase] of fs.readFileSync(path.join(root, 'features/settings', file), 'utf8').matchAll(/\bt\('([^']+)'/g)) assert.ok(phrase in en, `${file}: ${phrase}`);
+    for (const phrase of translationKeys('src/features/settings/' + file)) assert.ok(phrase in en, file + ': ' + phrase);
   }
 });
 

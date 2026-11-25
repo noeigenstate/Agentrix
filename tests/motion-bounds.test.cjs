@@ -1,22 +1,16 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const ts = require('typescript');
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
+const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
 
-function fixture(file) {
+function fixture(t, file) {
   const frames = new Map(), resize = [], mutations = [], changes = [];
   let sequence = 0, target, moving = false, preferenceChange;
   const host = () => ({ events: new Map(), addEventListener(type, fn) { this.events.set(type, fn); }, removeEventListener(type) { this.events.delete(type); } });
   const window = { ...host(), innerWidth: 1000, innerHeight: 700 };
   const document = { ...host(), documentElement: { dataset: { motion: 'smooth' } }, body: {}, querySelector: () => null };
   const preference = { matches: false, addEventListener(_name, fn) { preferenceChange = fn; }, removeEventListener() { preferenceChange = undefined; } };
-  const exports = {};
-  const compiled = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/shared/', file), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  vm.runInNewContext(compiled, { exports, document, window, matchMedia: () => preference,
+  stubGlobals(t, { document, window, matchMedia: () => preference,
     requestAnimationFrame(fn) { frames.set(++sequence, fn); return sequence; }, cancelAnimationFrame: id => frames.delete(id),
     ResizeObserver: class {
       constructor(fn) { this.callback = fn; resize.push(this); }
@@ -27,6 +21,7 @@ function fixture(file) {
       observe(element) { this.element = element; } disconnect() { this.element = null; }
     },
   });
+  const exports = rendererLoader()('src/shared/' + file);
   const element = box => ({ box, getBoundingClientRect() { return this.box; }, closest: () => moving ? {} : null });
   target = element({ left: 10, top: 20, width: 400, height: 300 });
   return { exports, window, document, preference, resize, changes,
@@ -39,8 +34,8 @@ function fixture(file) {
   };
 }
 
-test('bounds tracking is idle at rest and coalesces layout notifications without unchanged updates', () => {
-  const f = fixture('observeBounds.ts'), stop = f.start();
+test('bounds tracking is idle at rest and coalesces layout notifications without unchanged updates', t => {
+  const f = fixture(t, 'observeBounds.ts'), stop = f.start();
   assert.equal(f.changes.length, 1); assert.equal(f.pendingFrames, 0);
   f.mutate(); f.mutate(); f.resize[0].callback();
   assert.equal(f.pendingFrames, 1); f.frame();
@@ -50,8 +45,8 @@ test('bounds tracking is idle at rest and coalesces layout notifications without
   stop();
 });
 
-test('bounds tracking follows every focus/drag frame and stops polling when the motion ends', () => {
-  const f = fixture('observeBounds.ts'), stop = f.start();
+test('bounds tracking follows every focus/drag frame and stops polling when the motion ends', t => {
+  const f = fixture(t, 'observeBounds.ts'), stop = f.start();
   f.moving = true; f.mutate(); f.frame();
   assert.equal(f.pendingFrames, 1); assert.equal(f.changes.length, 1);
   for (const left of [25, 60, 100]) { f.target.box.left = left; f.frame(); }
@@ -61,8 +56,8 @@ test('bounds tracking follows every focus/drag frame and stops polling when the 
   f.mutate(); assert.equal(f.pendingFrames, 0);
 });
 
-test('bounds tracking rebinds replaced cards, reports disappearance and cleans up scroll/resize', () => {
-  const f = fixture('observeBounds.ts'), stop = f.start();
+test('bounds tracking rebinds replaced cards, reports disappearance and cleans up scroll/resize', t => {
+  const f = fixture(t, 'observeBounds.ts'), stop = f.start();
   f.target = f.element({ left: 20, top: 40, width: 200, height: 300 }); f.mutate(); f.frame();
   assert.equal(f.resize[0].element, f.target);
   f.target = null; f.mutate(); f.frame(); assert.equal(f.changes.at(-1), null);
@@ -73,8 +68,8 @@ test('bounds tracking rebinds replaced cards, reports disappearance and cleans u
   stop(); assert.equal(f.window.events.size, 0); assert.equal(f.document.events.size, 0);
 });
 
-test('imperative motion observes live app and system settings and releases its listeners', () => {
-  const f = fixture('motion.ts'), states = [];
+test('imperative motion observes live app and system settings and releases its listeners', t => {
+  const f = fixture(t, 'motion.ts'), states = [];
   const stop = f.exports.observeMotion(() => states.push(f.exports.motionReduced()));
   f.exports.applyMotion('off'); f.mutate();
   f.exports.applyMotion('smooth'); f.mutate(); f.mediaChange(true);

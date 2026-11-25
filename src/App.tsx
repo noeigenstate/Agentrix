@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListChecks, CheckCircle, Info, Circle, Stamp, CirclesFour } from '@phosphor-icons/react';
-import type { AgentsState, AppUpdateState, MenuCommand, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
+import type { AgentsState, AppUpdateState, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
 import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AgentTabScope } from './features/agents/AgentCalls';
@@ -19,7 +19,7 @@ import { useWorkspaceAppearance } from './features/workspace/useWorkspaceAppeara
 import { VoiceOverlay } from './features/voice/VoiceButton';
 import { applyLanguage, t } from './shared/i18n';
 import { isMac, isWindows } from './shared/platform';
-import { actionFor, applyShortcuts, editingKeyInField, shortcut, type ShortcutAction } from './features/shortcuts/shortcuts';
+import { applyShortcuts, shortcut, type ShortcutAction } from './features/shortcuts/shortcuts';
 import { gridColumns, gridNeighbor } from './features/workspace/grid-navigation';
 import { quickDictation } from './features/voice/voice-input';
 import { UsageGuide } from './features/guide/UsageGuide';
@@ -33,6 +33,8 @@ import { ProjectPanel } from './features/workspace/ProjectPanel';
 import { SettingsDialog } from './features/settings/SettingsDialog';
 import { DecisionHome } from './features/home/DecisionHome';
 import { useDecisions, type Decision } from './features/home/decisions';
+import { handleAppShortcut, handleMenuCommand, handleTitlebarNavigate } from './app-commands';
+import { openDecisionTerminal } from './open-decision';
 import { decisionTitle, kindLabel } from './features/home/DecisionCard';
 const FilePreview = lazy(() => import('./features/files/FilePreview').then(module => ({ default: module.FilePreview })));
 const FilePopup = lazy(() => import('./features/files/FilePopup').then(module => ({ default: module.FilePopup })));
@@ -62,8 +64,6 @@ function focusOverviewProject(id: string) {
 }
 
 const NO_PROJECTS: Project[] = [];
-// Terminal popups are modeless: only their own keys belong to the CLI, even while other projects are hidden.
-const dialogOpen = (target: EventTarget | null = document.activeElement) => !!document.querySelector('dialog:modal, .tour-layer') || !!(target as Element | null)?.closest?.('.reading-terminal-popup');
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -263,12 +263,7 @@ export function App() {
     // App shortcuts (configurable in settings). In text boxes and the editor, standard editing keys such as
     // Ctrl+A keep their meaning; in terminals and elsewhere the shortcut wins, before xterm sees the key.
     // Modal dialogs (including recording a new shortcut) block everywhere; terminal popups keep their own keys.
-    const handler = (event: KeyboardEvent) => {
-      const action = actionFor(event);
-      if (!action || editingKeyInField(event) || dialogOpen(event.target)) return;
-      event.preventDefault(); event.stopPropagation();
-      if (!event.repeat) runAction(action);
-    };
+    const handler = (event: KeyboardEvent) => handleAppShortcut(document, event, runAction);
     document.addEventListener('keydown', handler, true);
     return () => document.removeEventListener('keydown', handler, true);
   }, [runAction]);
@@ -282,10 +277,7 @@ export function App() {
   // The macOS menu bar's Agentrix menu: what it sends back runs here, as the matching shortcut would.
   useEffect(() => {
     if (!isMac || !api) return;
-    return api.onMenuCommand((command: MenuCommand) => {
-      if (command === 'installUpdate') return installUpdate();
-      if (!dialogOpen()) runAction(command);
-    });
+    return api.onMenuCommand(command => handleMenuCommand(document, command, runAction, installUpdate));
   }, [installUpdate, runAction]);
   // macOS's native title-bar buttons (决策 / 工作台) show the page and the decision count from here and ask for a page through the same state.
   const nativeTitlebar = !!workspace?.nativeTitlebar;
@@ -299,9 +291,7 @@ export function App() {
   }, [nativeTitlebar, shownView, decisions.length, titlebarStyle]);
   useEffect(() => {
     if (!nativeTitlebar) return;
-    return api.onTitlebarNavigate(target => {
-      if (!dialogOpen()) setView(target);
-    });
+    return api.onTitlebarNavigate(target => handleTitlebarNavigate(document, target, setView));
   }, [nativeTitlebar]);
   const seenDecisions = useRef<Set<string> | null>(null);
   useEffect(() => {
@@ -322,11 +312,7 @@ export function App() {
     if (active?.closest('.main-workspace, .focus-sidebar')) active.blur();
   }, [shownView]);
   const openDecision = useCallback((decision: Decision) => {
-    void focusProject(decision.projectId).then(accepted => {
-      if (!accepted || (decision.kind !== 'approval' && decision.choice?.kind !== 'permission')) return;
-      setReading(decision.terminalId, false);
-      requestAnimationFrame(() => focusTerminalWhenReady(decision.terminalId));
-    });
+    openDecisionTerminal(decision, focusProject, setReading, focusTerminalWhenReady, callback => requestAnimationFrame(callback));
   }, [focusProject]);
 
   if (!api) return <div className="startup-message"><SquaresFour size={38} /><h1>{t('Agentrix 是桌面应用')}</h1><p>{t('请在项目目录运行 npm start，或双击打包后的应用。')}</p></div>;

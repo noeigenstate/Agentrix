@@ -46,7 +46,9 @@ function GeneratedCopy({ picture, projectId, onError }: { picture: GeneratedPict
 // Its prompt is a two-line summary under it; when the summary is cut off, a text toggle shows the whole prompt (not
 // remembered); its copy in the project is named last. The latest result's picture is larger and carries the agent's
 // one-sentence reply (children) between itself and its prompt.
-function GeneratedImage({ src, picture, projectId, result = false, onError, children }: { src: string; picture: GeneratedPicture; projectId: string; result?: boolean; onError: (message: string) => void; children?: ReactNode }) {
+export function GeneratedImage({ src, picture, projectId, result = false, onError, children }: {
+  src: string; picture: GeneratedPicture; projectId: string; result?: boolean; onError: (message: string) => void; children?: ReactNode;
+}) {
   const { path, prompt } = picture;
   const open = () => showPopup({ kind: 'image', projectId, path });
   const [expanded, setExpanded] = useState(false);
@@ -101,7 +103,9 @@ function Message({ entry, text = entry.text, who, className, pathOf, onError, ch
 
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
 // (the agents are told they can show one this way: reading-note.cjs).
-function AssistantReply({ entry, agent, projectId, result = false, pathOf, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void }) {
+export function AssistantReply({ entry, agent, projectId, result = false, pathOf, onError }: {
+  entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void;
+}) {
   // The closing 【交付】 block is read by the homework card, not shown here; what is shown is also what 复制 and 引用 take.
   const shown = useMemo(() => withoutDelivery(entry.text || ''), [entry.text]);
   // File cards come from the whole reply: agents name their deliverables in the block's 结果.

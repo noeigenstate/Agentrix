@@ -1,4 +1,0 @@
-{
-  "src/features/agents/AgentsSettings.tsx :: tests/agent-runtime-settings.test.cjs :: source-regex": 1,
-  "src/features/agents/SubagentChip.tsx :: tests/agent-tab.test.cjs :: source-regex": 2
-}

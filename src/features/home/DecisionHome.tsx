@@ -160,3 +160,5 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
     {children}
   </section>;
 }
+
+export { NewWork };

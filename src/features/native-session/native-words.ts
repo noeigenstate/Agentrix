@@ -241,7 +241,7 @@ function billingLine(test: ConnectionTest): TestLine {
 }
 
 // Where Claude Code was found (main's ClaudeVia); a value this view does not know is shown as given.
-const VIA_WORDS: Record<string, string> = {
+export const VIA_WORDS: Record<string, string> = {
   path: 'PATH', npm: 'npm 全局安装', 'platform-package': 'npm 平台包', 'local-bin': '官方安装器', 'claude-local': '旧版本地安装',
   winget: 'WinGet', 'registry-path': '系统 PATH（注册表）', system: '系统目录',
 };

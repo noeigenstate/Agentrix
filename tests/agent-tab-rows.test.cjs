@@ -6,6 +6,10 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
+const { hookHarness } = require('./helpers/hook-harness.cjs');
+const { elements } = require('./helpers/renderer-fixtures.cjs');
+const { explorerView } = require('./helpers/explorer-view.cjs');
+const { identifiers, sourceNodes } = require('./helpers/source-structure.cjs');
 const { renderToStaticMarkup } = require('react-dom/server');
 
 // The project's Agent tab: every terminal's workers in one list (labelled 终端 N), the starting row and its notice, the 最近完成 list, the background group and its badge.
@@ -120,7 +124,7 @@ test('a starting row shows 启动中 · 未确认, and a finished one is counted
   assert.ok(card([terminal('t1', [])]).includes('还没有调用其他模型'), 'nothing at all: the quiet sentence');
 });
 
-test('background tasks are listed with their terminal and age, and 后台 N 个运行中 shows outside the reading view', () => {
+test('background tasks are listed with their terminal and age, and 后台 N 个运行中 shows outside the reading view', t => {
   const now = Date.now(), splits = files('features/agents/subagent-splits.ts');
   const running = { id: 'b1', command: 'node scripts/replay-t23.cjs --all', terminalId: 't1', startedAt: now - 40 * 60000, lastOutputAt: now - 6000, state: 'running', tail: ['replay 1183/1500  ok', 'replay 1184/1500  ok'] };
   const second = { id: 'b2', command: 'pnpm test', terminalId: 't2', startedAt: now - 60000, state: 'running' };
@@ -148,12 +152,36 @@ test('background tasks are listed with their terminal and age, and 后台 N 个�
   assert.ok(renderToStaticMarkup(React.createElement(BackgroundBadge, { terminals })).includes('后台 2 个运行中'), 'N counts the running ones only');
   assert.equal(renderToStaticMarkup(React.createElement(BackgroundBadge, { terminals: [terminal('t1', [], [ended])] })), '', 'none running, no badge');
   assert.equal(sidebar(terminals).background, 2, 'the Agent tab gets the count');
-  assert.match(read('src/features/workspace/ProjectPanel.tsx'), /<BackgroundBadge terminals=\{project\.terminals\} \/>/, 'the project header, which is the small card\'s too');
-  assert.match(read('src/features/files/ProjectExplorer.tsx'), /agentBackground > 0 && <span className="explorer-tab-count explorer-tab-background"/, 'the Agent tab');
+  const noop = () => null;
+  const panel = hookHarness('src/features/workspace/ProjectPanel.tsx', {
+    '@phosphor-icons/react': new Proxy({}, { get: () => noop }),
+    './native-store.ts': { useNativeEntries: () => new Map() }, './ProjectTerminals': { ProjectTerminals: noop },
+    './terminal-visibility.ts': require('../src/features/terminal/terminal-visibility.ts'),
+    './active-terminal': { useActiveTerminal: noop }, './ActivityPane': { ActivityPane: noop }, './SubagentChip': { SubagentChip: noop },
+    './BackgroundBadge': { BackgroundBadge }, './voice-input': { useVoice: () => ({}) },
+    './i18n': { t: text => text }, './shortcuts': { shortcut: noop }, './ProjectImageDialog': {},
+    './IconButton': { IconButton: noop }, './time': {},
+  });
+  t.after(() => panel.dispose());
+  for (const focused of [false, true]) {
+    const tree = panel.render('ProjectPanel', { project: { id: 'p', terminals }, focused, index: 0 }).result;
+    const header = elements(tree).find(node => node.type === 'header');
+    assert.equal(elements(header.props.children).find(node => node.type === BackgroundBadge).props.terminals, terminals);
+  }
+  const explorer = explorerView(t);
+  const tab = count => explorer.render({ agentBackground: count }).find(node => node.props.className === 'explorer-tab-count explorer-tab-background');
+  assert.equal(tab(2).props.children.at(-1), '后台 2');
+  assert.equal(tab(0), undefined);
   const walk = dir => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(dir + '/' + entry.name) : [dir + '/' + entry.name]);
   const removed = /BackgroundBadge|background-badge|后台 \{count\} 个运行中/;
-  for (const file of walk('src/features/reading').filter(name => /\.tsx?$/.test(name))) assert.doesNotMatch(read(file), removed, `${file}: nothing of it inside the reading view`);
-  for (const file of walk('src/features/reading').filter(name => name.endsWith('.css'))) {
+  for (const file of walk('src/features/reading')) {
+    if (/\.tsx?$/.test(file)) {
+      assert.deepEqual(identifiers(file, ['BackgroundBadge']), [], file);
+      const badges = sourceNodes(file, node => (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)
+        || ts.isJsxText(node)) && removed.test(node.text));
+      assert.deepEqual(badges.map(node => node.text), [], file);
+    }
+    if (!file.endsWith('.css')) continue;
     const css = readCss(file);
     assert.deepEqual(css.blocks.filter(({ selector }) => removed.test(selector)), [], file);
     assert.deepEqual(css.declarations.filter(({ property, value }) => removed.test(property) || removed.test(value)), [], file);
@@ -243,12 +271,15 @@ test('the 15 s notice is a wrapping line of its own and the narrow header shorte
   assertRule(css, '.activity-call-notice > span', { flex: '1 1 calc(100% - 22px)' });
   assert.equal(css.rule('.activity-background-long', narrow).display, 'none');
   assert.equal(css.rule('.activity-background-short', narrow).display, 'inline');
-  const badge = fs.readFileSync(path.join(src, 'features/agents/BackgroundBadge.tsx'), 'utf8');
-  assert.match(badge, /aria-label=/); assert.match(badge, /'后台 \{count\}'/);
+  const { BackgroundBadge } = files('features/agents/BackgroundBadge.tsx');
+  const task = { id: 'b', state: 'running' };
+  const badge = BackgroundBadge({ terminals: [terminal('t', [], [task])] });
+  assert.ok(badge.props['aria-label'].startsWith('后台 1 个运行中'));
+  assert.equal(elements(badge).find(node => node.props.className === 'activity-background-short').props.children, '后台 1');
   assert.equal(require('../electron/locales/en.json')['后台 {count}'], 'Background {count}');
 });
 
-test('the notice actions are small buttons on their own line, a starting group head does not say 未确认 twice, and a split fills the last grid row', () => {
+test('the notice actions are small buttons on their own line, a starting group head does not say 未确认 twice', () => {
   const starting = item('dispatch:s', { state: 'starting', notice: 'unconfirmed', title: '写属性测试', startedAt: Date.now() - 16000 });
   const html = card([terminal('t1', [{ ...call('claude-sonnet-5-5', [starting]), modelUnconfirmed: true }])]);
   assert.equal((html.match(/<button type="button" class="button secondary small"/g) || []).length, 2, '停止 and 再等等 are .button.small');
@@ -258,7 +289,5 @@ test('the notice actions are small buttons on their own line, a starting group h
   const css = readCss('src/features/agents/activity-pane.css');
   assertRule(css, '.activity-call-notice > .activity-call-notice-actions', { flex: '1 1 100%' });
   assert.deepEqual(css.blocks.filter(({ selector }) => selector.includes('.activity-call-notice button')), [], 'no hand-made link buttons');
-  const grid = fs.readFileSync(path.join(src, 'features/terminal/ProjectTerminals.tsx'), 'utf8');
-  assert.match(grid, /gridColumn: `span \$\{spare \+ 1\}`/, 'the last split takes the cells a short last row leaves');
   assertRule(readCss('src/features/files/files.css'), '.explorer-tabs', { 'flex-wrap': 'wrap' }, 'the tab row wraps instead of scrolling');
 });

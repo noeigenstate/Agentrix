@@ -5,7 +5,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
-const vm = require('node:vm');
+const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { Marked } = require('marked');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
@@ -45,9 +45,8 @@ test('both reading Markdown parsers retain UNC and Windows path backslashes whil
 
 test('long Markdown sends the break mode to the worker and caches each mode separately', async t => {
   const previousWorker = globalThis.Worker, requests = [], worker = {};
-  const file = path.join(__dirname, '../src/features/reading/markdown.worker.ts');
-  const source = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  vm.runInNewContext(source, { exports: {}, require: () => ({ readingMarked }), self: worker }, { filename: file });
+  stubGlobals(t, { self: worker });
+  require('../src/features/reading/markdown.worker.ts');
   globalThis.Worker = class {
     postMessage(data) {
       requests.push(data);

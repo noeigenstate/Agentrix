@@ -1,4 +1,0 @@
-{
-  "src/features/guide/ReleaseNotes.tsx :: tests/release-notes.test.cjs :: source-regex": 3,
-  "src/features/guide/UsageGuide.tsx :: tests/release-notes.test.cjs :: source-regex": 1
-}

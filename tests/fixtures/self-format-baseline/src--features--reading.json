@@ -1,8 +1,0 @@
-{
-  "src/features/reading/ConversationFeed.tsx :: tests/pending-prompts.test.cjs :: source-regex": 2,
-  "src/features/reading/ConversationFeed.tsx :: tests/reading-image-cards.test.cjs :: source-execution": 1,
-  "src/features/reading/ConversationFeed.tsx :: tests/reading-image-cards.test.cjs :: source-slice": 1,
-  "src/features/reading/ConversationFeed.tsx :: tests/reading-ui.test.cjs :: source-regex": 1,
-  "src/features/reading/ConversationFeed.tsx :: tests/reading-ui.test.cjs :: source-slice": 1,
-  "src/features/reading/markdown.worker.ts :: tests/reading-paths.test.cjs :: source-execution": 1
-}

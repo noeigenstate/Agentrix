@@ -2,6 +2,9 @@ require('./fixtures/lab-isolation.cjs');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
+const { hookHarness } = require('./helpers/hook-harness.cjs');
+const { elements } = require('./helpers/renderer-fixtures.cjs');
+const { importsOf, usesWindowMember, translationKeys } = require('./helpers/source-structure.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -10,7 +13,7 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 
 // The Virtual Lab page, tested without Electron: the pure modules (pass rule, totals, scales, form limits), the store against a stubbed bridge,
-// the screens rendered to markup from fixture experiments, and the stylesheet, page and menu read as text. Sources are transpiled like the other UI tests do it.
+// the screens rendered to markup from fixture experiments, and the stylesheet and build page checks. Sources are transpiled like the other UI tests do it.
 const root = path.join(__dirname, '..');
 const src = path.join(root, 'src');
 const labDir = path.join(src, 'features', 'lab');
@@ -715,21 +718,19 @@ test('every scrolling region is labelled and focusable, and scrolling is only ev
   assert.ok(css().blocks.some(({ selector }) => selector.includes('.scroll:focus-visible')));
 });
 
-test('the page reads only the lab bridge and imports only src/shared; the main window’s menu opens the lab through openLab', () => {
-  const files = fs.readdirSync(labDir).filter(name => /\.tsx?$/.test(name));
-  for (const name of files) assert.doesNotMatch(read(path.join(labDir, name)), /window\.agentrix\b(?!Lab)/, name);
-  const imports = files.flatMap(name => [...read(path.join(labDir, name)).matchAll(/from '(\.\.\/\.\.\/[^']+|\.\.\/[^']+)'/g)].map(match => match[1]));
+test('the page reads only the lab bridge and imports only src/shared', () => {
+  const files = fs.readdirSync(labDir).filter(name => /\.tsx?$/.test(name)).map(name => 'src/features/lab/' + name);
+  assert.deepEqual(files.filter(file => usesWindowMember(file, 'agentrix')), []);
+  const imports = files.flatMap(importsOf).filter(specifier => specifier.startsWith('../'));
   assert.deepEqual([...new Set(imports.filter(spec => !spec.startsWith('../../shared/')))], [], 'only src/shared is imported from outside the feature');
-  const menu = read(path.join(src, 'features/titlebar/AppMenu.tsx'));
-  assert.match(menu, /window\.agentrix\.openLab\(\)/); assert.match(menu, /label=\{t\('虚拟实验室'\)\} onSelect=\{\(\) => choose\(openLab\)\}/);
-  assert.ok(menu.indexOf("t('虚拟实验室')") < menu.indexOf("t('设置')"), 'the lab entry precedes Settings');
+  // The menu order and actual openLab call are exercised in dashboard-ui.test.cjs.
 });
 
 test('every lab phrase has an English translation and shape-bearing words are not hard-coded in English', () => {
   const en = JSON.parse(read(path.join(root, 'electron/locales/en.json')));
   const missing = [];
   for (const name of fs.readdirSync(labDir).filter(file => /\.tsx?$/.test(file))) {
-    for (const match of read(path.join(labDir, name)).matchAll(/\bt\(\s*'((?:[^'\\]|\\.)*)'/g)) if (/[一-鿿]/.test(match[1]) && !(match[1] in en)) missing.push(`${name}: ${match[1]}`);
+    for (const text of translationKeys('src/features/lab/' + name)) if (/[一-鿿]/.test(text) && !(text in en)) missing.push(name + ': ' + text);
   }
   const engineDir = path.join(root, 'electron/features/lab');
   for (const name of fs.readdirSync(engineDir).filter(file => file.endsWith('.cjs'))) {
@@ -770,7 +771,7 @@ test('a cost is always dollars and cents; only an axis tick may drop the cents o
   assert.match(running, /已花 \$21\.40/); assert.match(running, /预算 \$20\.00/);
 }));
 
-test('the form starts only with a current, successful estimate for exactly the draft', () => zh(() => {
+test('the form starts only with a current, successful estimate for exactly the draft', t => zh(() => {
   const w = lab('wizard-math.ts'), estimate = { runs: 12, minutes: 30, costUsd: 5, basis: 'default', sources: [] };
   const answer = patch => ({ fresh: true, loading: false, value: estimate, error: null, ...patch });
   assert.deepEqual(w.currentEstimate(answer()), { value: estimate, error: null });
@@ -782,12 +783,59 @@ test('the form starts only with a current, successful estimate for exactly the d
   assert.equal(w.canStart(null, null, false), false, 'no estimate yet, or a failed one');
   assert.equal(w.canStart({ need: 'budget' }, estimate, false), false); assert.equal(w.canStart(null, estimate, true), false);
 
-  const wizard = read(path.join(labDir, 'Wizard.tsx'));
-  assert.match(wizard, /disabled=\{!canStart\(lack, estimated, starting\)\}/); assert.match(wizard, /if \(!canStart\(lack, estimated, starting\)\) return;/);
-  assert.match(wizard, /\[ready, JSON\.stringify\(selections\), draft\.arms\.join\(\), draft\.repeats\]/, 'the estimate is asked again when any of these changes');
-  assert.match(wizard, /api\.estimate\(\{ selections, arms: draft\.arms, repeats: draft\.repeats \}\)/, 'and asked for the draft’s selections');
-  assert.match(read(path.join(labDir, 'useSamples.ts')), /\[JSON\.stringify\(query\)\]/, 'a sample is asked again only when its own question changes');
-  assert.match(read(path.join(labDir, 'useResult.ts')), /fresh: state\.answered === asked/);
+  const math = lab('wizard-math.ts'), calls = [], started = [];
+  const scale = () => null, word = text => text;
+  let answerFor = answer({ fresh: false }), ask, requestKey, taskId = 't1';
+  const Sample = () => null, Part = () => null;
+  const renderer = hookHarness('src/features/lab/Wizard.tsx', {
+    '@phosphor-icons/react': { Check: Part }, './i18n': { t: word }, './format': { dateLabel: () => 'today', friendlyError: word },
+    './Marks': { BackButton: Part }, './source-math': lab('source-math.ts'), './source-text': { lackText: () => '', nameScope: () => 'fixture' },
+    './SourcePanels': { AaStep: Part, OssStep: Part, ProjectStep: Sample, SourceSection: Part },
+    './useSamples': { useSamples: ({ base }) => ({ draft: { ...base, history: { projectId: 'p1', tasks: [task(taskId, 'core')] } }, panels: {} }) },
+    './useResult': { useResult: (read, key) => { ask = read; requestKey = key; return answerFor; } },
+    './WizardSteps': { SourceStep: Part, ArmStep: Part, ScaleStep: scale }, './wizard-math': math,
+  });
+  t.after(() => renderer.dispose());
+  const props = { projects: [], sources: [], onStarted() {},
+    api: { estimate: query => { calls.push(query); } }, begin: async input => { started.push(input); return { ok: true, value: 'e1' }; } };
+  const tree = () => elements(renderer.render('Wizard', props).result);
+  const primary = () => tree().find(node => node.props.className === 'button primary').props;
+  tree();
+  assert.equal(ask(), null);
+  for (let step = 1; step <= 3; step++) primary().onClick();
+  assert.equal(primary().disabled, true);
+  primary().onClick();
+  assert.deepEqual(started, []);
+  ask();
+  assert.deepEqual(calls[0], { selections: [{ source: 'history', projectId: 'p1', tasks: [{ id: 't1' }] }], arms: ['orchestrated', 'opus'], repeats: 3 });
+  const beforeRepeats = requestKey;
+  tree().find(node => node.type === scale).props.onRepeats(4);
+  assert.equal(primary().disabled, true);
+  assert.notDeepEqual(requestKey, beforeRepeats);
+  ask();
+  assert.equal(calls.at(-1).repeats, 4);
+  const beforeTask = requestKey;
+  taskId = 't2';
+  assert.equal(primary().disabled, true);
+  assert.notDeepEqual(requestKey, beforeTask);
+  answerFor = answer();
+  assert.equal(primary().disabled, false);
+  primary().onClick();
+  assert.equal(started.length, 1);
+  assert.equal(started[0].selections[0].tasks[0].id, 't2');
+
+  const asks = [];
+  const samples = hookHarness('src/features/lab/useSamples.ts', {
+    './format': { friendlyError: word }, './source-math': lab('source-math.ts'), './wizard-math': math,
+    './useResult': { useResult: (read, key) => { if (read()) asks.push(key); return {}; } },
+  });
+  t.after(() => samples.dispose());
+  const sampleProps = { api: { sample: query => query }, infos: [info('history')], projects: [{ id: 'p1' }], base: math.emptyDraft(), active: true };
+  samples.render('useSamples', sampleProps);
+  samples.render('useSamples', { ...sampleProps, base: { ...sampleProps.base, repeats: 4 } });
+  assert.deepEqual(asks.at(-1), asks[0], 'repeats change the estimate question only');
+  samples.render('useSamples', { ...sampleProps, projects: [{ id: 'p2' }] });
+  assert.notDeepEqual(asks.at(-1), asks[0], 'a scope change changes the sample question');
 
   const { ScaleStep } = lab('WizardSteps.tsx'), draft = { ...w.emptyDraft(), history: { projectId: 'p1', tasks: [task('t1', 'core')] }, budgetUsd: 10 };
   const show = error => html(React.createElement(ScaleStep, { draft, infos: [], estimate: null, error, onRetry() {}, defaultName: 'x', onRepeats() {}, onBudget() {}, onName() {} }));
@@ -795,3 +843,26 @@ test('the form starts only with a current, successful estimate for exactly the d
   assert.match(failed, /估算失败：boom/); assert.match(failed, /<button type="button" class="button small">重试<\/button>/);
   assert.doesNotMatch(show(null), /估算失败/);
 }));
+
+test('an answer stops being fresh as soon as its estimate question changes', async t => {
+  const { newest } = lab('lab-store.ts');
+  let pending, reply;
+  const view = hookHarness('src/features/lab/useResult.ts', { './lab-store': { newest() {
+    const latest = newest();
+    return request => { pending = latest(request); return pending; };
+  } } });
+  t.after(() => view.dispose());
+  const ask = () => new Promise(resolve => { reply = resolve; });
+  const read = repeats => view.render('useResult', ask, [repeats]);
+  read(3);
+  reply({ ok: true, value: 'three repeats' });
+  await pending;
+  assert.equal(read(3).result.fresh, true);
+  const { renders } = read(4);
+  assert.equal(renders[0].fresh, false);
+  assert.equal(renders[0].value, 'three repeats');
+  reply({ ok: true, value: 'four repeats' });
+  await pending;
+  const { fresh, value } = read(4).result;
+  assert.deepEqual({ fresh, value }, { fresh: true, value: 'four repeats' });
+});

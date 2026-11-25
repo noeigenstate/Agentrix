@@ -1,5 +1,0 @@
-{
-  "src/features/voice/VoiceButton.tsx :: tests/voice-motion.test.cjs :: source-execution": 1,
-  "src/features/voice/voice-capture.worklet.js :: tests/voice-motion.test.cjs :: source-execution": 1,
-  "src/features/voice/voice-input.ts :: tests/voice-motion.test.cjs :: source-execution": 1
-}

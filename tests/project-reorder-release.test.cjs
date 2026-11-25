@@ -1,20 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const ts = require('typescript');
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
+const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
 
-const filename = path.join(__dirname, '../src/features/workspace/useProjectReorder.ts');
-const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
 const original = ['a', 'b', 'c', 'd', 'e', 'f'];
 const reordered = ['b', 'c', 'a', 'd', 'e', 'f'];
 
 // Execute the real hook and its registered handlers. Only its host (hooks, DOM rectangles,
 // event delivery and animation clock) is simulated; insertion and finish logic come from source.
-function fixture(initial = reordered, { deferCommit = false } = {}) {
+function fixture(t, initial = reordered, { deferCommit = false } = {}) {
   let workspace = [...initial], hook, cursor = 0, sequence = 0, effects = [], clock = 0, reduced = false, motionChange;
   let styleWrites = 0;
   const values = [], dependencies = [], frames = new Map(), timers = new Map(), animations = [];
@@ -70,17 +64,13 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
     useRef(initial) { const index = cursor++; if (!(index in values)) values[index] = { current: initial }; return values[index]; },
     useEffect: effect, useLayoutEffect: effect,
   };
-  const exports = {};
-  vm.runInNewContext(compiled, {
-    exports, window, document, getComputedStyle: () => ({ transform: 'none' }),
+  stubGlobals(t, { window, document, getComputedStyle: () => ({ transform: 'none' }),
     requestAnimationFrame(fn) { const id = ++sequence; frames.set(id, fn); return id; }, cancelAnimationFrame: id => frames.delete(id),
-    require(name) {
-      if (name === 'react') return react;
-      if (name === 'react-dom') return { flushSync(fn) { fn(); render(); } };
-      if (name === '../../shared/motion') return { motionReduced: () => reduced, observeMotion(fn) { motionChange = fn; return () => {}; } };
-      throw new Error(`Unexpected hook dependency: ${name}`);
-    },
-  }, { filename });
+  });
+  const { useProjectReorder } = rendererLoader({
+    react, 'react-dom': { flushSync(fn) { fn(); render(); } },
+    './motion': { motionReduced: () => reduced, observeMotion(fn) { motionChange = fn; return () => {}; } },
+  })('src/features/workspace/useProjectReorder.ts');
   function commit(next) {
     commits.push(Array.from(next));
     const broadcast = () => { workspace = Array.from(next); render(); };
@@ -89,7 +79,7 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
   }
   function render() {
     cursor = 0; effects = [];
-    hook = exports.useProjectReorder(true, '', workspace, commit);
+    hook = useProjectReorder(true, '', workspace, commit);
     const pending = effects; effects = [];
     for (const fn of pending) fn();
   }
@@ -132,8 +122,8 @@ function fixture(initial = reordered, { deferCommit = false } = {}) {
   };
 }
 
-test('an active release inserts at its final cell without a delivered final pointermove', async () => {
-  const f = fixture(); f.down(); f.activate();
+test('an active release inserts at its final cell without a delivered final pointermove', async t => {
+  const f = fixture(t); f.down(); f.activate();
   assert.equal(f.drag.id, 'a');
   f.release(0); f.frame();
   assert.deepEqual(f.commits, [original]);
@@ -142,25 +132,25 @@ test('an active release inserts at its final cell without a delivered final poin
   assert.deepEqual(f.workspace, original); assert.equal(f.drag, null);
 });
 
-test('release reconciles an intermediate preview with the final cell', async () => {
-  const f = fixture(); f.down(); f.activate(); f.move(1);
+test('release reconciles an intermediate preview with the final cell', async t => {
+  const f = fixture(t); f.down(); f.activate(); f.move(1);
   assert.deepEqual(f.order, ['b', 'a', 'c', 'd', 'e', 'f']);
   f.release(0); f.frame(); await f.finishLanding();
   assert.deepEqual(f.commits, [original]); assert.deepEqual(f.order, original);
 });
 
-test('coalesced release coordinates include the final row as well as the column', async () => {
-  const f = fixture(); f.down(); f.activate(); f.release(3); f.frame(); await f.finishLanding();
+test('coalesced release coordinates include the final row as well as the column', async t => {
+  const f = fixture(t); f.down(); f.activate(); f.release(3); f.frame(); await f.finishLanding();
   assert.deepEqual(f.commits, [['b', 'c', 'd', 'a', 'e', 'f']]);
 });
 
-test('an active release in the source cell remains a no-op', async () => {
-  const f = fixture(); f.down(); f.activate(); f.release(2); f.frame(); await f.finishLanding();
+test('an active release in the source cell remains a no-op', async t => {
+  const f = fixture(t); f.down(); f.activate(); f.release(2); f.frame(); await f.finishLanding();
   assert.deepEqual(f.order, reordered); assert.equal(f.commits.length, 0); assert.equal(f.drag, null);
 });
 
-test('normal delivered movement keeps the preview and commits once', async () => {
-  const f = fixture(); f.down(); f.activate(); f.move(1); f.move(0);
+test('normal delivered movement keeps the preview and commits once', async t => {
+  const f = fixture(t); f.down(); f.activate(); f.move(1); f.move(0);
   assert.deepEqual(f.order, original);
   f.release(0); f.frame(); await f.finishLanding();
   assert.deepEqual(f.commits, [original]);
@@ -168,8 +158,8 @@ test('normal delivered movement keeps the preview and commits once', async () =>
   assert.equal(f.click().prevented, false, 'ordinary later clicks are not suppressed');
 });
 
-test('forward insertion, Escape and reverse release preserve the original three-gesture sequence', async () => {
-  const f = fixture(original); f.down(); f.activate(); f.move(1); f.move(2);
+test('forward insertion, Escape and reverse release preserve the original three-gesture sequence', async t => {
+  const f = fixture(t, original); f.down(); f.activate(); f.move(1); f.move(2);
   f.release(2); f.frame(); await f.finishLanding();
   assert.deepEqual(f.workspace, reordered);
   f.down(); f.activate(); f.move(1); f.cancel('Escape'); f.release(1); f.frame(); await f.finishLanding();
@@ -178,8 +168,8 @@ test('forward insertion, Escape and reverse release preserve the original three-
   assert.deepEqual(f.workspace, original); assert.deepEqual(f.commits, [reordered, original]);
 });
 
-test('a wrong pointer cannot reconcile, end, or commit the active gesture', async () => {
-  const f = fixture(); f.down(); f.activate(); f.move(1);
+test('a wrong pointer cannot reconcile, end, or commit the active gesture', async t => {
+  const f = fixture(t); f.down(); f.activate(); f.move(1);
   f.release(0, { pointerId: 2 });
   assert.deepEqual(f.order, ['b', 'a', 'c', 'd', 'e', 'f']);
   assert.equal(f.captured, 1); assert.equal(f.commits.length, 0);
@@ -187,8 +177,8 @@ test('a wrong pointer cannot reconcile, end, or commit the active gesture', asyn
   assert.deepEqual(f.commits, [original]);
 });
 
-test('duplicate releases cannot change a settling draft, and stale handlers cannot change a later gesture', async () => {
-  const f = fixture(); f.down(); f.activate();
+test('duplicate releases cannot change a settling draft, and stale handlers cannot change a later gesture', async t => {
+  const f = fixture(t); f.down(); f.activate();
   const stale = f.releaseHandler();
   f.release(0);
   f.callRelease(stale, 2);
@@ -201,46 +191,46 @@ test('duplicate releases cannot change a settling draft, and stale handlers cann
   f.cancel('Escape'); f.frame(); await f.finishLanding();
 });
 
-test('an inactive click released elsewhere does not activate, reorder or suppress the click', () => {
-  const f = fixture(); f.down(); f.release(0); f.activate(); f.frame();
+test('an inactive click released elsewhere does not activate, reorder or suppress the click', t => {
+  const f = fixture(t); f.down(); f.release(0); f.activate(); f.frame();
   assert.equal(f.drag, null); assert.equal(f.captured, 0);
   assert.deepEqual(f.order, reordered); assert.equal(f.commits.length, 0);
   assert.equal(f.click().prevented, false);
 });
 
-test('release outside the grid cancels an intermediate insertion', async () => {
-  const f = fixture(); f.down(); f.activate(); f.move(1);
+test('release outside the grid cancels an intermediate insertion', async t => {
+  const f = fixture(t); f.down(); f.activate(); f.move(1);
   f.release(0, { clientX: -100 }); f.frame(); await f.finishLanding();
   assert.deepEqual(f.order, reordered); assert.equal(f.commits.length, 0); assert.equal(f.drag, null);
 });
 
 for (const reason of ['Escape', 'blur', 'pointercancel', 'lostpointercapture']) {
-  test(`${reason} cancels without a commit and a stale release cannot revive it`, async () => {
-    const f = fixture(); f.down(); f.activate(); f.move(1);
+  test(`${reason} cancels without a commit and a stale release cannot revive it`, async t => {
+    const f = fixture(t); f.down(); f.activate(); f.move(1);
     const stale = f.releaseHandler();
     f.cancel(reason); f.callRelease(stale, 0); f.frame(); await f.finishLanding();
     assert.deepEqual(f.order, reordered); assert.equal(f.commits.length, 0); assert.equal(f.drag, null);
   });
 }
 
-test('clear waits for persistence as well as landing', async () => {
-  const f = fixture(reordered, { deferCommit: true }); f.down(); f.activate(); f.release(0); f.frame();
+test('clear waits for persistence as well as landing', async t => {
+  const f = fixture(t, reordered, { deferCommit: true }); f.down(); f.activate(); f.release(0); f.frame();
   await f.finishLanding();
   assert.ok(f.drag); assert.deepEqual(f.workspace, reordered); assert.deepEqual(f.order, original);
   f.resolveCommit(); await f.finishLanding();
   assert.equal(f.drag, null); assert.deepEqual(f.workspace, original);
 });
 
-test('terminal and toolbar pointer interactions do not pick up project cards or suppress clicks', () => {
+test('terminal and toolbar pointer interactions do not pick up project cards or suppress clicks', t => {
   for (const kind of ['terminal', 'toolbar']) {
-    const f = fixture(); f.down('a', kind); f.activate(); f.release(0);
+    const f = fixture(t); f.down('a', kind); f.activate(); f.release(0);
     assert.equal(f.drag, null); assert.equal(f.captured, 0); assert.equal(f.commits.length, 0);
     assert.equal(f.click().prevented, false);
   }
 });
 
-test('pointer motion is coalesced into one transform update per display frame', () => {
-  const f = fixture(); f.down(); f.activate();
+test('pointer motion is coalesced into one transform update per display frame', t => {
+  const f = fixture(t); f.down(); f.activate();
   const before = f.styleWrites;
   f.queueMove(1); f.queueMove(0); f.queueMove(1);
   assert.equal(f.styleWrites, before); assert.deepEqual(f.order, reordered);
@@ -250,8 +240,8 @@ test('pointer motion is coalesced into one transform update per display frame', 
   f.cancel('blur');
 });
 
-test('switching motion off settles an in-flight reorder and its landing without bypassing persistence', async () => {
-  const f = fixture(reordered, { deferCommit: true }); f.down(); f.activate(); f.move(1);
+test('switching motion off settles an in-flight reorder and its landing without bypassing persistence', async t => {
+  const f = fixture(t, reordered, { deferCommit: true }); f.down(); f.activate(); f.move(1);
   assert.ok(f.animations.some(animation => animation.playState === 'running'));
   f.release(0); f.frame(); f.motionOff();
   assert.ok(f.animations.every(animation => animation.playState !== 'running'));
@@ -261,9 +251,9 @@ test('switching motion off settles an in-flight reorder and its landing without 
   f.motionOff(); assert.ok(f.animations.every(animation => animation.playState !== 'running'), 'cancelled landings never restart');
 });
 
-test('edge auto-scroll has the same speed on remote and high-refresh displays', () => {
+test('edge auto-scroll has the same speed on remote and high-refresh displays', t => {
   for (const hz of [32, 60, 144]) {
-    const f = fixture(); f.down(); f.activate(); f.queueMove(2, { clientY: 630 }); f.frame();
+    const f = fixture(t); f.down(); f.activate(); f.queueMove(2, { clientY: 630 }); f.frame();
     const before = f.scrollTop;
     for (let i = 0; i < hz; i++) f.frame(1000 / hz);
     assert.ok(Math.abs(f.scrollTop - before - 720) < 1e-8, `${hz} Hz`);

@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
+const { selectRows } = require('./helpers/select-view.cjs');
+const { elements } = require('./helpers/renderer-fixtures.cjs');
 
 const filename = path.join(__dirname, '../src/shared/Select.tsx'), mod = new Module(filename, module);
 mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
@@ -54,9 +56,14 @@ test('the window bounds override a trigger wider than the available menu space',
   assert.equal(selectMenuLeft(8, 304, 320), 8);
 });
 
-test('the selected option carries a check in a fixed column, and the trigger pads on the spacing scale', () => {
-  const source = fs.readFileSync(filename, 'utf8'), css = readCss('src/shared/Select.css');
-  assert.match(source, /className="select-option-mark" aria-hidden="true">\{index === selected && <Check size/, 'only the selected row draws the check, and it is hidden from the reader (aria-selected says it)');
+test('the selected option carries a check in a fixed column, and the trigger pads on the spacing scale', t => {
+  const css = readCss('src/shared/Select.css');
+  const { rows, Check } = selectRows(t, [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }], 'b');
+  assert.deepEqual(rows.map(row => row.props['aria-selected']), [false, true]);
+  const marks = rows.map(row => elements(row.props.children).find(node => node.props.className === 'select-option-mark'));
+  assert.deepEqual(marks.map(mark => mark.props['aria-hidden']), ['true', 'true']);
+  assert.equal(marks[0].props.children, false);
+  assert.equal(marks[1].props.children.type, Check);
   assertRule(css, '.select-option-mark', { flex: 'none', width: '16px' }, 'the slot is 16px on every row, so labels stay aligned');
   assertRule(css, '.select-trigger', { padding: '0 12px' });
 });

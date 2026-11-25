@@ -1,6 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
+const { identifiers, sourceNodes } = require('./helpers/source-structure.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -1598,19 +1599,21 @@ test('a native session takes the card’s cell where a terminal would, with no l
 
 // ---- guards -------------------------------------------------------------------------------------------------------------------------
 test('the native view writes to no terminal, never expands a project, and reaches the main process only through the bridge file', () => {
-  const dir = path.join(src, 'features/native-session'), files = fs.readdirSync(dir).filter(file => /\.tsx?$/.test(file));
-  const code = file => fs.readFileSync(path.join(dir, file), 'utf8').replace(/\/\/.*$/gm, '');
-  const all = files.map(code).join('\n');
-  assert.doesNotMatch(all, /writeTerminal|writeApproval|answerTerminal|startTerminal|closeTerminal|sendToAgent|readClipboard|onExpand|expandProject/, 'typing in a small card cannot expand it, and nothing types into a pty');
-  assert.deepEqual(files.filter(file => /window\.agentrix/.test(code(file))), ['native-bridge.ts'], 'one file reads the bridge off window');
-  assert.doesNotMatch(all, /console\.|localStorage|sessionStorage/, 'a secret answer is kept nowhere');
+  const folder = 'src/features/native-session';
+  const files = fs.readdirSync(path.join(src, 'features/native-session')).filter(file => /\.tsx?$/.test(file));
+  const forbidden = ['writeTerminal', 'writeApproval', 'answerTerminal', 'startTerminal', 'closeTerminal',
+    'sendToAgent', 'readClipboard', 'onExpand', 'expandProject', 'console', 'localStorage', 'sessionStorage'];
+  for (const file of files) assert.deepEqual(identifiers(folder + '/' + file, forbidden), [], file);
+  const windowBridge = node => ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+    && node.expression.text === 'window' && node.name.text === 'agentrix';
+  assert.deepEqual(files.filter(file => sourceNodes(folder + '/' + file, windowBridge).length), ['native-bridge.ts']);
 });
 
 test('interventions have no planner relay sender or mounted renderer listener', () => {
   assert.equal(fs.existsSync(path.join(src, 'features/agents/parent-relay.ts')), false);
   const main = fs.readFileSync(path.join(src, '../electron/main.cjs'), 'utf8');
   assert.doesNotMatch(main, /sendParentPrompt|webContents\.send\('agents:relay'/);
-  assert.doesNotMatch(fs.readFileSync(path.join(src, 'App.tsx'), 'utf8'), /startParentRelay/);
+  assert.deepEqual(identifiers('src/App.tsx', ['startParentRelay']), []);
 });
 
 test('terminal fallback exposes unsent text for copying without submitting it or claiming delivery', async () => {
@@ -2381,9 +2384,9 @@ test('every card holds its draft handoff, whatever it shows: the raw terminal, t
   const handoffs = [], state = switchState({ phase: 'preparing' });
   gridMarkup([terminal('t1', { sessionId: 's1', cliActive: true, switchState: state, nativeRuntimeSessionId: 'rs1' }), terminal('t2'), terminal('t3', { switchState: state })], { focused: true, native: ['t3'], handoffs });
   assert.deepEqual(handoffs.sort(), [['t1', 'rs1', 'preparing'], ['t2', null, null], ['t3', null, 'preparing']], 'one per card, with its own switch state');
-  const grid = fs.readFileSync(path.join(src, 'features/terminal/ProjectTerminals.tsx'), 'utf8');
-  assert.equal((grid.match(/useHandoff\(/g) ?? []).length, 1, 'one place holds it');
-  assert.doesNotMatch(fs.readFileSync(path.join(src, 'features/native-session/NativeSessionView.tsx'), 'utf8'), /useHandoff\(/, 'and the native view takes it from the card like the reading view');
+  const calls = file => sourceNodes(file, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'useHandoff');
+  assert.equal(calls('src/features/terminal/ProjectTerminals.tsx').length, 1);
+  assert.equal(calls('src/features/native-session/NativeSessionView.tsx').length, 0);
 });
 
 test('the grid hands each card’s switch state to the note over it and to the native view, on both transports', () => {
@@ -2418,12 +2421,14 @@ test('over a terminal card the path note carries the switch line and the questio
 });
 
 test('the switch parts write to no terminal, never expand a project and keep no secret: the guard covers the new files', () => {
-  const dir = path.join(src, 'features/native-session'), code = file => fs.readFileSync(path.join(dir, file), 'utf8').replace(/\/\/.*$/gm, '');
+  const dir = 'src/features/native-session/';
   for (const file of ['SwitchNotice.tsx', 'draft-handoff.ts']) {
-    assert.ok(fs.existsSync(path.join(dir, file)), file);
-    assert.doesNotMatch(code(file), /writeTerminal|pasteTerminal|onExpand|expandProject|window\.agentrix|console\.|localStorage|sessionStorage/, file);
+    const forbidden = ['writeTerminal', 'pasteTerminal', 'onExpand', 'expandProject', 'agentrix', 'console', 'localStorage', 'sessionStorage'];
+    assert.deepEqual(identifiers(dir + file, forbidden), [], file);
   }
-  assert.doesNotMatch(code('draft-handoff.ts'), /\.send\(/, 'a draft is handed to main and never sent by the handoff');
+  const sends = sourceNodes(dir + 'draft-handoff.ts', node => ts.isCallExpression(node)
+    && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'send');
+  assert.equal(sends.length, 0, 'a draft is handed to main and never sent by the handoff');
 });
 
 // ---- the reading view's side of the draft handoff -------------------------------------------------------------------------------------

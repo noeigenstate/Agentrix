@@ -2,9 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
-const path = require('node:path');
 const vm = require('node:vm');
-const { createRequire } = require('node:module');
+const path = require('node:path');
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
+const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
 const ts = require('typescript');
 const { WorkspaceStore, cleanSettings } = require('../electron/state.cjs');
 const { translate } = require('../electron/i18n.cjs');
@@ -17,18 +18,6 @@ function workspaceFile(t) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return path.join(directory, 'workspace.json');
 }
-function renderer() {
-  const filename = path.join(root, 'src/shared/i18n.ts');
-  const document = { documentElement: { lang: 'en' } }, exports = {};
-  const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
-  }).outputText;
-  vm.runInNewContext(code, { require: createRequire(filename), exports, document,
-    // A Chinese OS/browser locale must never choose the product's default.
-    navigator: { language: 'zh-CN', languages: ['zh-CN'] } }, { filename });
-  return { ...exports, document };
-}
-
 test('a fresh workspace defaults to English without creating or rewriting a workspace file', t => {
   const file = workspaceFile(t);
   assert.equal(new WorkspaceStore(file).settings.language, 'en');
@@ -66,24 +55,26 @@ test('explicit Chinese and English preferences survive unrelated settings update
   assert.equal(new WorkspaceStore(file).settings.language, 'en');
 });
 
-test('renderer first paint is English before settings arrive, including on a Chinese browser locale', () => {
-  const ui = renderer();
+test('renderer first paint is English before settings arrive, including on a Chinese browser locale', t => {
+  const document = { documentElement: { lang: 'en' } };
+  stubGlobals(t, { document, navigator: { language: 'zh-CN', languages: ['zh-CN'] } });
+  const ui = rendererLoader()('src/shared/i18n.ts');
   assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), /<html lang="en">/);
   assert.equal(ui.currentLanguage(), 'en');
-  assert.equal(ui.document.documentElement.lang, 'en');
+  assert.equal(document.documentElement.lang, 'en');
   assert.equal(ui.t('正在打开工作区…'), 'Opening workspace…');
   assert.equal(ui.t('Agentrix 是桌面应用'), 'Agentrix is a desktop app');
   assert.equal(ui.t('请在项目目录运行 npm start，或双击打包后的应用。'), 'Run npm start in the project directory, or open the packaged app.');
   assert.equal(ui.t('工作台设置'), 'Workspace settings');
   ui.applyLanguage('zh');
   assert.equal(ui.currentLanguage(), 'zh');
-  assert.equal(ui.document.documentElement.lang, 'zh-CN');
+  assert.equal(document.documentElement.lang, 'zh-CN');
   assert.equal(ui.t('工作台设置'), '工作台设置');
   for (const language of ['en', ...invalid]) {
     ui.applyLanguage('zh');
     ui.applyLanguage(language);
     assert.equal(ui.currentLanguage(), 'en');
-    assert.equal(ui.document.documentElement.lang, 'en');
+    assert.equal(document.documentElement.lang, 'en');
     assert.equal(ui.t('添加项目'), 'Add project');
     assert.equal(ui.t('终端 {n}', { n: 2 }), 'Terminal 2');
     assert.equal(ui.t('正在删除：报告.txt'), 'Deleting: 报告.txt');

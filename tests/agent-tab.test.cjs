@@ -1,7 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const path = require('node:path');
+const { elements } = require('./helpers/renderer-fixtures.cjs');
+const { explorerView } = require('./helpers/explorer-view.cjs');
+const { identifiers } = require('./helpers/source-structure.cjs');
 const fixture = require('./fixtures/team-seats.json');
 const { callSeatRole, roleGroups, routeVerdict } = require('../src/features/agents/skill-seats.ts');
 
@@ -48,11 +49,11 @@ test('inferred seats only check dispatch declarations against recorded model fac
   assert.equal(routeVerdict(row('lookup', 'researcher', 'haiku', { ...lookup, declared: { model: 'sonnet' } }), info), 'mismatch');
 });
 
-test('the collapsed rail keeps its original tab buttons and the narrow popover owns its split toggle', () => {
-  const source = relative => readFileSync(path.join(__dirname, '..', relative), 'utf8');
-  const explorer = source('src/features/files/ProjectExplorer.tsx');
-  const popover = source('src/features/agents/SubagentChip.tsx');
-  assert.doesNotMatch(explorer, /AgentTabScope|team-seats|data-seat/);
-  assert.match(popover, /closest\('\.activity-call-open'\)/);
-  assert.doesNotMatch(popover, /callFile|agent-team-details/);
+test('the collapsed rail keeps its original tab buttons and the narrow popover owns its split toggle', t => {
+  const { render } = explorerView(t);
+  const rail = render({ collapsed: true }).find(node => node.props.className === 'explorer-rail');
+  assert.deepEqual(elements(rail.props.children).filter(node => node.type === 'button').map(node => node.props['aria-label']),
+    ['Agent', '资源管理器', 'Git 历史']);
+  assert.deepEqual(identifiers('src/features/agents/SubagentChip.tsx', ['callFile', 'AgentTabScope']), []);
+  // The row click and popover closure are exercised in subagent-pane.test.cjs.
 });

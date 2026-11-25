@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
+const { conversationView } = require('./helpers/conversation-view.cjs');
+const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
+const { sourceNodes } = require('./helpers/source-structure.cjs');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
@@ -58,6 +61,7 @@ function loadUI(name, overrides = {}) {
     if (key === './ReadingSignIn') return { ReadingSignIn: () => null };
     if (key === './AgentCommandRun') return { AgentCommandRun: () => null };
     if (key === './Markdown') return loadUI('features/reading/Markdown.tsx', overrides);
+    if (key === './composer-hints') return loadUI('features/reading/composer-hints.ts', overrides);
     if (key === './ConversationFeed') return loadUI('features/reading/ConversationFeed.tsx', overrides);
     if (key === './useLongMarkdown') return loadUI('features/reading/useLongMarkdown.ts', overrides);
     if (key === './useVisibleTail') return loadUI('features/reading/useVisibleTail.ts', overrides);
@@ -3013,15 +3017,36 @@ test('switching to a terminal in another small card leaves this popup and focus 
   cleanups.shift()(); assert.equal(restored, 1);
 });
 
-test('a generated picture shows its prompt as a two-line summary and a toggle appears only when the summary is cut off', () => {
-  const view = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
+test('a generated picture shows its prompt as a two-line summary and a toggle appears only when the summary is cut off', t => {
   const css = readCss('src/features/reading/reading.css');
-  const figure = view.slice(view.indexOf('function GeneratedImage'), view.indexOf('// A reply card inside'));
-  assert.ok(figure.includes('element.scrollHeight > element.clientHeight'), 'the clamp is measured');
-  assert.ok(figure.includes('new ResizeObserver(measure)'), 'and measured again when the card changes width');
-  assert.ok(figure.includes('(clipped || expanded)'), 'the toggle shows only for a cut-off or an expanded prompt');
-  assert.ok(figure.includes('aria-expanded={expanded} aria-controls={captionId}'));
-  assert.doesNotMatch(figure, /figcaption[^>]*title=/, 'no tooltip: the expansion replaces it');
+  const measured = { scrollHeight: 20, clientHeight: 20 };
+  const view = conversationView({}, { useRef: initial => ({ current: initial ?? measured }) });
+  t.after(() => view.dispose());
+  let measure, observed;
+  stubGlobals(t, { ResizeObserver: class {
+    constructor(callback) { measure = callback; }
+    observe(element) { observed = element; }
+    disconnect() {}
+  } });
+  const props = { src: 'fixture.png', picture: { path: 'fixture.png', prompt: 'prompt' }, projectId: 'p', onError: assert.fail };
+  const render = () => elements(view.render('GeneratedImage', props).result);
+  const fig = render().find(node => node.type === 'figcaption');
+  const toggle = () => render().find(node => node.props.className === 'reading-generated-toggle');
+  assert.equal(toggle(), undefined);
+  assert.equal(fig.props.title, undefined);
+  assert.equal(observed, measured);
+  measured.scrollHeight = 40;
+  measure();
+  assert.equal(toggle().props['aria-expanded'], false);
+  assert.equal(toggle().props['aria-controls'], fig.props.id);
+  toggle().props.onClick();
+  assert.equal(toggle().props['aria-expanded'], true);
+  assert.equal(render().find(node => node.type === 'figcaption').props.className, 'is-expanded');
+  measured.scrollHeight = measured.clientHeight;
+  measure();
+  assert.equal(toggle().props['aria-expanded'], true);
+  toggle().props.onClick();
+  assert.equal(toggle(), undefined);
   assertRule(css, '.reading-generated figcaption', { '-webkit-line-clamp': '2', 'font-size': 'calc(12px * var(--reading-text))', 'line-height': '1.5', color: 'var(--text-3)' });
   assertRule(css, '.reading-generated figcaption.is-expanded', { display: 'block', overflow: 'visible', 'white-space': 'pre-wrap' });
   assert.equal(en['展开提示词'], 'Show prompt'); assert.equal(en['收起'], 'Collapse');
@@ -3244,7 +3269,13 @@ test('the save-as channel is registered in the main process, the preload and the
   const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
   assert.match(read('electron/main.cjs'), /handle\('agent:saveImageAs'[\s\S]*isGeneratedImage\(file\)[\s\S]*remoteProjectImage\(projectId, file\)[\s\S]*showSaveDialog[\s\S]*writeFile\(target, bytes\) : fs\.promises\.copyFile/);
   assert.match(read('electron/preload.cjs'), /saveImageAs: \(file, projectId\) => ipcRenderer\.invoke\('agent:saveImageAs', file, projectId\)/);
-  assert.match(read('src/shared/types.ts'), /saveImageAs\(file: string, projectId\?: string\): Promise<Result<string \| null>>/);
+  const [method] = sourceNodes('src/shared/types.ts', node => ts.isMethodSignature(node) && node.name.text === 'saveImageAs');
+  assert.deepEqual(method.parameters.map(parameter => [parameter.name.text, !!parameter.questionToken, parameter.type.kind]),
+    [['file', false, ts.SyntaxKind.StringKeyword], ['projectId', true, ts.SyntaxKind.StringKeyword]]);
+  assert.equal(method.type.typeName.text, 'Promise');
+  const [result] = method.type.typeArguments;
+  assert.equal(result.typeName.text, 'Result');
+  assert.deepEqual(result.typeArguments[0].types.map(type => type.literal?.kind ?? type.kind), [ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NullKeyword]);
   for (const text of ['保存图片', '继续修改', '继续追问', '重试', '查看大图', '{time} 完成', '继续修改，或描述下一步…']) assert.ok(text in en, `${text} has an English translation`);
 });
 

@@ -1,27 +1,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const ts = require('typescript');
-
-// App.tsx is too large to render in a test, so the menu-command handler and the guard it shares with the key handler are cut out of its source (as approval-aba.test.cjs does for openDecision) and run against stubs.
-const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8').replace(/\r\n/g, '\n');
-const guard = source.slice(source.indexOf('const dialogOpen ='), source.indexOf('\n', source.indexOf('const dialogOpen =')));
-const handlerStart = source.indexOf('api.onMenuCommand(') + 'api.onMenuCommand('.length;
-const handler = source.slice(handlerStart, source.indexOf('\n    });', handlerStart) + '\n    }'.length);
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
+const { handleMenuCommand } = rendererLoader({}, /\/shortcuts$/)('src/app-commands.ts');
 
 function menu(open = '', inPopup = false) {
   const calls = [];
-  const context = vm.createContext({
-    document: {
-      activeElement: { closest: selector => inPopup && selector === '.reading-terminal-popup' ? {} : null },
-      querySelector: selector => selector.split(', ').includes(open) ? {} : null,
-    },
-    installUpdate: () => calls.push(['installUpdate']), runAction: action => calls.push(['action', action]),
-  });
-  vm.runInContext(ts.transpileModule(`${guard}\nglobalThis.onCommand = ${handler};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
-  return { send: command => context.onCommand(command), calls };
+  const document = {
+    activeElement: { closest: selector => inPopup && selector === '.reading-terminal-popup' ? {} : null },
+    querySelector: selector => selector.split(', ').includes(open) ? {} : null,
+  };
+  return { send: command => handleMenuCommand(document, command, action => calls.push(['action', action]), () => calls.push(['installUpdate'])), calls };
 }
 
 test('menu commands run what the shortcuts run, and installUpdate installs', () => {

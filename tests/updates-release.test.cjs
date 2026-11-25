@@ -3,15 +3,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { BETA_AGREEMENT_VERSION } = require('../electron/updates.cjs');
 
 test('main and renderer require the same beta agreement version', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/features/settings/beta-agreement.ts'), 'utf8');
-  const match = source.match(/^export const BETA_AGREEMENT_VERSION = '([^']+)';?\s*$/m);
-  assert(match, 'the renderer exports the required agreement version');
-  assert.equal(match[1], BETA_AGREEMENT_VERSION);
+  const renderer = rendererLoader({ './i18n': { t: text => text } })('src/features/settings/beta-agreement.ts');
+  assert.equal(renderer.BETA_AGREEMENT_VERSION, BETA_AGREEMENT_VERSION);
 });
 
 test('beta release versions are accepted by release notes and the workflow version guards', async () => {

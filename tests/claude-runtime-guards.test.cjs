@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { rendererLoader } = require('./helpers/hook-harness.cjs');
+const { stringUnion } = require('./helpers/source-structure.cjs');
 const { VIAS } = require('../electron/features/claude-runtime/locator.cjs');
 
 // Two guards on the Claude Code locator that no behaviour test would notice breaking: the list of ways it was found must
@@ -11,12 +13,9 @@ const { VIAS } = require('../electron/features/claude-runtime/locator.cjs');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
 test('every way Claude Code can be found is in the locator, the shared type and the words, and nowhere else', () => {
-  const type = /export type ClaudeVia = ([^;]+);/.exec(read('src/shared/types.ts'));
-  assert.ok(type, 'ClaudeVia is a union of string literals');
-  const typed = [...type[1].matchAll(/'([a-z-]+)'/g)].map(match => match[1]);
-  const block = /const VIA_WORDS: Record<string, string> = \{([\s\S]*?)\n\};/.exec(read('src/features/native-session/native-words.ts'));
-  assert.ok(block, 'VIA_WORDS is an object literal');
-  const worded = [...block[1].matchAll(/(?:^|[\s,{])(?:'([a-z-]+)'|([a-z]+)):\s*'/g)].map(match => match[1] ?? match[2]);
+  const typed = stringUnion('src/shared/types.ts', 'ClaudeVia');
+  const { VIA_WORDS } = rendererLoader({ './i18n': { t: text => text } })('src/features/native-session/native-words.ts');
+  const worded = Object.keys(VIA_WORDS);
   const sorted = list => [...list].sort();
   assert.deepEqual(sorted(typed), sorted(VIAS), 'types.ts ClaudeVia and the locator VIAS');
   assert.deepEqual(sorted(worded), sorted(VIAS), 'native-words VIA_WORDS and the locator VIAS');

@@ -1,4 +1,0 @@
-{
-  "src/features/terminal/ProjectTerminals.tsx :: tests/boundary-activity-pane.test.cjs :: source-regex": 1,
-  "src/features/terminal/TerminalPane.tsx :: tests/boundary-terminal.test.cjs :: source-regex": 1
-}

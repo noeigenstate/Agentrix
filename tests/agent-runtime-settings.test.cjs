@@ -5,6 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
+const typescript = require('typescript');
+const { appView } = require('./helpers/app-view.cjs');
+const { settingsView } = require('./helpers/settings-view.cjs');
+const { identifiers, sourceNodes } = require('./helpers/source-structure.cjs');
+const { CODEX_VIA_WORDS } = require('../src/features/agents/codex-via-words.ts');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
 
 // The 运行方式 settings page: the API key (write-only), Claude's path, Codex's view, against a fake main process.
@@ -18,12 +23,14 @@ const defaults = { claudePath: 'api-then-terminal' };
 const wordsStub = { clockWords: () => '09:00', connectionLines: test => test.lines };
 
 // The page with real hooks. The select is stood in by a component that keeps its props, so a test can read its value and choose an option.
-function page(bridge, words = wordsStub, props = {}) {
+function page(bridge, words = wordsStub, props = {}, translate = fill) {
   const usage = [];
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
   const harness = hookHarness('src/features/settings/AgentRuntimeSettings.tsx', {
-    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './agent-runtime-settings.css': {}, './native-words': words, './native-store.ts': { usageChanged: () => usage.push('changed'), useUsageRevision: () => 0 },
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }),
+    './i18n': { t: translate }, './agent-runtime-settings.css': {}, './native-words': words,
+    './native-store.ts': { usageChanged: () => usage.push('changed'), useUsageRevision: () => 0 },
     './Select': { Select: props => React.createElement('select', { 'aria-label': props.label, value: props.value, disabled: props.disabled }) },
   });
   const render = () => harness.render('AgentRuntimeSettings', props).result, tree = () => elements(render());
@@ -224,16 +231,38 @@ test('a window without the bridge says so and offers nothing to change', () => {
   } finally { view.done(); }
 });
 
-test('the key goes only to keySave and is never read back, logged or stored; the page is a section of the settings dialog', () => {
-  const code = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\/\/.*$/gm, '');
-  const settings = code('src/features/settings/AgentRuntimeSettings.tsx');
-  assert.deepEqual([...new Set([...settings.matchAll(/\bbridge\.(\w+)\(/g)].map(match => match[1]))].sort(), ['getSettings', 'keyClear', 'keySave', 'keyStatus', 'setSettings', 'testConnection', 'usage']);
-  assert.doesNotMatch(settings, /console\.|localStorage|sessionStorage|keyGet|readKey/, 'no way to read the key back, no log, no storage');
-  assert.match(settings, /type="password"/);
-  const dialog = code('src/features/settings/SettingsDialog.tsx');
-  assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings[ >]/);
-  // The project in view reaches the page, so the connection test and the usage numbers are read for its scope.
-  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} focusOnOpen=\{focusOnOpen\} codexPermissions=\{settings\.codexPermissions\} onCodexPermissions=\{codexPermissions => update\(\{ codexPermissions \}\)\} claudeBackgroundTasks=\{settings\.claudeBackgroundTasks\} onClaudeBackgroundTasks=\{claudeBackgroundTasks => update\(\{ claudeBackgroundTasks \}\)\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
+test('the key goes only to keySave and is never read back, logged or stored; the page is a section of the settings dialog', async t => {
+  const file = 'src/features/settings/AgentRuntimeSettings.tsx';
+  const bridgeCalls = sourceNodes(file, node => typescript.isCallExpression(node)
+    && typescript.isPropertyAccessExpression(node.expression)
+    && typescript.isIdentifier(node.expression.expression) && node.expression.expression.text === 'bridge');
+  assert.deepEqual([...new Set(bridgeCalls.map(node => node.expression.name.text))].sort(),
+    ['getSettings', 'keyClear', 'keySave', 'keyStatus', 'setSettings', 'testConnection', 'usage']);
+  assert.deepEqual(identifiers(file, ['console', 'localStorage', 'sessionStorage', 'keyGet', 'readKey']), []);
+  const runtime = page(fake());
+  try {
+    runtime.render();
+    await settle();
+    assert.equal(runtime.secret().props.type, 'password');
+  } finally { runtime.done(); }
+
+  const app = appView(t);
+  app.listeners.get('agentrix:open-settings')({ detail: { section: 'runtime', focus: true } });
+  const opened = app.render().find(node => node.type === app.SettingsDialog);
+  assert.deepEqual([opened.props.projectId, opened.props.initialSection, opened.props.focusOnOpen], [app.project.id, 'runtime', true]);
+
+  const updates = [], dialog = settingsView(t);
+  const props = { ...opened.props, settings: { codexPermissions: 'ask', claudeBackgroundTasks: true }, update: patch => updates.push(patch) };
+  const tree = dialog.render(props);
+  const nav = tree.find(node => node.props['data-settings-tab'] === 'runtime');
+  assert.equal(nav.props['aria-current'], 'page');
+  assert.equal(elementsText(nav), '运行方式');
+  const { props: runtimeProps } = tree.find(node => node.type === dialog.AgentRuntimeSettings);
+  assert.deepEqual([runtimeProps.projectId, runtimeProps.focusOnOpen, runtimeProps.codexPermissions, runtimeProps.claudeBackgroundTasks],
+    [app.project.id, true, 'ask', true]);
+  runtimeProps.onCodexPermissions('config');
+  runtimeProps.onClaudeBackgroundTasks(false);
+  assert.deepEqual(updates, [{ codexPermissions: 'config' }, { claudeBackgroundTasks: false }]);
 });
 
 test('Codex’s automatic reset is a switch that is off by default, saves alone without a path change or a stale test, and a refusal leaves it as it was', async () => {
@@ -317,7 +346,9 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {} } });
   const bridge = { keyStatus: async () => { reads.push(1); return saved === null ? { ok: false, error: 'x' } : { ok: true, value: { saved } }; } };
   const harness = hookHarness('src/features/agents/AgentsSettings.tsx', { './i18n': { t: fill }, './platform': { isWindows: windows },
-    './native-words': { viaWords: via => via, installerCommand: win => (win ? 'irm-installer' : 'curl-installer') }, './native-bridge.ts': { nativeBridge: () => bridge } });
+    './native-words': { viaWords: via => via, installerCommand: win => (win ? 'irm-installer' : 'curl-installer') },
+    './native-bridge.ts': { nativeBridge: () => bridge },
+  });
   // The first render starts the key read, the second shows its answer. `index` 0 reads the Codex row.
   const render = async (claude, { codex = { installed: true }, index = 1, detail = false } = {}) => {
     const props = { agents: { codex, claude, npm: true, installing: null, message: '', error: '' }, onChange() {}, visible };
@@ -330,7 +361,9 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
     const base = { status: elementsText(statusNode.props.children), title: statusNode.props.title, hint: hints[0] ?? null,
       command: elementsText(inside.find(node => node.type === 'code')?.props.children), install: inside.some(node => node.type === 'button') };
     // `detail` adds what the Codex row shows around the status: every hint line, the paths and their rendered blocks.
-    return detail ? { ...base, statusClass: statusNode.props.className, hints, paths: pathBlocks.map(node => node.props.children.props.text), markup: pathBlocks.map(node => renderToStaticMarkup(node)) } : base;
+    return detail ? { ...base, infoClass: inside.find(node => node.props.className === 'agent-info')?.props.className,
+      statusClass: statusNode.props.className, hints, paths: pathBlocks.map(node => node.props.children.props.text),
+      markup: pathBlocks.map(node => renderToStaticMarkup(node)) } : base;
   };
   return { render, reads, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
@@ -385,22 +418,25 @@ test('the agents page says how Codex was found and which file it runs, why its c
 // A 110-character path with no break must not push the Install button out of the row. The render tree has no layout, so
 // the stylesheet is checked for the rules that hold the row in: the text column shrinks (min-width: 0) and breaks inside a
 // segment (overflow-wrap: anywhere), the button never shrinks, and the row aligns to the top. The acceptance shots measure the real layout.
-test('the Codex row keeps its button inside the row however long a path is', () => {
-  const root = path.join(__dirname, '..'), css = readCss('src/features/settings/settings.css');
+test('the Codex row keeps its button inside the row however long a path is', async () => {
+  const css = readCss('src/features/settings/settings.css');
   assertRule(css, '.agent-setting .agent-info', { 'min-width': '0', flex: '1' });
   assertRule(css, '.agent-setting .agent-info small', { 'overflow-wrap': 'anywhere' });
   assertRule(css, '.agent-setting .setting-row > .button', { flex: 'none' });
   assertRule(css, '.agent-setting .setting-row', { 'align-items': 'flex-start' });
   assertRule(css, '.agent-setting .agent-status', { color: 'var(--text-1)' });
-  assert.match(fs.readFileSync(path.join(root, 'src/features/agents/AgentsSettings.tsx'), 'utf8'), /<span className="agent-info">/, 'the text column is the element those rules name');
+  const view = agentsPage(false);
+  try {
+    const row = await view.render({ installed: true }, { codex: { installed: true, via: 'path', fileShown: '/long/' + 'x'.repeat(110) }, index: 0, detail: true });
+    assert.equal(row.infoClass, 'agent-info');
+  } finally { view.done(); }
 });
 
 // The Codex phrases the row builds from a table, not from literal t() calls, still need English (the coverage scan cannot see them).
 test('the Codex via phrases have English that reads in the middle of a sentence', () => {
   const root = path.join(__dirname, '..'), additions = fs.readdirSync(root).filter(name => /^locale-additions-[\w-]+\.json$/.test(name));
   const english = Object.assign({ ...require('../electron/locales/en.json') }, ...additions.map(name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'))));
-  const block = /const CODEX_VIA_WORDS: Record<string, string> = \{([\s\S]*?)\n\};/.exec(fs.readFileSync(path.join(root, 'src/features/agents/AgentsSettings.tsx'), 'utf8'))[1];
-  const phrases = [...block.matchAll(/:\s*'([^']+)'/g)].map(match => match[1]);
+  const phrases = Object.values(CODEX_VIA_WORDS);
   assert.equal(phrases.length, require('../electron/features/codex-runtime/locator.cjs').VIAS.length, 'one phrase for each via');
   for (const phrase of phrases) assert.equal(typeof english[phrase], 'string', `${phrase} has an English entry (en.json or an additions file)`);
   for (const phrase of phrases) assert.match(english[phrase], /^from (PATH|WinGet|Scoop|Chocolatey|Volta|Bun|pnpm|Yarn|nvm-windows|fnm|the |an? |npm global install)/, phrase);
@@ -489,10 +525,23 @@ test('Codex permissions: three choices, full when unset or unreadable, and a cho
   try { readonly.render(); await settle(); assert.equal(readonly.select('Codex 权限').props.disabled, true, 'without a writer the choice is shown but cannot change'); } finally { readonly.done(); }
 });
 
-test('the Codex permission row keeps its own note and does not repeat the selected option description above the menu', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src/features/settings/AgentRuntimeSettings.tsx'), 'utf8');
-  assert.doesNotMatch(source, /permissionOptions\.find\(option => option\.value === permission\)\?\.hint/);
-  assert.match(source, /只影响之后新建的原生 Codex 会话/);
+test('the Codex permission row keeps its own note and does not repeat the selected option description above the menu', async () => {
+  const hints = [
+    '不询问，不使用沙箱：Codex 可以直接运行任何命令、修改任何文件。请用在你信任的项目上。',
+    '沿用 Codex 自己 config.toml 里的设置。',
+    '只能在工作目录里写文件；执行需要权限的操作前先问你。',
+  ];
+  const en = require('../electron/locales/en.json'), descriptions = hints.map(hint => en[hint]);
+  assert.ok(descriptions.every(Boolean));
+  const translate = (text, values) => hints.includes(text) ? en[text] : fill(text, values);
+  const view = page(fake(), wordsStub, { codexPermissions: 'config' }, translate);
+  try {
+    view.render(); await settle();
+    const { options } = view.select('Codex 权限').props;
+    assert.deepEqual(options.map(option => option.description), descriptions);
+    assert.equal(view.html().includes(options[1].description), false);
+    assert.ok(view.html().includes('只影响之后新建的原生 Codex 会话'));
+  } finally { view.done(); }
 });
 
 test('Claude Code background tasks: a switch that is off unless the setting says true, and a click is handed on as a boolean', async () => {

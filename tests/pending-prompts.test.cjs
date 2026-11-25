@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { conversationView } = require('./helpers/conversation-view.cjs');
+const { elements: viewElements } = require('./helpers/renderer-fixtures.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -313,8 +315,16 @@ test("a message a model wrote is laid out as Markdown like a reply; yours with t
   assert.match(owner, /<p class="is-folded"># Project memory/);
 });
 
-test('the feed marks only a planner sender as rendered', () => {
-  const feed = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
-  assert.match(feed, /const sender = turn\.entry\.sender, planner = sender\?\.kind === 'planner'/);
-  assert.match(feed, /<UserMessage [^>]*rendered=\{planner\} \/>/);
+test('the feed marks only a planner sender as rendered', t => {
+  const UserMessage = () => null, TimelineStep = () => null, UserAvatar = () => null;
+  const view = conversationView({
+    './UserAvatar': { UserAvatar }, './useReadingPaths': { useReadingPaths: () => ({}) },
+    './Timeline': { TimelineStep }, './PendingPromptEntries': { UserMessage },
+    './result-round': { latestResult: () => null }, './reply-links.ts': { generatedCopies: () => new Map() },
+    './useVisibleTail': { blocks: entries => entries, conversationTurns: entries => entries.map(entry => ({ kind: 'user', entry })) },
+  }, { useContext: () => null });
+  t.after(() => view.dispose());
+  const entries = [undefined, { kind: 'owner' }, { kind: 'planner' }].map((sender, id) => ({ id, sender, text: String(id) }));
+  const tree = view.render('ConversationFeed', { entries, agent: 'codex', projectId: 'p', live: false }).result;
+  assert.deepEqual(viewElements(tree).filter(node => node.type === UserMessage).map(node => node.props.rendered), [false, false, true]);
 });
