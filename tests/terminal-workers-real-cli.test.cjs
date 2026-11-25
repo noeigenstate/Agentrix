@@ -92,7 +92,8 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   assert.notEqual(ran.is_error, true, JSON.stringify(ran.content));
   assert.match(JSON.stringify(ran.content), /WORKER_TEST_OK/);
   assert.equal(git?.is_error, true);
-  assert.match(JSON.stringify(git.content), /denied|permission|not allowed/i);
+  // The role's own git check refuses before Claude Code's rules see the command.
+  assert.match(JSON.stringify(git.content), /forbidden for this role|denied|permission|not allowed/i);
   if (readOnly) {
     assert.equal(write?.is_error, true);
     assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false);
