@@ -3912,5 +3912,7 @@
   "记忆容错": "Memory tolerance",
   "团队记忆里有一行坏数据时只跳过那一行，角色的任务说明照常生成。": "A damaged line in team memory is skipped on its own, and role briefs are still created as usual.",
   "稳定性": "Stability",
-  "修复了一百多处可能出错的地方，包括复制粘贴、输入法回车、慢电脑上的事件提醒和远端连接。": "Over a hundred places that could go wrong are fixed, including copy and paste, Enter in input methods, event notices on slow computers and remote connections."
+  "修复了一百多处可能出错的地方，包括复制粘贴、输入法回车、慢电脑上的事件提醒和远端连接。": "Over a hundred places that could go wrong are fixed, including copy and paste, Enter in input methods, event notices on slow computers and remote connections.",
+  "座位把关": "Seat check",
+  "总指挥用 Claude 自带的子代理去做 Codex 座位的活时会被拦下，并提示它改用规定的角色，不再悄悄换成别的模型。": "When the conductor tries to do a Codex seat's work with Claude's own subagent, the call is stopped and the conductor is told to use the assigned role, instead of quietly running on another model."
 }
