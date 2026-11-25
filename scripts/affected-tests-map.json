@@ -487,7 +487,7 @@
       "reason": "App-shell composition root: edits force full coverage, while provider changes do not fan out through the host inputs. The bootstrap dynamically loads the installed intercept module."
     },
     "integration/dispatch-outbox.cjs": {
-      "digest": "ad62ca66b2f47fd78c59723c78e11aaeca038f72b35fa04922eb358cd22ca767",
+      "digest": "e6758695d07b569f1d2cc672919aa887b02e60e39b2bef5479f0b09a983a2f3a",
       "targets": [
         "electron/features/agents/dispatch-events.cjs"
       ],
@@ -502,7 +502,7 @@
       "reason": "The Lab loads the configured source or packaged dispatch helper to get its runtime bundle and render delegated events."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "8007884d24316140de5aaffea61295d598cbc663ce6fb8fea3601e68495df387",
+      "digest": "bd82eca1bed4e919f6328c4574cbf5b27fbf528eb0bcded47ea9ec2723511567",
       "targets": [
         "integration/dispatch.cjs",
         "electron/features/agents/call-seat.cjs",
@@ -520,7 +520,7 @@
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "06e7450b845b233f21de526d5bff8fd1743d6f121b0d31faf02ed0fc2d4c7a69",
+      "digest": "0bb6cba03867331f64771665a71524529fd48f29e2412fc60415e1fdccd772d2",
       "targets": [
         "electron/features/agents/call-seat.cjs",
         "electron/features/agents/dispatch-events.cjs",
