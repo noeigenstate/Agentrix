@@ -183,11 +183,13 @@ function workerOutput(normalizeRecord) {
     }
     yield event;
   }
-  function* output(line) {
+  function* output(line, { stderr = false } = {}) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
     let value;
     try { value = JSON.parse(clean, imageMetadata); } catch {
-      const capacity = /^(?:error|failed):/i.test(clean) && atCapacity.test(clean);
+      // The CLI's error stream carries its own failure text in varying wordings ("API Error: 529 Overloaded"); a plain
+      // line on the normal output must say it is an error before its words count, so tool output cannot fake one.
+      const capacity = (stderr || /^(?:error|failed):/i.test(clean)) && atCapacity.test(clean);
       const header = /^(model|reasoning effort|service tier|speed):\s*(.+)$/i.exec(clean);
       if (!header) { if (capacity) yield { capacity, silent: true }; return; }
       const [, key, text] = header, name = key.toLowerCase();

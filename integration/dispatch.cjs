@@ -601,7 +601,7 @@ class WorkerOutput {
     this.stdoutUsage = usage;
     if (cost !== null && (this.reportedCostUsd === null || cost >= this.reportedCostUsd)) this.reportedCostUsd = cost;
   }
-  line(line) { for (const event of this.worker.output(line)) this.applyOutput(event); }
+  line(line, options) { for (const event of this.worker.output(line, options)) this.applyOutput(event); }
   record(record) { for (const event of this.worker.records(record)) this.applyOutput(event); }
   applyOutput({ settings, measure, inputId, failure, capacity, confirmSession, resetFailure, silent, ...fields }) {
     if (inputId != null) this.onInput?.(inputId);
@@ -713,7 +713,9 @@ function readWorkerOutput(child, log, output) {
     let buffer = '', skipping = false, json = '';
     const parseLine = line => {
       // Claude's JSON result can be a pretty-printed array, or older builds can emit JSON lines.
-      if (stream !== child.stdout || !output.worker.multilineOutput || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
+      if (stream !== child.stdout || !output.worker.multilineOutput || !json && !/^\s*[\[{]\s*$/.test(line)) {
+        output.line(line, { stderr: stream === child.stderr }); return;
+      }
       json += line + '\n';
       if (json.length > LIMIT) { json = ''; return; }
       try { const record = JSON.parse(json, imageMetadata); json = ''; output.record(record); } catch {}
