@@ -1051,3 +1051,12 @@ test('activity shows the working prompt and three most recent queued prompts, wi
   assert.doesNotMatch(list, /Prompt [01]/);
   assert.match(list, /aria-expanded="false"[\s\S]*还有 2 条/);
 });
+
+// The owner saw a still hammer with Windows' animation effects off, while the app's motion setting (default "smooth")
+// keeps animations on: the hammer must follow the app setting, not the OS alone.
+test('the working hammer follows the app motion setting, not the Windows reduced-motion switch alone', () => {
+  const css = readCss('src/features/agents/activity-pane.css');
+  assert.match(css.rule('.activity-routing-hammer').animation, /^activity-routing-strike /);
+  assert.equal(css.rule('.activity-routing-hammer', '@media (prefers-reduced-motion: reduce)'), undefined, 'no bare OS rule stops it');
+  assert.deepEqual(css.rule(':root[data-motion="system"] .activity-routing-hammer', '@media (prefers-reduced-motion: reduce)'), { animation: 'none' });
+});

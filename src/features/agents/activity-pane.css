@@ -238,7 +238,9 @@
   35% { transform: rotate(-24deg); }
   52%, 72% { transform: rotate(16deg); }
 }
-@media (prefers-reduced-motion: reduce) { .activity-routing-hammer { animation: none; } }
+/* Like every other animation, the hammer follows the app's motion setting: Windows' reduced motion stops it only under "system"
+   (the global rule in styles.css handles "off"); the default "smooth" keeps it tapping. */
+@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] .activity-routing-hammer { animation: none; } }
 .activity-routing-setting { text-align: end; white-space: nowrap; }
 .activity-routing-fast-icon { display: none; }
 .activity-routing-key strong { color: var(--flow-ink); font-weight: 500; }
