@@ -512,7 +512,7 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
 test('an unverified running CLI disables the four lead controls in the project but leaves template and worker choices editable', t => {
   const base = seatsInfo({ conductor: true, catalog: catalog({ opus: { fast: true } }) });
   const info = { ...base, config: { roles: {}, conductor: true }, template: { roles: {}, conductor: true } };
-  let agentVersion = '2.1.332';
+  let agentVersion = '2.1.316';
   const h = dialogHarness(t, info, { frame: () => ({ sessionId: 'pty', agent: 'claude', agentVersion }) });
   const buttons = menu => [byAttr(menu, 'data-assign', 'opus'), byAttr(menu, 'data-pop-effort', 'high'),
     byAttr(menu, 'data-fast', 'orchestrator'), byAttr(menu, 'data-ultracode', 'orchestrator')];

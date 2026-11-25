@@ -111,7 +111,7 @@ test('the resolver starts no session, spends no tokens and writes no user file',
   for (const file of ['resolver.cjs', 'facts.cjs', 'decide.cjs']) {
     const source = fs.readFileSync(path.join(root, 'electron/features/claude-runtime', file), 'utf8');
     const required = [...source.matchAll(/require\('([^']+)'\)/g)].map(match => match[1]);
-    for (const name of required) assert.ok(['node:fs', 'node:path', 'node:crypto', './facts.cjs', '../../shared/reason.cjs'].includes(name), `${file} requires ${name}`);
+    for (const name of required) assert.ok(['node:fs', 'node:path', 'node:crypto', './facts.cjs', '../../shared/reason.cjs', '../cli-adapters/workers.cjs', './locator.cjs'].includes(name), `${file} requires ${name}`);
     assert.doesNotMatch(source, /\b(?:writeFile|appendFile|mkdir|rmSync|unlink|rename|spawn|execFile|fork|loadSdk|credentials\.read|query\()/, file);
   }
   // Every observation it takes changes only what it holds: its only reach outside is the stat of a settings file.

@@ -157,6 +157,11 @@ agentrix_agent() {
   local found=1 mode=conductor word route
   if __pg_program "$agent"; then program=("${__pg_words[@]}"); else found=0; fi
   [[ -n ${AGENTRIX_BOOTSTRAP-} && "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" == native ]] && mode=native
+  # Without a runnable helper the CLI starts with the user's words alone.
+  if [[ ! -x $__pg_node ]]; then
+    [[ $found == 1 ]] || { printf '%s\n' "$agent was not found in PATH. Install it, then restart this terminal."; return 127; }
+    "${program[@]}" "$@"; return
+  fi
   route=$(AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@") || return
   case $route in
     native)

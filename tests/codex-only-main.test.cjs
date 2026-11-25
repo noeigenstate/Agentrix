@@ -44,7 +44,7 @@ test('startup restores a legacy local and SSH Codex using its thread while norma
 test('the launcher sends every local and SSH Codex mode to app-server', async () => {
   const handlers = new Map(), calls = [], saved = {};
   let kind = 'local';
-  const context = { handle: (name, value) => handlers.set(name, value), findProject: () => ({ kind }), launchPlans: new Map(), restorePlans: new Map(),
+  const context = { adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, handle: (name, value) => handlers.set(name, value), findProject: () => ({ kind }), launchPlans: new Map(), restorePlans: new Map(),
     nativeSessions: { start: async (id, options) => calls.push([id, options]), history: async () => ({ codex: { id: 'same-thread' } }) }, folderOf: () => '/synthetic', folderHistory: async () => ({ codex: { id: 'same-thread' } }),
     store: { findTerminal: () => ({ record: { restore: saved } }), setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
   vm.createContext(context); vm.runInContext(main.slice(main.indexOf("  handle('agent:launch',"), main.indexOf('  registerNativeIpc({ handle });')), context);

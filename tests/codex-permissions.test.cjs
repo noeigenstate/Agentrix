@@ -597,7 +597,7 @@ test('the composer reads /permissions for Codex only and offers the three choice
   const load = file => {
     const mod = new Module(file, module); mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file));
     const original = mod.require.bind(mod);
-    mod.require = name => !name.startsWith('.') || name.endsWith('.json') ? original(name) : load(path.resolve(path.dirname(file), name.endsWith('.ts') ? name : name + '.ts'));
+    mod.require = name => !name.startsWith('.') || name.endsWith('.json') || name.endsWith('.mjs') ? original(name) : load(path.resolve(path.dirname(file), name.endsWith('.ts') ? name : name + '.ts'));
     mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, file);
     return mod.exports;
   };

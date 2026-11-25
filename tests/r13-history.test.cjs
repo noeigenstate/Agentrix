@@ -21,7 +21,7 @@ test('R1 R7 launcher mount reads saved SSH identity without any RemoteConnection
 });
 test('R1 clicking continue defers unknown SSH history to router.start and retains the resume request', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'); let handler, options;
-  const context = { handle(_name, fn) { handler = fn; }, findProject: () => ({ kind: 'ssh' }),
+  const context = { adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, handle(_name, fn) { handler = fn; }, findProject: () => ({ kind: 'ssh' }),
     launchPlans: new Map(), restorePlans: new Map(), broadcast() {},
     nativeSessions: { history() { assert.fail('launch must let start own lookup and cancellation'); }, async start(_id, value) { options = value; } } };
   require('node:vm').runInNewContext(source.slice(source.indexOf("  handle('agent:launch'"), source.indexOf('  registerNativeIpc({ handle });')), context);

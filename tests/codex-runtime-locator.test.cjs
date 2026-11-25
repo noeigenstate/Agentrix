@@ -623,7 +623,7 @@ test('the terminal, the helper and native mode get the same file', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   assert.match(source, /const codexExecutable = \(\) => codexLocator\.locate\(\)\.then\(found => found\.file\);/);
   assert.match(source, /createCodexRuntime\(\{ resolveExecutable: codexExecutable,/);
-  assert.match(source, /readCodexAccount\(\{ \.\.\.options, resolveExecutable: codexExecutable \}\)/);
+  assert.match(source, /adapterOf\('codex'\)\.usage\.accountReader\(\{ \.\.\.options, resolveExecutable: codexExecutable \}\)/);
   assert.match(source, /resetClient: \{ rpcFactory: createResetRpc, resolveExecutable: codexExecutable \}/);
   assert.match(source, /checkClaude, codexExecutable,/, 'host-inputs reads the usage inputs through it');
   assert.equal((source.match(/createCodexLocator\(/g) ?? []).length, 1, 'main keeps one Codex locator');
