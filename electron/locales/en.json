@@ -3869,5 +3869,7 @@
   "锤子动画": "Hammer motion",
   "路由栏的小锤子按 Agentrix 的界面动画设置敲打，Windows 关闭动画效果时不再停住不动。": "The hammer in the routing card follows the Agentrix interface animation setting and no longer stands still when Windows animation effects are off.",
   "团队记录": "Team records",
-  "团队的记忆改由结构化记录保存并渲染成文档，原有内容首次读取时自动导入，原文件留作备份。": "Team memory is now kept as structured records and rendered as a document; existing entries are imported on first read and the original file is kept as a backup."
+  "团队的记忆改由结构化记录保存并渲染成文档，原有内容首次读取时自动导入，原文件留作备份。": "Team memory is now kept as structured records and rendered as a document; existing entries are imported on first read and the original file is kept as a backup.",
+  "角色对话框": "Role dialog",
+  "角色对话框去掉了“简报”和“日志”两个展开项，内容更紧凑。": "The role dialog no longer shows the \"Brief\" and \"Log\" rows, so it is more compact."
 }
