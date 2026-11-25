@@ -33,8 +33,16 @@ unset __pg_login_files
 # whatever else it runs find the real CLIs, and the wrappers' own lookups skip the folder too.
 builtin source "${BASH_SOURCE[0]%/*}/shims/hooks/terminal-wire.sh"
 __pg_intercept="${BASH_SOURCE[0]%/*}/shims/intercept.cjs"
-__pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --bootstrap-shims 2>/dev/null)
-if [[ -n $__pg_shims && -d $__pg_shims ]]; then __pg_intercept="$__pg_shims/intercept.cjs"; else __pg_shims=; fi
+__pg_shims_failed=0
+if ! __pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --bootstrap-shims 2>/dev/null); then
+  __pg_shims_failed=1
+elif [[ -n $__pg_shims ]]; then
+  if [[ -r $__pg_shims/intercept.cjs ]]; then __pg_intercept="$__pg_shims/intercept.cjs"; else __pg_shims_failed=1; fi
+fi
+if [[ $__pg_shims_failed == 1 ]]; then
+  __pg_shims=
+  __pg_launch_error 1 '无法加载角色工具' '请重开终端，若仍失败请重新安装 Agentrix'
+fi
 unset AGENTRIX_DISPATCH_DEPTH AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF AGENTRIX_SHIM_NODE
 
 # A JSON string (also a TOML basic string) for $1, in REPLY.
@@ -74,23 +82,33 @@ __pg_program() {
     while [[ $PATH == *":$__pg_shims:"* ]]; do PATH=${PATH/":$__pg_shims:"/:}; done
     PATH=${PATH#:}; PATH=${PATH%:}
   fi
-  local alias_name=__pg_alias_$1 chosen=AGENTRIX_CODEX_EXECUTABLE
+  local alias_name=__pg_alias_$1 chosen=AGENTRIX_CODEX_EXECUTABLE file
   [[ $1 == claude ]] && chosen=AGENTRIX_CLAUDE_EXECUTABLE
   __pg_words=()
-  [[ -n ${!alias_name} ]] && eval "__pg_words=(${!alias_name})" 2>/dev/null
-  if (( ! ${#__pg_words[@]} )); then
-    if [[ -f ${!chosen-} && -x ${!chosen-} ]]; then __pg_words=("${!chosen}"); else __pg_words=("$1"); fi
+  __pg_alias_env=()
+  if [[ -n ${!alias_name} ]] && eval "__pg_words=(${!alias_name})" 2>/dev/null; then
+    while [[ -n ${__pg_words[0]-} ]]; do
+      case ${__pg_words[0]} in
+        command|noglob) ;;
+        *) [[ ${__pg_words[0]} =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]] || break; __pg_alias_env+=("${__pg_words[0]}");;
+      esac
+      __pg_words=("${__pg_words[@]:1}")
+    done
+    file=$(__pg_alias_path "${__pg_words[0]-}")
+    if [[ $file == */* ]]; then [[ -x $file ]] || file=; else file=$(builtin type -P -- "$file"); fi
+    if [[ -n $file ]]; then __pg_words[0]=$file; return 0; fi
   fi
-  [[ ${__pg_words[0]} == '~'* ]] && __pg_words[0]=$HOME${__pg_words[0]:1}
-  if [[ ${__pg_words[0]} == */* ]]; then [[ -x ${__pg_words[0]} ]]
-  else __pg_words[0]=$(builtin type -P -- "${__pg_words[0]}") && [[ -n ${__pg_words[0]} ]]; fi
+  __pg_alias_env=()
+  if [[ -f ${!chosen-} && -x ${!chosen-} ]]; then __pg_words=("${!chosen}"); return 0; fi
+  file=$(builtin type -P -- "$1") && [[ -n $file ]] || return 1
+  __pg_words=("$file")
 }
 
 # type [exit code] [agent]: one report to Agentrix's socket, the event zsh-integration.zsh sends. Bash has
 # no Unix sockets, so Agentrix's own executable sends it as Node; a closed Agentrix never stops this shell.
 __pg_send() {
   (( ++__pg_sequence ))
-  local codex=false claude=false __pg_words
+  local codex=false claude=false __pg_words __pg_alias_env
   __pg_program codex && codex=true
   __pg_program claude && claude=true
   ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "v=1" "type=$1" "sequence=$__pg_sequence" "agent=${3:-codex}" \
@@ -172,17 +190,31 @@ __pg_seat_fields() {
 # The shell keeps executable lookup, pipe events and temporary hook files.
 agentrix_agent() {
   local agent=$1; shift
-  local -a __pg_words program
+  local -a __pg_words program __pg_alias_env
   local found=1 mode=conductor route fields
   if __pg_program "$agent"; then program=("${__pg_words[@]}"); else found=0; fi
   [[ -n ${AGENTRIX_BOOTSTRAP-} && "$(__pg_session_mode)" == native ]] && mode=native
+  if [[ $agent == claude && $mode == conductor && $__pg_shims_failed == 1 ]]; then
+    __pg_launch_error 1 '无法加载角色工具' '请重开终端，若仍失败请重新安装 Agentrix'
+    return 1
+  fi
   # Without a runnable helper the CLI starts with the user's words alone.
   if [[ ! -x $__pg_node ]]; then
-    [[ $found == 1 ]] || { printf '%s\n' "$agent was not found in PATH. Install it, then restart this terminal."; return 127; }
-    "${program[@]}" "$@"; return
+    [[ $found == 1 ]] || { __pg_launch_error 127 "在 PATH 中找不到 $agent" '请安装后重开终端'; return 127; }
+    command env ${__pg_alias_env[@]+"${__pg_alias_env[@]}"} "${program[@]}" "$@"; return
   fi
-  fields=$(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@") || return
-  route=$(__pg_launch_route "$fields") || return
+  local code=0
+  fields=$(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 \
+    "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@" 2>/dev/null) || code=$?
+  if [[ $code != 0 ]]; then
+    __pg_launch_error "$code" '无法判断启动方式' '请重开终端后重试'
+    return "$code"
+  fi
+  route=$(__pg_launch_route "$fields") || {
+    code=$?
+    __pg_launch_error "$code" '启动方式的数据格式或版本不受支持' '请重开终端后重试'
+    return "$code"
+  }
   case $route in
     native)
       __pg_redirect_agent "$agent" ${program[@]+"${program[@]:1}"} "$@"
@@ -194,10 +226,16 @@ agentrix_agent() {
   if [[ $found == 0 ]]; then
     local label='Claude Code'
     [[ $route == passthrough ]] && label='Codex CLI'
-    printf '\e[33m%s\e[0m\n' "$label was not found in PATH. Install it, then restart this terminal."
+    __pg_launch_error 127 "在 PATH 中找不到 $label" '请安装后重开终端'
     return 127
   fi
-  if [[ $route == passthrough ]]; then "${program[@]}" "$@"; return; fi
+  if [[ $route == passthrough ]]; then command env ${__pg_alias_env[@]+"${__pg_alias_env[@]}"} "${program[@]}" "$@"; return; fi
+  __pg_hook_agent "$agent" "$route" "$@"
+}
+
+__pg_hook_agent() {
+  local agent=$1 route=$2 code=1
+  shift 2
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
   local model effort fast seat_map ultracode seat_valid=0 lead_file=${AGENTRIX_BOOTSTRAP-}.lead
   if [[ $route == conversation && -n ${AGENTRIX_BOOTSTRAP-} ]] && __pg_seat_fields "$lead_file"; then
@@ -223,19 +261,24 @@ agentrix_agent() {
   if [[ -n $settings ]]; then
     [[ -n $__pg_note_file && $session_folder != "$__pg_note_file" ]] || session_folder=${TMPDIR:-/tmp}
     session_name=${session_name%-skills.txt}
-    settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
-    printf '%s' "$settings" > "$settings_file"
+    settings_file=$(__pg_write_settings "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX" "$settings") || {
+      __pg_send agent-exited 1 "$agent"
+      __pg_launch_error 1 '无法写入 Claude 设置' '请检查目录权限和可用磁盘空间'
+      return 1
+    }
   fi
   local -a planner_unset=() planner_env=() launch_args=()
-  local target=plain code=1
+  local target=plain
   [[ -n $__pg_shims ]] && target=shims
-  if __pg_launch_words < <(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" \
+  if __pg_launch_words require-end < <(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" \
       AGENTRIX_LAUNCH_NOTE="$current_note" AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 \
-      "$__pg_node" "$__pg_intercept" --launch "$agent" words "$target" "$@"); then
-    command env ${planner_unset[@]+"${planner_unset[@]}"} ${planner_env[@]+"${planner_env[@]}"} \
+      "$__pg_node" "$__pg_intercept" --launch "$agent" words "$target" "$@" 2>/dev/null && printf '\000'); then
+    command env ${planner_unset[@]+"${planner_unset[@]}"} ${__pg_alias_env[@]+"${__pg_alias_env[@]}"} ${planner_env[@]+"${planner_env[@]}"} \
       AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
       "${program[@]}" ${launch_args[@]+"${launch_args[@]}"} "$@"
     code=$?
+  else
+    __pg_launch_error 1 '无法读取启动参数，数据格式不受支持或生成失败' '请重开终端后重试'
   fi
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send agent-exited $code "$agent"

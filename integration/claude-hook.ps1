@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$PipeName,
     [Parameter(Mandatory=$true)][string]$ProjectId,
     [Parameter(Mandatory=$true)][string]$SessionKey,
@@ -52,9 +52,8 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
         $child = [Diagnostics.Process]::Start($start)
         try {
             Write-HookTrace 'node-launched'
-            $clock = [Diagnostics.Stopwatch]::StartNew()
             $output = $child.StandardOutput.ReadLineAsync()
-            if (-not $output.Wait($(if ($workerPermission) { 8000 } else { 1000 }))) {
+            if (-not $output.Wait($(if ($workerPermission) { 8000 } else { 2500 }))) {
                 if ($workerPermission) {
                     Write-HookLine ([Console]::OpenStandardError()) 'Agentrix worker permission hook timed out reading the decision from Node.'
                 }
@@ -66,7 +65,7 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
                 Write-HookTrace 'output-forwarded'
             }
             if (-not $workerPermission) {
-                [void]$child.WaitForExit([Math]::Max(0, 1000 - $clock.ElapsedMilliseconds))
+                [void]$child.WaitForExit(850)
             }
         } finally {
             try {
@@ -90,9 +89,9 @@ function Get-AgentrixSessionContext($hook) {
     $encoded = $marker.Groups[2].Value.Replace('-', '+').Replace('_', '/')
     $encoded = $encoded.PadRight($encoded.Length + ((4 - $encoded.Length % 4) % 4), '=')
     $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
-    if (-not [IO.Path]::IsPathRooted($manifest)) { return }
+    if (-not [IO.Path]::IsPathRooted($manifest)) { throw 'Invalid skill manifest path.' }
     $info = Get-Item -LiteralPath $manifest
-    if ($info.Attributes -band [IO.FileAttributes]::ReparsePoint -or $info.Length -gt 2097152) { return }
+    if ($info.Attributes -band [IO.FileAttributes]::ReparsePoint -or $info.Length -gt 2097152) { throw 'Invalid skill manifest.' }
     $context = "Agentrix skill instructions:`n" + [IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)
     if ($hook.source -in @('compact', 'clear')) {
         try {
@@ -124,14 +123,29 @@ function Get-AgentrixSessionContext($hook) {
     [void][IO.Directory]::CreateDirectory($folder)
     if ((Get-Item -LiteralPath $folder).Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
     $receipt = Join-Path $folder $marker.Groups[1].Value.Substring(0, 32)
-    if ((Test-Path -LiteralPath $receipt) -and ((Get-Item -LiteralPath $receipt).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
-    if ($hook.source -in @('compact', 'clear')) {
-        foreach ($entry in Get-ChildItem -LiteralPath $folder -File) { if ($entry.Name -match '^[a-f0-9]{32}$') { [IO.File]::Delete($entry.FullName) } }
+    try {
+        $pending = [IO.FileStream]::new($receipt + '.pending', [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+            [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+    } catch [IO.IOException] { return }
+    try { Write-AgentrixSessionContext $receipt $folder $hook.source $context }
+    finally { $pending.Dispose() }
+}
+
+function Write-AgentrixSessionContext($receipt, $folder, $source, $context) {
+    $force = $source -in @('compact', 'clear')
+    if (Test-Path -LiteralPath $receipt) {
+        if ((Get-Item -LiteralPath $receipt).Attributes -band [IO.FileAttributes]::ReparsePoint -or -not $force) { return }
     }
-    $mode = if ($hook.source -in @('compact', 'clear')) { [IO.FileMode]::Create } else { [IO.FileMode]::CreateNew }
-    try { $file = [IO.File]::Open($receipt, $mode, [IO.FileAccess]::Write, [IO.FileShare]::None); $file.Dispose() }
-    catch [IO.IOException] { return }
-    return @{ hookSpecificOutput = @{ hookEventName = 'SessionStart'; additionalContext = $context } } | ConvertTo-Json -Depth 4 -Compress
+    $output = @{ hookSpecificOutput = @{ hookEventName = 'SessionStart'; additionalContext = $context } } | ConvertTo-Json -Depth 4 -Compress
+    Write-HookLine ([Console]::OpenStandardOutput()) $output
+    try {
+        if ($force) {
+            foreach ($entry in Get-ChildItem -LiteralPath $folder -File) { if ($entry.Name -match '^[a-f0-9]{32}$') { [IO.File]::Delete($entry.FullName) } }
+        }
+        $mode = if ($force) { [IO.FileMode]::Create } else { [IO.FileMode]::CreateNew }
+        $file = [IO.File]::Open($receipt, $mode, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $file.Dispose()
+    } catch { } # A receipt write failure can retry on resume after this output.
 }
 
 try {
@@ -143,10 +157,11 @@ try {
     $sessionId = [string]$hook.session_id
     if (-not $sessionId) { exit 0 }
     if ($Kind -eq 'session') {
-        try {
-            $context = Get-AgentrixSessionContext $hook
-            if ($context) { Write-HookLine ([Console]::OpenStandardOutput()) $context }
-        } catch { }
+        try { Get-AgentrixSessionContext $hook }
+        catch {
+            $warning = @{ systemMessage = 'Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。' } | ConvertTo-Json -Compress
+            Write-HookLine ([Console]::OpenStandardOutput()) $warning
+        }
     }
     $eventData = @{
         v = 1

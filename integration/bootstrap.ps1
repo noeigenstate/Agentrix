@@ -143,7 +143,11 @@ function global:Invoke-AgentrixLaunchPlan([string[]]$Words, [hashtable]$Fields =
             [Environment]::SetEnvironmentVariable($name, $Fields[$name])
         }
         $result = Invoke-AgentrixExecutable $global:AgentrixNode @($global:AgentrixIntercept) -Capture
-        if ($result.ExitCode -ne 0) { throw 'Agentrix could not prepare the terminal launch.' }
+        if ($result.ExitCode -ne 0) {
+            $failure = [InvalidOperationException]::new('Agentrix could not prepare the terminal launch.')
+            $failure.Data['ExitCode'] = $result.ExitCode
+            throw $failure
+        }
         return $result.Output
     } finally { Restore-AgentrixEnvironment $previous }
 }
@@ -155,7 +159,7 @@ function global:Set-AgentrixPlanner([string]$Agent, $Launch, [string]$SettingsFi
         AGENTRIX_LAUNCH_SETTINGS = $SettingsFile; AGENTRIX_LAUNCH_NOTE = $Note
     }
     foreach ($name in $Launch.Env.Keys) { $fields[$name] = $Launch.Env[$name] }
-    $words = Invoke-AgentrixLaunchPlan (@('--launch', $Agent, 'json', $target) + $Arguments) $fields | ConvertFrom-Json
+    $words = Invoke-AgentrixLaunchPlan (@('--launch', $Agent, 'json', $target) + $Arguments) $fields | ConvertFrom-Json -ErrorAction Stop
     if (($words.v -isnot [int] -and $words.v -isnot [long]) -or $words.v -ne 1 -or $words.type -cne 'launch.words' -or
         $words.unset -isnot [array] -or $words.env -isnot [pscustomobject] -or $words.argv -isnot [array]) {
         throw 'Unsupported Agentrix terminal launch plan.'
@@ -194,7 +198,8 @@ function global:Invoke-AgentrixClaudeShim([string]$Launcher, [string[]]$PrefixAr
     $extension = [IO.Path]::GetExtension($Launcher)
     $inlineConfig = if ($PrefixArguments.Count) { $PrefixArguments[0].IndexOf('={', [StringComparison]::Ordinal) } else { -1 }
     if ($extension -notin @('.cmd', '.ps1') -or $inlineConfig -lt 0) {
-        & $Launcher @PrefixArguments @Arguments
+        if ($MyInvocation.ExpectingInput) { $input | & $Launcher @PrefixArguments @Arguments }
+        else { & $Launcher @PrefixArguments @Arguments }
         return
     }
     $prefix = $PrefixArguments[0].Substring(0, $inlineConfig + 1)
@@ -206,9 +211,10 @@ function global:Invoke-AgentrixClaudeShim([string]$Launcher, [string[]]$PrefixAr
             if ($extension -eq '.cmd' -and $file -match '[%!]') { throw 'The config path contains characters that cmd.exe can expand.' }
             [IO.File]::WriteAllText($file, $PrefixArguments[0].Substring($prefix.Length), [Text.UTF8Encoding]::new($false))
             $configArgs = @($prefix + $file)
-        } catch { Write-Warning "Agentrix role tools are unavailable for this Claude launch. $($_.Exception.Message)" }
+        } catch { throw '无法写入角色工具设置。请检查目录权限和可用磁盘空间。' }
         $remaining = @($PrefixArguments | Select-Object -Skip 1)
-        & $Launcher @configArgs @remaining @Arguments
+        if ($MyInvocation.ExpectingInput) { $input | & $Launcher @configArgs @remaining @Arguments }
+        else { & $Launcher @configArgs @remaining @Arguments }
     } finally {
         if ($file) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
     }
@@ -239,21 +245,30 @@ function global:ConvertTo-AgentrixArgument {
 
 # Runs an executable in this terminal with exactly these arguments and returns its exit code.
 function global:Invoke-AgentrixExecutable {
-    param([string]$FileName, [string[]]$Arguments, [switch]$Capture)
+    param([string]$FileName, [string[]]$Arguments, [switch]$Capture, [Collections.IEnumerator]$InputLines)
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FileName
     $startInfo.Arguments = ($Arguments | ForEach-Object { ConvertTo-AgentrixArgument $_ }) -join ' '
     $startInfo.UseShellExecute = $false
-    $startInfo.WorkingDirectory = (Get-Location).Path
+    $startInfo.WorkingDirectory = (Get-Location).ProviderPath
+    $startInfo.RedirectStandardInput = $null -ne $InputLines
     if ($Capture) {
         $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
         $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
     }
     $process = [Diagnostics.Process]::Start($startInfo)
     try {
+        if ($Capture) { $stderrDrain = $process.StandardError.ReadToEndAsync() }
+        if ($null -ne $InputLines) {
+            $writer = [IO.StreamWriter]::new($process.StandardInput.BaseStream, [Text.UTF8Encoding]::new($false))
+            try { while ($InputLines.MoveNext()) { $writer.WriteLine([string]$InputLines.Current) } }
+            catch [IO.IOException] { }
+            finally { try { $writer.Dispose() } catch [IO.IOException] { } }
+        }
         if ($Capture) { $output = $process.StandardOutput.ReadToEnd() }
         $process.WaitForExit()
-        if ($Capture) { return @{ ExitCode = $process.ExitCode; Output = $output } }
+        if ($Capture) { [void]$stderrDrain.GetAwaiter().GetResult(); return @{ ExitCode = $process.ExitCode; Output = $output } }
         return $process.ExitCode
     } finally { $process.Dispose() }
 }
@@ -273,7 +288,7 @@ function global:Send-AgentrixEvent {
             codexAvailable = [bool]$global:AgentrixCodexCommand
             claudeAvailable = [bool]$global:AgentrixClaudeCommand
             codexHome = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.codex' } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.codex' })
-            cwd = (Get-Location).Path
+            cwd = (Get-Location).ProviderPath
             command = $Command
         }
         if ($Type -eq 'agent-started' -and $Agent -eq 'codex') {
@@ -303,16 +318,34 @@ function global:Get-AgentrixCommand($arguments) {
     if ($first -cmatch '^-{0,2}[A-Za-z][A-Za-z-]{0,23}$') { $first } else { '' }
 }
 
+function global:Write-AgentrixLaunchError([int]$Code, [string]$Reason, [string]$Remedy) {
+    [Console]::Error.WriteLine("Agentrix：$Reason（退出码 $Code）。$Remedy。")
+    $global:LASTEXITCODE = $Code
+}
+
 # The owner shell keeps PowerShell's pipeline and executable quoting behavior.
 function global:agentrix_agent {
     $agent = [string]$args[0]
     $arguments = @($args | Select-Object -Skip 1)
-    $mode = if ((Get-AgentrixSessionMode) -ceq 'native') { 'native' } else { 'conductor' }
-    $output = Invoke-AgentrixLaunchPlan (@('--launch', $agent, 'classify', $mode) + $arguments)
+    $native = (Get-AgentrixSessionMode) -ceq 'native'
+    $mode = if ($native) { 'native' } else { 'conductor' }
+    if (-not $native -and $global:AgentrixSession.shims -and -not [IO.File]::Exists($global:AgentrixIntercept)) {
+        Write-AgentrixLaunchError 1 '无法加载角色工具' '请重开终端，若仍失败请重新安装 Agentrix'
+        return
+    }
+    try { $output = Invoke-AgentrixLaunchPlan (@('--launch', $agent, 'classify', $mode) + $arguments) }
+    catch {
+        $exitCode = $_.Exception.Data['ExitCode']
+        if (-not $exitCode) { $exitCode = 1 }
+        Write-AgentrixLaunchError $exitCode '无法判断启动方式' '请重开终端后重试'
+        return
+    }
     $classification = ConvertFrom-AgentrixWireFields $output 'agentrix.launch-route'
     $route = $classification.route
     if ($classification.version -cne '1' -or $route -cnotin @('passthrough', 'native', 'refused', 'conversation', 'utility', 'print')) {
-        throw 'Unsupported Agentrix terminal launch route.'
+        $code = if ($classification.version -and $classification.version -cne '1') { 3 } else { 2 }
+        Write-AgentrixLaunchError $code '启动方式的数据格式或版本不受支持' '请重开终端后重试'
+        return
     }
     if ($route -ceq 'passthrough') {
         if (-not $global:AgentrixCodexCommand) {
@@ -339,16 +372,20 @@ function global:agentrix_agent {
         return
     }
     if (-not $global:AgentrixClaudeCommand) {
-        Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
+        Write-AgentrixLaunchError 127 '在 PATH 中找不到 Claude Code' '请安装后重开终端'
         return
     }
-    Invoke-AgentrixHookAgent $agent ($route -ceq 'conversation') $arguments
+    $conversation = $route -ceq 'conversation'
+    if ($MyInvocation.ExpectingInput) { $input | Invoke-AgentrixHookAgent $agent $conversation $arguments }
+    else { Invoke-AgentrixHookAgent $agent $conversation $arguments }
 }
 
 function global:codex {
     if ($MyInvocation.ExpectingInput) { $input | agentrix_agent codex @args } else { agentrix_agent codex @args }
 }
-function global:claude { agentrix_agent claude @args }
+function global:claude {
+    if ($MyInvocation.ExpectingInput) { $input | agentrix_agent claude @args } else { agentrix_agent claude @args }
+}
 
 function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [string[]]$Arguments) {
     $hooks = $global:AgentrixSession.hooks
@@ -367,36 +404,36 @@ function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [s
     $currentNote = Get-AgentrixReadingNote
     # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
     $settingsFile = $null
-    if ($settings) {
-        $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
-        $settingsFile = New-AgentrixClaudeSettingsPath $sessionFolder '.json'
-        [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
-    }
-    try { $planner = Set-AgentrixPlanner $Agent $launch $settingsFile $currentNote $Arguments }
-    catch {
-        if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
-        Send-AgentrixEvent 'agent-exited' 1 -Agent $Agent
-        $global:LASTEXITCODE = 1
-        throw
-    }
-    if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        try { Invoke-AgentrixClaudeShim $global:AgentrixClaudeCommand $planner.Arguments $Arguments }
-        finally {
-            Restore-AgentrixEnvironment $planner.Previous
-            if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
-            Send-AgentrixEvent 'agent-exited' $global:LASTEXITCODE -Agent $Agent
-        }
-        return
-    }
-    $claudeExit = 0
+    $planner = $null
+    $claudeExit = 1
     try {
-        # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($planner.Arguments + $Arguments)
+        if ($settings) {
+            $failure = '无法写入 Claude 设置'
+            $remedy = '请检查目录权限和可用磁盘空间'
+            if ($env:AGENTRIX_BOOTSTRAP) { $sessionFolder = [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) }
+            elseif ($env:AGENTRIX_READING_NOTE_FILE) { $sessionFolder = [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) }
+            else { $sessionFolder = [IO.Path]::GetTempPath() }
+            $settingsFile = New-AgentrixClaudeSettingsPath $sessionFolder '.json'
+            [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
+        }
+        $failure = '无法读取启动参数，数据格式不受支持或生成失败'
+        $remedy = '请重开终端后重试'
+        $planner = Set-AgentrixPlanner $Agent $launch $settingsFile $currentNote $Arguments
+        $failure = '无法执行 Claude Code'
+        $remedy = '请检查 Claude Code 和角色工具的设置后重试'
+        if ([IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -eq '.exe') {
+            $lines = if ($MyInvocation.ExpectingInput) { ,$input }
+            $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($planner.Arguments + $Arguments) -InputLines $lines
+        } else {
+            $global:LASTEXITCODE = 0
+            if ($MyInvocation.ExpectingInput) { $input | Invoke-AgentrixClaudeShim $global:AgentrixClaudeCommand $planner.Arguments $Arguments }
+            else { Invoke-AgentrixClaudeShim $global:AgentrixClaudeCommand $planner.Arguments $Arguments }
+            $claudeExit = $global:LASTEXITCODE
+        }
     } catch {
-        Write-Error $_
-        $claudeExit = 1
+        Write-AgentrixLaunchError $claudeExit $failure $remedy
     } finally {
-        Restore-AgentrixEnvironment $planner.Previous
+        if ($planner) { Restore-AgentrixEnvironment $planner.Previous }
         if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
         Send-AgentrixEvent 'agent-exited' $claudeExit -Agent $Agent
         $global:LASTEXITCODE = $claudeExit

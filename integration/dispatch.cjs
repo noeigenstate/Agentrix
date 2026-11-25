@@ -369,6 +369,7 @@ function renderNotice({ id, code, detail }) {
     case 'events_undelivered': return `events not delivered to Agentrix (${detail})`;
     case 'codex_control_unavailable': return `transport ${id} app-server: ${detail}`;
     case 'receipt_unavailable': return `receipt unavailable ${id}: ${detail}`;
+    case 'role_result_unavailable': return `role result unavailable ${id} (${detail}); using final-text`;
     case 'stop_queued': return `stop queued ${id}`;
     case 'stop_requested': return `stop requested ${id}${detail.reason ? ': ' + quoted(detail.reason) : ''}${detail.noResume ? ' · no resume' : ''}`;
     case 'intervened': return `intervened ${id}: ${quoted(detail)}`;
@@ -489,9 +490,12 @@ function eventSink(filename, notice) {
   const send = event => {
     try {
       if (!outbox) {
-        if (!filename || fs.statSync(filename).size > BOOTSTRAP_LIMIT) return;
-        const value = JSON.parse(fs.readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
-        if (![value.pipeName, value.projectId, value.sessionKey].every(word)) return;
+        if (!filename) return;
+        if (fs.statSync(filename).size > BOOTSTRAP_LIMIT) return undelivered('bootstrap_invalid');
+        let value;
+        try { value = JSON.parse(fs.readFileSync(filename, 'utf8').replace(/^\uFEFF/, '')); }
+        catch (error) { if (error instanceof SyntaxError) return undelivered('bootstrap_invalid'); throw error; }
+        if (![value?.pipeName, value?.projectId, value?.sessionKey].every(word)) return undelivered('bootstrap_invalid');
         // First event is the admitted declaration; later bootstrap replacements cannot change its signing identity.
         bootstrap = value; send.bootstrap = value;
         outbox = new DispatchOutbox({ directory: dispatchDirectory(filename), id: event.id, projectId: value.projectId, sessionKey: value.sessionKey,
@@ -699,7 +703,7 @@ function readWorkerOutput(child, log, output) {
     let buffer = '', skipping = false, json = '';
     const parseLine = line => {
       // Claude's JSON result can be a pretty-printed array, or older builds can emit JSON lines.
-      if (!output.worker.multilineOutput || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
+      if (stream !== child.stdout || !output.worker.multilineOutput || !json && !/^\s*[\[{]\s*$/.test(line)) { output.line(line); return; }
       json += line + '\n';
       if (json.length > LIMIT) { json = ''; return; }
       try { const record = JSON.parse(json, imageMetadata); json = ''; output.record(record); } catch {}
@@ -718,6 +722,24 @@ function readWorkerOutput(child, log, output) {
     tails.push(() => { accept(decoder.end()); if (!skipping && buffer.trim()) parseLine(buffer); });
   }
   return () => { for (const tail of tails) tail(); };
+}
+
+function waitForWorkerClose(child) {
+  return new Promise(resolve => {
+    let settleTimer;
+    child.once('exit', (code, killedBy) => {
+      settleTimer = setTimeout(() => {
+        // An inherited pipe can outlive the worker. Keep its exit status and stop waiting for that pipe.
+        if (process.platform !== 'win32' && child.pid) {
+          try { process.kill(-child.pid, 'SIGTERM'); } catch { /* The process group may already be gone. */ }
+        }
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolve({ code, killedBy });
+      }, EXIT_SETTLE);
+    });
+    child.once('close', (code, killedBy) => { clearTimeout(settleTimer); resolve({ code, killedBy }); });
+  });
 }
 
 // A terminal worker's transcript record as main compacts it for the meter (worker-terminals meterRecord): a user or
@@ -798,6 +820,18 @@ function detachedLaunchState(current, emit, onTiming, store, continued) {
   return 1;
 }
 
+function receiptReader(store, emit) {
+  const reported = new Set();
+  return (id, options) => {
+    try { return store.read(id, options); }
+    catch (error) {
+      if (!reported.has(id)) emit(dispatchEvent('notice', id, { code: 'receipt_unavailable', detail: error.code || 'invalid_receipt' }));
+      reported.add(id);
+      return undefined;
+    }
+  };
+}
+
 async function answerDetachedRole({ id, cwd, agent, allow, readOnly }, { wait, choice }, env) {
   const file = env.AGENTRIX_BOOTSTRAP;
   if (!file || fs.statSync(file).size > BOOTSTRAP_LIMIT) throw new Error('Role control is unavailable.');
@@ -862,8 +896,9 @@ async function startDetached(argv, { env = process.env, launch = spawn, store, t
     return 1;
   } finally { fs.closeSync(descriptor); }
   let announcedWait;
+  const read = receiptReader(store, emit);
   const observed = store.observe(() => {
-    const current = store.read(id);
+    const current = read(id);
     const waiting = current && waitingEvent(current), line = waiting ? null : legacyLine(current, 'waiting');
     const message = waiting?.message ?? line;
     if (message && message !== announcedWait) {
@@ -875,23 +910,33 @@ async function startDetached(argv, { env = process.env, launch = spawn, store, t
     return current?.started || legacyLine(current, 'started') || current?.settled ? current : undefined;
   }, timeout, { signal: controller.signal });
   let failure;
-  const entry = await Promise.race([observed, exited.then(result => {
-    failure = result; return null;
-  })]);
-  controller.abort();
-  let current = entry || store.read(id);
+  let entry;
+  try {
+    entry = await Promise.race([observed, exited.then(result => { failure = result; return null; })]);
+  } finally { controller.abort(); }
+  let current = entry || read(id);
   if (failure && !current?.settled) {
     // A cached read after exit can predate the child's final rename. Only fresh disk state may authorize settlement.
     current = await store.update(id, { settled: true, exitCode: failure.code || 1 }, { unlessEnded: true }).catch(() => null)
-      || store.read(id, { fresh: true }) || current;
+      || read(id, { fresh: true }) || current;
   }
   if (current?.started || legacyLine(current, 'started') || current?.settled || failure) {
     return detachedLaunchState(current ?? { id }, emit, onTiming, store, announcedWait);
   }
-  if (!current?.admitted) {
+  if (current && !current.admitted) {
     child.kill();
-    const failure = startFailed(id, 'timeout', 'admission not confirmed within 60 s');
-    await store.update(id, { settled: true, exitCode: 1, ...receiptEvent('startFailed', failure) }, { unlessEnded: true }).catch(() => {});
+    let settleTimer;
+    const stopped = await Promise.race([exited, new Promise(resolve => { settleTimer = setTimeout(resolve, EXIT_SETTLE); })]);
+    clearTimeout(settleTimer);
+    const failure = startFailed(id, 'timeout', `admission not confirmed within ${timeout / 1000} s`);
+    if (stopped) {
+      current = await store.update(id, { settled: true, exitCode: 1, ...receiptEvent('startFailed', failure) }, { unlessEnded: true }).catch(() => null);
+      if (current?.started || current?.ended || legacyLine(current, 'started')) return detachedLaunchState(current, emit, onTiming, store, announcedWait);
+    } else {
+      // Without evidence of exit the caller must retain the worker's worktree.
+      emit(dispatchEvent('detached', id));
+      return 0;
+    }
     emit(failure);
     return 1;
   }
@@ -986,6 +1031,7 @@ async function waitDetached(options, { store = detachedRuns(options.cwd), observ
   const pending = new Set(options.ids); let unknown = false;
   let completed = false, observing = true;
   const done = () => !pending.size || (untilAny && (completed || unknown));
+  const read = receiptReader(store, emit);
   const finish = (id, entry, lost = false) => {
     reportDetachedTiming(onTiming, entry);
     const line = legacyLine(entry, 'startFailed');
@@ -997,7 +1043,7 @@ async function waitDetached(options, { store = detachedRuns(options.cwd), observ
     completed = true;
   };
   const check = async () => {
-    const entries = [...pending].map(id => [id, store.read(id)]);
+    const entries = [...pending].map(id => [id, read(id)]);
     const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled || entry?.ownerWait);
     await Promise.all(entries.map(async ([id, entry]) => {
       if (entry === null) { emit(dispatchEvent('unknown-run', id)); pending.delete(id); unknown = true; }
@@ -1013,7 +1059,7 @@ async function waitDetached(options, { store = detachedRuns(options.cwd), observ
   if (!ready && !signal?.aborted && options.timeout > 0) await (observe || store.observe.bind(store))(check, options.timeout * 1000, { signal });
   observing = false;
   for (const id of pending) {
-    const entry = store.read(id);
+    const entry = read(id);
     if (!entry) { emit(dispatchEvent('running', id, { seconds: null, lastActivityAt: null })); continue; }
     if (entry.settled) { finish(id, entry); continue; }
     reportDetachedTiming(onTiming, entry);
@@ -1880,10 +1926,8 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       const flushOutput = readWorkerOutput(child, log, output);
       child.stdin.on('error', error => { if (error.code !== 'EPIPE') spawnError = error; });
       child.stdin.end(brief);
-      result = await new Promise(resolve => {
-        child.once('error', error => { spawnError = error; });
-        child.once('close', (code, killedBy) => resolve({ code, killedBy }));
-      });
+      child.once('error', error => { spawnError = error; });
+      result = await waitForWorkerClose(child);
       flushOutput();
       clearInterval(pollTimer);
       confirm(true); drain();
@@ -1927,7 +1971,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason, ...usage(),
         ...(stopFailure && { treeStopFailure: stopFailure }),
-        verdict: routingVerdict(output, declared(), options.fallbackFrom), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+        verdict: routeVerdict(), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
       ended({ exitCode: 1, reason, bookkeeping, treeStopFailure: stopFailure });
     }
@@ -1960,4 +2004,9 @@ module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput
   dispatchEvent, detachedEnd, renderDispatchLine, renderDispatchStart,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
   localWindowsCodex, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole };
-if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
+if (require.main === module) {
+  run(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(error => {
+    console.error('[dispatch] ' + oneLine(error.message));
+    process.exitCode = 1;
+  });
+}

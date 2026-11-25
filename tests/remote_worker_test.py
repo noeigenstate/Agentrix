@@ -170,7 +170,6 @@ class RemoteFilesTest(unittest.TestCase):
     def test_dispatch_events_use_the_same_authenticated_envelope_over_ssh(self):
         events = []
         self.worker.emit = events.append
-        self.worker.listener = mock.MagicMock()
         payload = {"type": "dispatch-rate", "id": "22222222-2222-4222-8222-222222222222", "outputTokens": 50, "activeMs": 1000,
                    "projectId": self.worker.project_id, "sessionKey": self.worker.token}
         clients = []
@@ -178,11 +177,56 @@ class RemoteFilesTest(unittest.TestCase):
             client = mock.MagicMock()
             client.__enter__.return_value = client
             client.recv.return_value = json.dumps(value).encode("utf-8") + b"\n"
-            clients.append((client, None))
-        self.worker.listener.accept.side_effect = clients + [OSError("closed")]
-        self.worker.events_loop()
+            clients.append(client)
+        for client in clients:
+            self.worker.handle_event_connection(client, mock.Mock())
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], dict(payload, sequence=1))
+
+    def test_branch_name_is_read_as_utf8_bytes_even_in_the_c_locale(self):
+        with mock.patch.dict(os.environ, {"LANG": "C", "LC_ALL": "C"}):
+            with mock.patch.object(remote.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "修复分支\n".encode("utf-8"))) as git:
+                result = self.worker.initialize({"path": self.temp.name, "token": "fixture", "projectId": "project"})
+        self.assertFalse(git.call_args[1].get("universal_newlines"))
+        self.assertEqual(result["branch"], "修复分支")
+
+    def test_prompt_event_is_delivered_while_claude_launch_waits_for_its_note(self):
+        worker = self.worker
+        started, prompted, acked = threading.Event(), threading.Event(), threading.Event()
+        events = []
+
+        def client(kind):
+            connection = mock.MagicMock()
+            connection.__enter__.return_value = connection
+            connection.recv.return_value = (json.dumps(dict(v=1, type=kind, agent="claude", token=worker.token)) + "\n").encode()
+            return connection
+
+        launch, prompt = client("agent-started"), client("shell-prompt")
+        launch.sendall.side_effect = lambda value: acked.set()
+
+        def emit(message):
+            event = message["event"]
+            events.append((event["type"], event["sequence"]))
+            (started if event["type"] == "agent-started" else prompted).set()
+
+        def connections():
+            yield (launch, None)
+            self.assertTrue(started.wait(2))
+            yield (prompt, None)
+            raise OSError("closed")
+
+        worker.emit = emit
+        worker.listener = mock.MagicMock()
+        accept = connections()
+        worker.listener.accept.side_effect = lambda: next(accept)
+        worker.events_loop()
+        try:
+            self.assertTrue(prompted.wait(2))
+            self.assertFalse(acked.is_set())
+            self.assertEqual(events, [("agent-started", 1), ("shell-prompt", 2)])
+        finally: worker.skill_note_ready.set()
+        self.assertTrue(acked.wait(2))
+        launch.sendall.assert_called_once_with(b"\n")
 
     def dispatch_fixture(self):
         self.worker.temp = self.temp.name
@@ -1562,14 +1606,14 @@ class RemoteClaudeFastSettingsTest(unittest.TestCase):
             event = dict(type=kind, agent="claude", token=worker.token, accountRoute=config)
             client.recv.return_value = (json.dumps(event) + "\n").encode("utf-8")
             clients.append((client, None))
-        worker.listener = mock.Mock()
-        worker.listener.accept.side_effect = clients + [OSError("closed")]
         homes = []
         def emit(message):
             self.assertNotIn("accountRoute", message["event"])
             homes.append(worker.claude_fast_home)
+            if message["event"]["type"] == "agent-started": worker.skill_note_ready.set()
         worker.emit = emit
-        worker.events_loop()
+        for client, _ in clients:
+            worker.handle_event_connection(client, mock.Mock())
         self.assertEqual(homes, [route["configDir"], route["configDir"], None])
 
 
@@ -1600,6 +1644,7 @@ claude -p 'print this'
 claude --version
 __pg_role_tools=''
 claude 'missing tools'
+printf 'MISSING=%s\n' "$?"
 printf native > dispatch.json.mode
 claude 'native conversation'
 ''', encoding="utf-8", newline="\n")
@@ -1615,8 +1660,9 @@ claude 'native conversation'
             launches = [words[index + 2: next((at for at in range(index + 1, len(words)) if words[at] == "--settings"), len(words))]
                         for index, word in enumerate(words) if word == "--settings"]
             note = ["--append-system-prompt", "Existing note."]
-            self.assertEqual(launches, [note + [role_config, "fix the test"], note + ["-p", "print this"], note + ["--version"],
-                                        ["--append-system-prompt", role_error + " Existing note.", "missing tools"], note + ["native conversation"]])
+            self.assertEqual(launches, [note + [role_config, "fix the test"], note + ["-p", "print this"], note + ["--version"], note + ["native conversation"]])
+            self.assertIn("MISSING=1", result.stdout.splitlines())
+            self.assertIn("无法加载远端角色工具", result.stderr)
 
     def test_manual_codex_request_is_acknowledged_without_waiting_for_a_terminal_skill_note(self):
         worker = object.__new__(remote.Worker)
@@ -1626,12 +1672,11 @@ claude 'native conversation'
         event = {"type": "codex-started", "agent": "codex", "token": "key", "cwd": "/remote/sub", "args": ["resume", "--last"]}
         client = mock.MagicMock(); client.__enter__.return_value = client
         client.recv.return_value = (json.dumps(event) + "\n").encode()
-        worker.listener = mock.Mock(); worker.listener.accept.return_value = (client, None)
         events = []
         def emit(value):
             events.append(value); worker.stopping = True
         worker.emit = emit
-        worker.events_loop()
+        worker.handle_event_connection(client, mock.Mock())
         worker.skill_note_ready.wait.assert_not_called()
         client.sendall.assert_called_once_with(b"\n")
         self.assertEqual(events[0]["event"]["type"], "agent-started")

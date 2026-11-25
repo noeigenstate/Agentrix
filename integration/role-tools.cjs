@@ -15,7 +15,7 @@ const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, readRoleRes
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const { workerOf, agentOfModel } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
-const { validRefusals } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const { readSessionMode, validRefusals } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
 const RECENT_END_MS = 10 * 60 * 1000;
@@ -73,6 +73,35 @@ function excludeDependencies(exclude) {
   if (contents.split(/\r?\n/).some(line => line === 'node_modules' || line === '/node_modules')) return;
   fs.mkdirSync(path.dirname(exclude), { recursive: true });
   fs.appendFileSync(exclude, (contents && !contents.endsWith('\n') ? '\n' : '') + 'node_modules\n');
+}
+
+async function copyWorktreeDependencies(modules, destination) {
+  if (await fs.promises.lstat(destination).catch(error => { if (error.code !== 'ENOENT') throw error; })) return;
+  const source = await fs.promises.realpath(modules);
+  const links = [];
+  await fs.promises.cp(source, destination, {
+    recursive: true,
+    mode: fs.constants.COPYFILE_FICLONE,
+    async filter(from, to) {
+      if (!(await fs.promises.lstat(from)).isSymbolicLink()) return true;
+      const target = await fs.promises.realpath(from).catch(error => {
+        if (!['ENOENT', 'ELOOP'].includes(error.code)) throw error;
+      });
+      if (target) {
+        const relative = path.relative(source, target);
+        if (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) {
+          links.push([to, path.join(destination, relative), (await fs.promises.stat(target)).isDirectory()]);
+        }
+      }
+      return false;
+    },
+  });
+  // Relative links remain inside this copy. Windows directory links use a private junction.
+  for (const [file, target, directory] of links) {
+    if (process.platform === 'win32' && directory) await fs.promises.symlink(target, file, 'junction');
+    else if (process.platform === 'win32') await fs.promises.copyFile(target, file, fs.constants.COPYFILE_FICLONE);
+    else await fs.promises.symlink(path.relative(path.dirname(file), target) || '.', file);
+  }
 }
 
 async function worktreeBaseFolder(git, root, folder) {
@@ -136,10 +165,7 @@ async function createWorktree(cwd, suffix, folder, from, lastRoleCwd) {
     throw new Error('Git could not create the worktree branch.');
   }
   const modules = path.join(root, 'node_modules');
-  const link = path.join(work, 'node_modules');
-  let linked = false;
   const rollback = async () => {
-    if (linked) await fs.promises.unlink(link).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await git(['worktree', 'remove', '--force', work], root).catch(() => fs.promises.rmdir(work).catch(() => {}));
     await git(['branch', '-D', '--', branch], root);
   };
@@ -150,8 +176,7 @@ async function createWorktree(cwd, suffix, folder, from, lastRoleCwd) {
     if ((await fs.promises.stat(modules).catch(error => { if (error.code !== 'ENOENT') throw error; }))?.isDirectory()) {
       const { stdout } = await git(['rev-parse', '--git-path', 'info/exclude'], work);
       excludeDependencies(path.resolve(work, stdout.trim()));
-      await fs.promises.symlink(modules, link, process.platform === 'win32' ? 'junction' : 'dir');
-      linked = true;
+      await copyWorktreeDependencies(modules, path.join(work, 'node_modules'));
     }
   } catch (error) {
     await rollback().catch(() => {});
@@ -227,7 +252,12 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     return { events, timing };
   };
   const conductor = () => {
-    try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim() === 'conductor'; } catch { return false; }
+    if (!env.AGENTRIX_BOOTSTRAP) return false;
+    try { return readSessionMode(fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode.env', 'utf8')) === 'conductor'; }
+    catch (error) {
+      if (error.code !== 'ENOENT') return false;
+      try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim() === 'conductor'; } catch { return false; }
+    }
   };
   const own = id => {
     const run = runs.get(id);
@@ -251,7 +281,6 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
   async function refreshGroup(folder, open, seconds, untilAny, signal) {
     const args = ['wait', ...open.map(run => run.id), '--cwd', folder, '--timeout', String(seconds)];
     const { events, timing } = await call(args, { untilAny, signal });
-    const failure = events.find(event => event.type === 'dispatch.failed')?.message;
     for (const run of open) {
       if (run.end) continue;
       const status = timing.get(run.id);
@@ -267,7 +296,6 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       }
       const relevant = events.filter(event => event.id === run.id);
       const end = relevant.find(event => event.type === 'dispatch.ended');
-      const loss = relevant.some(event => event.type === 'dispatch.unknown-run') ? `unknown run ${run.id}` : failure;
       if (end) {
         const legacy = end.result.source === 'legacy';
         Object.assign(run, { end: renderDispatchLine(end), endedAt: timestamp(status?.endedAt), observedEndAt: Date.now(),
@@ -275,7 +303,9 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
           needsDecision: end.needsDecision === true || legacy && status?.needsDecision === true });
         sweep();
       }
-      else if (loss) Object.assign(run, { end: `lost: ${loss}`, observedEndAt: Date.now(), lost: true, reason: 'lost' });
+      else if (relevant.some(event => event.type === 'dispatch.unknown-run')) {
+        Object.assign(run, { end: `lost: unknown run ${run.id}`, observedEndAt: Date.now(), lost: true, reason: 'lost' });
+      }
       else {
         const activity = relevant.find(event => event.type === 'dispatch.running');
         if (activity) run.activity = renderDispatchLine(activity);
@@ -342,17 +372,18 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
           },
         });
         const started = events.find(event => event.type === 'dispatch.started');
-        if (!started) {
+        const pending = events.find(event => event.type === 'dispatch.detached');
+        if (!started && !pending) {
           const failure = events.find(event => event.type === 'dispatch.failed' || event.type === 'dispatch.start-failed');
           throw new Error(failure ? renderDispatchLine(failure) : 'The role did not start.');
         }
-        const status = timing.get(started.id);
-        const run = runs.get(started.id) || { id: started.id, seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now() };
+        const runId = (started ?? pending).id, status = timing.get(runId);
+        const run = runs.get(runId) || { id: runId, seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now() };
         if (status?.routing) run.routing = status.routing;
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
-        runs.set(started.id, run);
+        runs.set(runId, run);
         lastRoleCwd = work;
-        return { id: started.id, seat, started: renderDispatchStart(started),
+        return { id: runId, seat, ...(started ? { started: renderDispatchStart(started) } : { state: 'starting' }),
           ...(reason && { instruction: `${reason} 已将此席位改派给 Claude 模型 ${roleFallback.model}。` }),
           ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base, baseSource: checkout.baseSource }) };
       } catch (error) {

@@ -56,6 +56,22 @@ test('native mode refuses every role and names conductor mode', async t => {
   assert.equal(fake.calls.length, 0);
 });
 
+test('the versioned mode is authoritative, with the old mode used only when it is absent', async t => {
+  const { env, folder } = session(t, 'conductor');
+  const file = env.AGENTRIX_BOOTSTRAP + '.mode.env';
+  const fake = engine(() => startEvent('mode-run'));
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  const task = { seat: 'reviewer', title: 'Inspect', brief: 'Read', readOnly: true };
+  for (const fields of ['version=1\nmode=native', 'version=2\nmode=conductor']) {
+    fs.writeFileSync(file, 'format=agentrix.session-mode\n' + fields + '\n');
+    await assert.rejects(tools.start_role(task), /Conductor mode is off/);
+  }
+  fs.unlinkSync(env.AGENTRIX_BOOTSTRAP + '.mode');
+  fs.writeFileSync(file, 'format=agentrix.session-mode\nversion=1\nmode=conductor\n');
+  assert.equal((await tools.start_role(task)).id, 'mode-run');
+  assert.equal(fake.calls.length, 1);
+});
+
 test('a remote Codex sandbox probe requires command output even with a successful exit', async () => {
   const check = (stdout, stderr) => sshRoleReadiness('/remote/project', { PATH: '/remote/bin' }, async () => '/remote/bin/codex',
     (file, args, options, callback) => {
@@ -242,7 +258,7 @@ test('start_role returns the engine error for a missing working directory', asyn
   assert.deepEqual(await tools.roles_status(), { roles: [], earlierEnded: 0, omittedRecentEnded: 0 });
 });
 
-test('start_role creates local worktrees from HEAD, shares dependencies and rejects invalid requests', async t => {
+test('start_role creates local worktrees from HEAD, copies private dependencies and rejects invalid requests', async t => {
   const { env, folder, cleanups } = session(t, 'conductor');
   const project = path.join(folder, 'project');
   fs.mkdirSync(project);
@@ -263,7 +279,6 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   const attempts = await Promise.allSettled([tools.start_role(request), tools.start_role(request)]);
   const created = attempts.filter(result => result.status === 'fulfilled');
   for (const { value } of created) cleanups.push(() => {
-    fs.unlinkSync(path.join(value.cwd, 'node_modules'));
     git(['worktree', 'remove', '--force', value.cwd]);
   });
   assert.equal(created.length, 1);
@@ -276,13 +291,15 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   assert.equal(git(['branch', '--show-current'], cwd), branch);
   assert.equal(git(['rev-parse', 'HEAD'], cwd), head);
   assert.equal(fs.readFileSync(path.join(cwd, 'source'), 'utf8'), 'committed');
-  assert.equal(fs.realpathSync.native(path.join(cwd, 'node_modules')), fs.realpathSync.native(modules));
+  const workModules = path.join(cwd, 'node_modules');
+  assert.equal(fs.lstatSync(workModules).isSymbolicLink(), false);
+  fs.writeFileSync(path.join(workModules, 'fixture'), 'private');
+  assert.equal(fs.readFileSync(path.join(modules, 'fixture'), 'utf8'), 'shared');
   assert.equal(fake.calls[0][fake.calls[0].indexOf('--cwd') + 1], cwd);
   assert.equal(git(['status', '--porcelain'], cwd), '');
 
   const linked = await tools.start_role({ ...request, worktree: 'second-link' });
   cleanups.push(() => {
-    fs.unlinkSync(path.join(linked.cwd, 'node_modules'));
     git(['worktree', 'remove', '--force', linked.cwd]);
   });
   assert.equal(git(['status', '--porcelain'], linked.cwd), '');
@@ -311,6 +328,7 @@ test('start_role bases a new worktree on the lead checkout or a verified explici
   fs.writeFileSync(path.join(lead, 'source'), 'uncommitted lead change');
   const modules = path.join(project, 'node_modules');
   fs.mkdirSync(modules);
+  fs.writeFileSync(path.join(modules, 'fixture'), 'shared');
   const fake = engine(args => startEvent(path.basename(args[args.indexOf('--cwd') + 1])));
   const { tools } = createRoleTools({ env, cwd: project, engine: fake.run, tempRoot: folder });
   const task = { seat: 'developer', title: 'Build', brief: 'Build it', allow: ['source'] };
@@ -330,13 +348,13 @@ test('start_role bases a new worktree on the lead checkout or a verified explici
   ]) {
     const started = await tools.start_role({ ...task, cwd, worktree, from });
     cleanups.push(() => {
-      fs.unlinkSync(path.join(started.cwd, 'node_modules'));
       git(['worktree', 'remove', '--force', started.cwd]);
     });
     assert.equal(started.base, git(['rev-parse', '--short', expected]));
     assert.equal(git(['rev-parse', 'HEAD'], started.cwd), expected);
     assert.equal(fs.readFileSync(path.join(started.cwd, 'source'), 'utf8'), expected === leadHead ? 'lead commit' : 'committed');
-    assert.equal(fs.realpathSync.native(path.join(started.cwd, 'node_modules')), fs.realpathSync.native(modules));
+    assert.equal(fs.readFileSync(path.join(started.cwd, 'node_modules', 'fixture'), 'utf8'), 'shared');
+    assert.equal(fs.lstatSync(path.join(started.cwd, 'node_modules')).isSymbolicLink(), false);
   }
 });
 
@@ -431,15 +449,13 @@ test('start_role rolls back a failed worktree checkout or launch and allows a re
     } finally {
       mock?.mock.restore();
       if (failure === 'checkout') fs.unlinkSync(attributes);
-      const work = worktrees.at(-1), link = work && path.join(work, 'node_modules');
-      if (link && fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(link);
+      const work = worktrees.at(-1);
       if (work && fs.existsSync(work)) git(['worktree', 'remove', '--force', work]);
     }
   }
   const { tools } = createRoleTools({ env, cwd: folder, engine: engine(() => startEvent('retry')).run });
   const started = await tools.start_role(request);
   cleanups.push(() => {
-    fs.unlinkSync(path.join(started.cwd, 'node_modules'));
     git(['worktree', 'remove', '--force', started.cwd]);
   });
   assert.equal(started.branch, 'work/retry');
@@ -817,33 +833,26 @@ test('roles_status caps recent endings by settlement time and writes each summar
   assert.equal((await roles.tools.role_result({ id: '12' })).title, title);
 });
 
-test('a missing work folder or unknown receipt ends its role and stops future refreshes', async t => {
+test('a wait failure leaves every role running and only its unknown receipt ends a role', async t => {
   const { env, folder } = session(t, 'conductor');
-  for (const [line, reason] of [
-    [failEvent('ENOENT: missing working directory'), 'ENOENT: missing working directory'],
-    [dispatchEvent('unknown-run', 'missing'), 'unknown run missing'],
-  ]) {
-    const fake = engine(args => {
-      if (args.includes('--detach')) {
-        const out = args[args.indexOf('--out') + 1];
-        t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }));
-        fs.writeFileSync(out, 'Unconfirmed answer');
-        return startEvent('missing');
-      }
-      return line;
-    });
-    const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
-    await tools.start_role({ seat: 'developer', title: 'Inspect', brief: 'Read', readOnly: true });
-    const [lost] = await tools.wait_roles();
-    assert.equal(lost.state, 'ended');
-    assert.equal(lost.end, `lost: ${reason}`);
-    assert.deepEqual(await tools.roles_status(), { roles: [
-      { id: 'missing', seat: 'developer', title: 'Inspect', state: 'ended', seconds: lost.seconds, reason: 'lost', refusedCount: 0 },
-    ], earlierEnded: 0, omittedRecentEnded: 0 });
-    assert.deepEqual(await tools.wait_roles(), []);
-    assert.equal((await tools.role_result({ id: 'missing' })).answer, null);
-    assert.equal(fake.calls.length, 2);
-  }
+  let waitResponse = failEvent('ENOENT: missing working directory');
+  const fake = engine(args => {
+    if (!args.includes('--detach')) return waitResponse;
+    const out = args[args.indexOf('--out') + 1];
+    t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }));
+    fs.writeFileSync(out, 'Answer after recovery');
+    return startEvent(args[args.indexOf('--title') + 1]);
+  });
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  for (const title of ['missing', 'recovered']) await tools.start_role({ seat: 'developer', title, brief: 'Read', readOnly: true });
+  assert.deepEqual((await tools.roles_status()).roles.map(role => role.state), ['running', 'running']);
+  waitResponse = [dispatchEvent('unknown-run', 'missing'), endEvent('recovered')];
+  const roles = new Map((await tools.wait_roles()).map(role => [role.id, role]));
+  assert.equal(roles.get('missing').end, 'lost: unknown run missing');
+  assert.equal(roles.get('recovered').reason, undefined);
+  assert.equal((await tools.role_result({ id: 'missing' })).answer, null);
+  assert.equal((await tools.role_result({ id: 'recovered' })).answer, 'Answer after recovery');
+  assert.deepEqual(await tools.wait_roles(), []);
 });
 
 test('MCP starts roles concurrently and answers a status request while a wait is pending', { timeout: 5000 }, async t => {

@@ -10,6 +10,7 @@ const { createInterface } = require('node:readline');
 const { createEventServer } = require('../electron/events.cjs');
 const { occupyHookPipe, powershell } = require('./fixtures/busy-hook-pipe.cjs');
 const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 
 const integration = path.join(__dirname, '../integration');
 const helper = path.join(integration, 'agent-event.cjs');
@@ -17,6 +18,47 @@ const windowsPipe = '\\\\.\\pipe\\';
 const permissionInput = { hook_event_name: 'PermissionRequest', session_id: 'worker', tool_name: 'Bash', tool_input: { command: 'node --test' } };
 const importSource = source => 'data:text/javascript,' + encodeURIComponent(source);
 const env = () => ({ ...dispatchEnvironment(), NODE_OPTIONS: '' });
+
+test('the shell launch event allows the host to finish its note after the ordinary event deadline', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sockets = [];
+  const { send } = loadWithStubs(helper, (name, load) => name === 'node:net' ? { connect() {
+    const socket = new EventEmitter();
+    socket.ends = [];
+    socket.end = data => socket.ends.push(JSON.parse(data));
+    socket.destroyed = false;
+    socket.destroy = () => { socket.destroyed = true; };
+    sockets.push(socket);
+    return socket;
+  } } : load(name));
+  const events = [{ type: 'agent-started' }, { type: 'shell-prompt' }];
+  const sent = events.map(event => send('fixture', event));
+  for (const socket of sockets) socket.emit('connect');
+  t.mock.timers.tick(750);
+  assert.deepEqual(sockets.map(socket => [socket.destroyed, ...socket.ends]), [[false, events[0]], [true, events[1]]]);
+  sockets[0].emit('close');
+  await Promise.all(sent);
+  assert.equal(sockets[0].destroyed, true);
+});
+
+test('the Windows seat bridge publishes the observation as well as the decision', { skip: !powershell, timeout: 30000 }, async t => {
+  const events = new EventEmitter();
+  const receiver = await createEventServer(event => events.emit('report', event));
+  t.after(() => receiver.close());
+  const report = once(events, 'report', { signal: t.signal });
+  const input = { hook_event_name: 'PreToolUse', session_id: 'fixture', tool_name: 'Agent', tool_use_id: 'tool-fixture',
+    tool_input: { description: '[designer] Design the layout', prompt: 'Use a grid' } };
+  const bridge = spawn(powershell, bridgeArgs(receiver.name, 'seat-routing'), { windowsHide: true,
+    env: { ...env(), AGENTRIX_SEATS: JSON.stringify({ designer: { model: 'sonnet', effort: 'high' } }) }, stdio: ['pipe', 'pipe', 'inherit'] });
+  t.after(() => { if (bridge.exitCode === null) bridge.kill(); });
+  const output = createInterface({ input: bridge.stdout });
+  t.after(() => output.close());
+  const stdout = once(output, 'line', { signal: t.signal });
+  bridge.stdin.end(JSON.stringify(input));
+  const [[line], [event]] = await Promise.all([stdout, report]);
+  assert.equal(JSON.parse(line).hookSpecificOutput.updatedInput.model, 'sonnet');
+  assert.deepEqual([event.type, event.phase, event.toolUseId, event.model], ['claude-seat-input', 'pre', 'tool-fixture', 'sonnet']);
+});
 
 // A loaded runner can take seconds to start PowerShell at all, so the bound is the measured startup plus the allowance:
 // it still catches a hook that lingers on a dead pipe, which costs five seconds or more.

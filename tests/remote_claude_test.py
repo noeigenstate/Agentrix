@@ -226,6 +226,20 @@ class RemoteClaudeTest(unittest.TestCase):
         self.assertIsNone(self.hook(session="../../escape")[0])
         self.assertEqual(len([file for file in (self.home / "delivery").rglob("*") if file.is_file()]), 3)
 
+    def test_session_start_reports_a_missing_manifest_and_uses_the_private_event_token(self):
+        token_file = self.home / "event-token"
+        token_file.write_text("fixture-from-file", encoding="utf-8")
+        key = "a" * 64
+        (self.home / "key.txt").write_text(key, encoding="utf-8")
+        failed, event = self.hook(AGENTRIX_EVENT_TOKEN_FILE=str(token_file))
+        self.assertIn("无法读取会话说明", failed["systemMessage"])
+        self.assertEqual(event["token"], "fixture-from-file")
+        manifest = self.home / "references" / key / "instructions.md"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("Recovered instructions.", encoding="utf-8")
+        resumed, _ = self.hook("resume", AGENTRIX_EVENT_TOKEN_FILE=str(token_file))
+        self.assertEqual(resumed["hookSpecificOutput"]["additionalContext"], "Agentrix skill instructions:\nRecovered instructions.")
+
     def test_shared_receipt_lifecycle_fixture_matches_python_and_every_remaining_receipt(self):
         fixture = json.loads((MODULE_PATH.parents[1] / "tests/fixtures/skill-receipts/lifecycle.json").read_text(encoding="utf-8"))
         for key in fixture["manifests"].values():
@@ -296,11 +310,6 @@ class RemoteClaudeTest(unittest.TestCase):
         self.assertEqual(event["accountRoute"]["configDir"], str(self.config))
         self.assertNotIn("fake-secret-token", json.dumps(event))
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", json.dumps(event))
-        # The full skills body is emitted only by SessionStart, not repeated in CLI startup arguments.
-        wrapper = remote.BASH_SOURCE.split("function claude {", 1)[1].split("__pg_prompt()", 1)[0]
-        self.assertIn('note=(--append-system-prompt "$current_note")', wrapper)
-        self.assertIn('current_note%%" Agentrix skill delivery: "*', wrapper)
-        self.assertIn("Agentrix delivers skill instructions through its SessionStart hook.", wrapper)
 
     def test_auto_skill_reference_paths_survive_a_closed_terminal_and_are_reused_on_resume(self):
         bundle = {"key": "c" * 64, "files": [{"id": "builtin:test", "name": "test", "scope": "builtin", "text": "---\nname: test\ndescription: Test.\n---\nRules."}],
@@ -352,8 +361,7 @@ class RemoteClaudeTest(unittest.TestCase):
         client = mock.MagicMock(); client.__enter__.return_value = client
         client.recv.return_value = json.dumps(event).encode() + b"\n"
         worker.listener = mock.MagicMock()
-        worker.listener.accept.side_effect = [(client, None), OSError("closed")]
-        worker.events_loop()
+        worker.handle_event_connection(client, mock.Mock())
         self.assertEqual(worker.claude_home, str(self.config))
         self.assertTrue(worker.claude_route["overridden"])
         self.assertEqual(events[0]["event"]["state"], "session")

@@ -238,7 +238,7 @@ with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
         result = launch('claude', 'words', note=raw_note)
         assert result.returncode == 0, result.stderr
         assert result.stdout.split(b'\0')[2:4] == [b'arg=--append-system-prompt', ('arg=' + expected_note).encode('utf-8')]
-    session = object.__new__(worker['Worker'])
+    session = worker['Worker'](lambda _: None)
     session.temp = directory
     session.skill_note_sequence = 1
     session.skill_note_ready = threading.Event()
@@ -398,6 +398,10 @@ with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
     with contextlib.ExitStack() as stack:
         for fixture in fixtures: stack.enter_context(fixture)
         env, _ = worker.agent_environment('', native=True)
+    assert 'AGENTRIX_TOKEN' not in env
+    token_file = pathlib.Path(env['AGENTRIX_EVENT_TOKEN_FILE'])
+    assert token_file.read_text(encoding='utf-8') == worker.token
+    if sys.platform != 'win32': assert token_file.stat().st_mode & 0o777 == 0o600
     bootstrap = pathlib.Path(env['AGENTRIX_BOOTSTRAP'])
     assert json.loads(bootstrap.with_suffix('.json.seats').read_bytes())['seats'] == new
     launch = bootstrap.with_suffix('.json.launch-seats')
@@ -489,6 +493,80 @@ claude
     ], result.stdout + result.stderr
     assert result.stderr.splitlines().count('座位文件版本不受支持') == 1, result.stderr
 `;
+
+test('the remote Bash wrapper reports launch failures, uses a login PATH when needed, and tolerates empty launch arrays under nounset', { timeout: 90000 }, t => {
+  const output = pythonProbe(t, String.raw`
+import os, pathlib, runpy, shutil, subprocess, sys, tempfile
+module = runpy.run_path(sys.argv[1])
+bash = os.environ.get('AGENTRIX_TEST_BASH') or shutil.which('bash', path='/usr/bin:/bin')
+if not bash:
+    print('SKIP Bash missing')
+    sys.exit(0)
+with tempfile.TemporaryDirectory(prefix='remote-launch-') as directory:
+    root = pathlib.Path(directory)
+    rc = root / 'agentrix.bash'
+    rc.write_bytes(module['BASH_SOURCE'].encode())
+    tools = root / 'login-tools'
+    tools.mkdir()
+    cli = tools / 'claude'
+    cli.write_bytes(b'#!/bin/sh\ncommand -v launch-marker >/dev/null || exit 89\nprintf "CLI=%s\\n" "$*"\n')
+    cli.chmod(0o700)
+    marker = tools / 'launch-marker'
+    marker.write_bytes(b'#!/bin/sh\nexit 0\n')
+    marker.chmod(0o700)
+    worker = module['Worker'](lambda _: None)
+    worker.temp = directory
+    worker.write_claude_lead({'model':'sonnet','effort':'high','conductor':True})
+    env = {key: value for key, value in os.environ.items() if not key.startswith('AGENTRIX_') and key != 'BASH_ENV'}
+    env.update(HOME=root.as_posix(), AGENTRIX_ROOT=root.as_posix(), AGENTRIX_PYTHON=pathlib.Path(sys.executable).as_posix(),
+               AGENTRIX_NOTIFY_FILE=(root/'notify.py').as_posix(), AGENTRIX_READING_NOTE_FILE=(root/'note').as_posix(),
+               AGENTRIX_CLAUDE_LEAD_FILE=(root/'dispatch.json.lead').as_posix(), AGENTRIX_CLAUDE_BACKGROUND_FILE=(root/'policy').as_posix())
+    probe = r"""
+source "$1"
+set -u
+PATH=/usr/bin:/bin
+__pg_login_path="$PWD/login-tools:$PATH"
+__pg_emit() {
+  if [[ $1 == agent-started || $1 == agent-exited ]]; then printf 'EVENT=%s:%s\n' "$1" "$2"; fi
+}
+fixture_plan() {
+  if [[ $4 == classify ]]; then
+    if [[ $failure == classify ]]; then return 5; fi
+    local version=1 route=print
+    if [[ $failure == route ]]; then version=2; fi
+    if [[ $failure == shims ]]; then route=conversation; fi
+    printf 'format=agentrix.launch-route\nversion=%s\nroute=%s\n' "$version" "$route"
+  else
+    local version=1
+    if [[ $failure == words ]]; then version=2; fi
+    printf 'format=agentrix.launch-words\0version=%s\0' "$version"
+    if [[ $failure == wordsExit ]]; then return 9; fi
+  fi
+}
+__pg_role_node=fixture_plan __pg_role_intercept=fixture
+for failure in classify route words wordsExit inputs settings shims; do
+  if [[ $failure == settings ]]; then mktemp() { return 1; }; fi
+  if [[ $failure == shims ]]; then __pg_role_error=unavailable; fi
+  claude test
+  printf 'STATUS=%s:%s\n' "$failure" "$?"
+done
+rm -f -- dispatch.json.mode.env
+printf 'native\r\n' > dispatch.json.mode
+session_mode=
+__pg_load_mode dispatch.json.mode && printf 'MODE=%s\n' "$session_mode"
+"""
+    result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', rc.as_posix()], cwd=directory,
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=65)
+    rows = [line for line in result.stdout.decode('utf-8').splitlines() if line.startswith(('STATUS=', 'EVENT=', 'CLI=', 'MODE='))]
+    assert rows == ['STATUS=classify:5','STATUS=route:3','EVENT=agent-started:test','EVENT=agent-exited:1','STATUS=words:1',
+                    'EVENT=agent-started:test','EVENT=agent-exited:1','STATUS=wordsExit:1',
+                    'EVENT=agent-started:test','CLI=test','EVENT=agent-exited:0','STATUS=inputs:0','EVENT=agent-started:test',
+                    'EVENT=agent-exited:1','STATUS=settings:1','STATUS=shims:1','MODE=native'], (rows, result.stderr.decode('utf-8'))
+    messages = result.stderr.decode('utf-8').splitlines()
+    assert len(messages) == 6 and all('退出码' in message for message in messages), messages
+`, 80000);
+  if (output?.includes('SKIP Bash missing')) t.skip('Bash is unavailable');
+});
 
 test('SSH Bash applies Fast and Ultracode on conversation launches and reads legacy lead files', {
   skip: process.platform === 'win32' && !process.env.AGENTRIX_TEST_BASH,

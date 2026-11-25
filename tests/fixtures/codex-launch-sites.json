@@ -588,8 +588,8 @@
     "id": "integration/remote-worker.py:1a8d3d328426de1084e6f45c"
   },
   {
-    "text": "subprocess.run([\"git\", \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3)",
-    "id": "integration/remote-worker.py:535446cea9d2ef67c9a8179f"
+    "text": "subprocess.run([\"git\", \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)",
+    "id": "integration/remote-worker.py:36c3bd134280309afaf5b2fe"
   },
   {
     "text": "subprocess.run([node, \"-e\", check], env=dict(os.environ, PATH=login_path), cwd=self.coding_root,\n                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)",

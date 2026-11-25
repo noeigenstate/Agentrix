@@ -436,6 +436,29 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
   assert.equal(simultaneous.filter(result => result.stdout).length, 1, 'concurrent hook processes share the exclusive receipt');
 });
 
+test('SessionStart reports a missing manifest and delivers it when the session resumes', async t => {
+  const f = await fixture(t), noteFile = path.join(f.root, 'note.txt'), manifest = path.join(f.root, 'late.md');
+  fs.writeFileSync(noteFile, 'Note. ' + deliveryMarker({ manifest, fingerprint: digest('late') }));
+  const hook = path.join(__dirname, '../integration/agent-event.cjs');
+  const address = process.platform === 'win32' ? '\\\\.\\pipe\\absent-agentrix-skill' : path.join(f.root, 'absent.sock');
+  const commands = [[process.execPath, [hook, 'claude-hook', address, 'project', 'key', 'session']]];
+  if (process.platform === 'win32') commands.push([
+    path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, '../integration/claude-hook.ps1'),
+      '-PipeName', 'absent-agentrix-skill', '-ProjectId', 'project', '-SessionKey', 'key', '-Kind', 'session'],
+  ]);
+  for (const [index, [file, args]] of commands.entries()) {
+    const payload = { session_id: 'fixture-' + index, source: 'startup' };
+    const failed = await hookProcess(file, args, payload, noteFile);
+    assert.equal(failed.code, 0);
+    assert.match(JSON.parse(failed.stdout).systemMessage, /无法读取会话说明/);
+    fs.writeFileSync(manifest, 'Recovered instructions.');
+    const recovered = await hookProcess(file, args, { ...payload, source: 'resume' }, noteFile);
+    assert.equal(JSON.parse(recovered.stdout).hookSpecificOutput.additionalContext, 'Agentrix skill instructions:\nRecovered instructions.');
+    fs.unlinkSync(manifest);
+  }
+});
+
 test('Unix Claude wrapper keeps the startup note on the command line, with skills only in SessionStart; the shell never runs Codex', { skip: process.platform === 'win32' }, async t => {
   const terminalSession = '11111111-1111-4111-8111-111111111111';
   const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`);

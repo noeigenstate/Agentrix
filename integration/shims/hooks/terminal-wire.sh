@@ -1,4 +1,27 @@
 # Shared by the local Bash 3.2 and zsh integrations.
+__pg_launch_error() {
+  printf 'Agentrix：%s（退出码 %s）。%s。\n' "$2" "$1" "$3" >&2
+}
+
+__pg_write_settings() {
+  local file
+  file=$(mktemp "$1" 2>/dev/null) || return 1
+  if ! printf '%s' "$2" 2>/dev/null > "$file"; then rm -f -- "$file"; return 1; fi
+  printf '%s' "$file"
+}
+
+__pg_alias_path() {
+  local file=$1 prefix=${1%%/*} home
+  if [[ $file == '~/'* ]]; then
+    file=$HOME/${file#*/}
+  elif [[ $file == '~'*/* && ${prefix#\~} != *[!a-zA-Z0-9_.-]* ]]; then
+    # Evaluate only the validated tilde prefix; the path itself remains literal.
+    eval "home=$prefix" 2>/dev/null || return 1
+    file=$home/${file#*/}
+  fi
+  printf '%s' "$file"
+}
+
 # Output fields are local to the caller. This parser is also used for classify stdout.
 __pg_read_fields() {
   local expected=$1 row key value seen=' ' format= version=
@@ -39,10 +62,11 @@ __pg_session_mode() {
   local file=${AGENTRIX_BOOTSTRAP-}.mode.env wire_mode=
   [[ -n ${AGENTRIX_BOOTSTRAP-} ]] || return 1
   if [[ ! -e $file && ! -L $file ]]; then
-    cat -- "${file%.env}" 2>/dev/null
-    return
+    wire_mode=$(cat -- "${file%.env}" 2>/dev/null) || return
+    wire_mode=${wire_mode%$'\r'}
+  else
+    __pg_read_wire_file "$file" agentrix.session-mode || return
   fi
-  __pg_read_wire_file "$file" agentrix.session-mode || return
   case $wire_mode in native|conductor) printf '%s' "$wire_mode";; *) return 2;; esac
 }
 
@@ -64,8 +88,11 @@ __pg_read_lead() {
 }
 
 __pg_launch_words() {
-  local record key value format= version=
+  local record key value format= version= completed=
   while IFS= read -r -d '' record; do
+    [[ -z $completed ]] || return 2
+    # The wrapper appends an empty record only after the producer exits successfully.
+    if [[ -z $record && ${1-} == require-end ]]; then completed=1; continue; fi
     [[ $record == *=* ]] || return 2
     key=${record%%=*}; value=${record#*=}
     case $key in
@@ -76,5 +103,5 @@ __pg_launch_words() {
       arg) launch_args+=("$value");;
     esac
   done
-  [[ -z $record && $format == agentrix.launch-words && $version == 1 ]]
+  [[ -z $record && $format == agentrix.launch-words && $version == 1 && ( ${1-} != require-end || $completed == 1 ) ]]
 }

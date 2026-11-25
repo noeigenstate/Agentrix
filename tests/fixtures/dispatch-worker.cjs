@@ -33,6 +33,12 @@ async function main() {
   // Stays until the test has seen the helper's start line (bounded, so a broken helper cannot hang the test run).
   for (const end = Date.now() + 60000; fixture.release && !fs.existsSync(fixture.release) && Date.now() < end;) await delay(10);
   if (fixture.hold) await delay(fixture.hold);
+  if (fixture.holdStderr) {
+    const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 30000)'],
+      { stdio: ['ignore', 'ignore', 'inherit'], windowsHide: true });
+    fs.writeFileSync(process.env.DISPATCH_CAPTURE + '.descendant', String(child.pid));
+    child.unref();
+  }
   process.exitCode = fixture.exitCode || 0;
 }
 function appServer(fixture) {

@@ -13,7 +13,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runDetached, waitDetached,
   dispatchCompanions, RATE_INTERVAL } = require('../integration/dispatch.cjs');
 const { renderDispatchLine } = require('../integration/dispatch.cjs');
-const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
+const { DetachedRuns, DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
 const { createRoleArtifacts, sweepRoleArtifacts, RETENTION } = require('../integration/role-artifacts.cjs');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { dispatchDirectory, validDispatch, readEnvelope, WIRE_FIELDS } = require('../electron/features/agents/dispatch-events.cjs');
@@ -94,6 +94,12 @@ const records = name => require('node:fs').readFileSync(path.join(__dirname, 'fi
 const rollout = records('codex-dispatch-rollout.jsonl');
 const claude = records('claude-dispatch-stream.jsonl');
 
+test('an unavailable structured role result renders its final-text fallback', () => {
+  const { dispatchEvent } = require('../integration/dispatch.cjs');
+  const event = dispatchEvent('notice', 'fixture', { code: 'role_result_unavailable', detail: 'EACCES' });
+  assert.equal(renderDispatchLine(event), '[dispatch] role result unavailable fixture (EACCES); using final-text');
+});
+
 test('a dispatched CLI inherits shim depth and signed identity while its declaration keeps intercepted', async t => {
   const syncFs = require('node:fs');
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
@@ -168,7 +174,7 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0,
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, holdStderr = false,
   hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread,
   captureWakes = false, lab = false, readOnly = !extra.includes('--allow') } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
@@ -191,7 +197,7 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
   // hold of its own stays until the helper has printed its start (or failed-start) line, so no runner is too slow for it.
   // Outside the worker's folder: the scope check reports any file that appears there.
   const release = hold === undefined ? path.join(os.tmpdir(), `agentrix-dispatch-release-${randomUUID()}`) : null;
-  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold: hold ?? 150, release, sessionId: session, thread }));
+  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold: hold ?? 150, holdStderr, release, sessionId: session, thread }));
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
@@ -855,16 +861,19 @@ test('exit or timeout emits the unconfirmed pair before still-open stdout closes
     Object.assign(child, { pid: 0, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
     child.stdin.resume();
     let completed = false;
+    const openAtFailure = [];
     const running = run(f.args, { env: { CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: path.join(f.directory, 'bootstrap.json') },
       // A stand-in Claude Code: the injected launch below is what runs, whatever this machine has installed.
       stdout: { write() {} }, startTimeout: cause === 'timeout' ? 20 : 30000, locate: async () => null, locateClaude: async () => 'stand-in-claude',
+      onEvent: event => { if (event.type === 'dispatch.start-failed') openAtFailure.push(!child.stdout.destroyed); },
       launch: () => {
         if (cause === 'exit') queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0); });
         return child;
       } }).then(code => { completed = true; return code; });
     try {
       await until(() => f.events.length === 2);
-      assert.equal(completed, false, 'failure reports do not wait for stdout to close');
+      assert.deepEqual(openAtFailure, [true], 'failure reports do not wait for stdout to close');
+      if (cause === 'timeout') assert.equal(completed, false, 'a timeout alone is not evidence the worker exited');
       assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
       assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[1].reason, 'unconfirmed');
     } finally { child.emit('close', 0, null); }
@@ -897,6 +906,96 @@ test('without bootstrap or with a stalled pipe the worker still runs and finishe
   assert.equal(await run(f.args, { env: { ...dispatchEnvironment(), CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap, DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
     stdout: { write: f.releaseOn }, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
   assert.ok(Date.now() - began < 2000, 'the worker never awaits pipe acknowledgments');
+});
+
+test('unreadable bootstrap fields warn once while the worker still finishes', async t => {
+  for (const contents of ['{}', 'x'.repeat(256 * 1024 + 1)]) {
+    const f = await fixture(t, claude.map(record => ({ record })), { agent: 'claude', bootstrap: false, hold: 0,
+      environment: async folder => {
+        const file = path.join(folder, 'invalid-bootstrap.json');
+        await fs.writeFile(file, contents);
+        return { AGENTRIX_BOOTSTRAP: file };
+      },
+      extra: ['--events', 'jsonl'],
+    });
+    const { code, stdout } = await f.finished;
+    assert.equal(code, 0);
+    const events = stdout.trim().split('\n').map(JSON.parse);
+    assert.deepEqual(events.filter(event => event.code === 'events_undelivered').map(event => event.detail), ['bootstrap_invalid']);
+    assert.equal(events.find(event => event.type === 'dispatch.ended').reason, 'exit');
+  }
+});
+
+test('a failed final scope read after worker confirmation still publishes its routing and error end', async t => {
+  const f = await fixture(t, claude.map(record => ({ record })), { agent: 'claude', hold: 0 });
+  assert.equal((await f.finished).code, 0);
+  let reads = 0;
+  const { run } = loadWithStubs(helper, (name, load) => {
+    const original = load(name);
+    if (!name.endsWith('boundaries.cjs')) return original;
+    return { ...original, snapshot: (...args) => {
+      if (++reads > 1) throw new Error('fixture final scope read failed');
+      return original.snapshot(...args) ?? { root: args[0], status: [] };
+    } };
+  });
+  const events = [], bootstrap = path.join(f.directory, 'bootstrap.json');
+  const code = await run(f.args, { locateClaude: async () => null,
+    env: { ...dispatchEnvironment(), AGENTRIX_BOOTSTRAP: bootstrap,
+      DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
+    resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }),
+    onEvent: event => events.push(event),
+  });
+  assert.equal(code, 1);
+  const starts = events.filter(event => event.type === 'dispatch.started');
+  assert.equal(starts.length, 1);
+  assert.equal(events.find(event => event.code === 'finalization_failed')?.detail, 'fixture final scope read failed');
+  assert.deepEqual(events.filter(event => event.type === 'dispatch.ended').map(event => [event.exitCode, event.reason]), [[1, 'error']]);
+  const binding = JSON.parse(await fs.readFile(bootstrap, 'utf8'));
+  const outbox = new DispatchOutbox({ directory: dispatchDirectory(bootstrap), id: starts[0].id, ...binding });
+  assert.deepEqual(outbox.pending().filter(event => event.type === 'dispatch-end').map(event => [event.exitCode, event.reason, event.verdict]), [[1, 'error', 'ok']]);
+});
+
+test('the dispatch CLI handles a rejected command with one diagnostic line', async t => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-rejected-command-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const preload = path.join(folder, 'reject.cjs');
+  await fs.writeFile(preload, `
+    const load = require('node:module')._load;
+    require('node:module')._load = function(filename, ...args) {
+      const result = load.call(this, filename, ...args);
+      return filename.endsWith('intercept.cjs') ? { ...result, intercept: async () => { throw new Error('fixture command failed'); } } : result;
+    };
+  `);
+  const { promisify } = require('node:util');
+  const run = promisify(require('node:child_process').execFile);
+  await assert.rejects(run(process.execPath, ['--require', preload, helper, 'intercept'], { env: dispatchEnvironment() }), {
+    code: 1, stdout: '', stderr: '[dispatch] fixture command failed\n',
+  });
+});
+
+test('Claude stderr capacity reports stay visible after an opening bracket', async t => {
+  const f = await fixture(t, [{ record: claude[0] }, { stderr: true, raw: '{\nmodel at capacity\n' }], { agent: 'claude', hold: 0, exitCode: 7,
+    extra: ['--events', 'jsonl'] });
+  const { code, stdout } = await f.finished;
+  assert.equal(code, 7);
+  assert.equal(stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'dispatch.ended').reason, 'capacity');
+});
+
+test('a descendant holding stderr open cannot keep a confirmed role from settling', { timeout: 15000 }, async t => {
+  let f;
+  t.after(async () => {
+    if (!f) return;
+    const pid = await fs.readFile(f.capture + '.descendant', 'utf8').catch(() => '');
+    if (pid) {
+      try { process.kill(Number(pid), 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+  });
+  f = await fixture(t, claude.map(record => ({ record })), { agent: 'claude', hold: 0, holdStderr: true, extra: ['--events', 'jsonl'] });
+  const { code, stdout } = await f.finished;
+  assert.equal(code, 0);
+  assert.match(await fs.readFile(f.capture + '.descendant', 'utf8'), /^\d+$/);
+  const ended = stdout.trim().split('\n').map(JSON.parse).find(event => event.type === 'dispatch.ended');
+  assert.deepEqual([ended.exitCode, ended.reason], [0, 'exit']);
 });
 
 // The planner's output is the only place it learns that Agentrix heard nothing; the worker's own run is unaffected (no event waits for the pipe).

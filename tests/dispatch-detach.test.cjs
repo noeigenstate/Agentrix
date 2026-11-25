@@ -154,12 +154,15 @@ test('a detached Claude fallback keeps its declared route in the child receipt',
   assert.deepEqual(options.expectedSeat, { model: 'sonnet', effort: 'medium', fast: false });
 });
 
-test('unadmitted helper timeout records settlement after requesting its stop', async t => {
+test('unadmitted helper timeout records settlement after observing its exit', async t => {
   const store = receipts(t); let id, killed = false;
   store.observe = async () => null;
   const code = await startDetached(['claude', '--detach', '--role', 'review', '--title', 'Synthetic timeout', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', store.directory, '--brief', 'brief', '--out', 'out'], {
     store, stdout: { write() {} }, launch: (_file, args) => {
-      id = path.basename(args.at(-1), '.json'); const child = new EventEmitter(); child.unref = () => {}; child.kill = () => { killed = true; };
+      id = path.basename(args.at(-1), '.json');
+      const child = new EventEmitter();
+      child.unref = () => {};
+      child.kill = () => { killed = true; queueMicrotask(() => child.emit('exit', 1, null)); };
       queueMicrotask(() => child.emit('spawn')); return child;
     },
   });
@@ -339,6 +342,57 @@ test('a fast helper exit cannot overwrite a finished receipt through the parent 
     },
   });
   assert.equal(code, 0); assert.equal(disk.read(id).exitCode, 0); assert.match(disk.read(id).endedLine, /exit 0/);
+});
+
+test('admission timeout waits for helper exit, keeps a concurrently finished receipt and reports the configured deadline', async t => {
+  const store = receipts(t), disk = new DetachedRuns(store.directory);
+  const args = ['claude', '--detach', '--role', 'review', '--title', 'Fixture', '--model', 'sonnet', '--effort', 'high',
+    '--permission', 'plan', '--cwd', store.directory, '--brief', 'brief', '--out', 'out'];
+  store.observe = async () => null;
+  for (const completed of [true, false]) {
+    const events = [];
+    let id;
+    const code = await startDetached(args, {
+      store, timeout: 2500, onEvent: event => events.push(event), launch: (_file, words) => {
+        id = path.basename(words.at(-1), '.json');
+        const child = new EventEmitter();
+        child.unref = () => {};
+        child.kill = () => {
+          queueMicrotask(async () => {
+            if (completed) await disk.update(id, { started: startEvent(id), ended: endEvent(id), settled: true, exitCode: 0 });
+            child.emit('exit', completed ? 0 : 1, null);
+          });
+        };
+        queueMicrotask(() => child.emit('spawn'));
+        return child;
+      },
+    });
+    assert.equal(code, completed ? 0 : 1);
+    assert.equal(disk.read(id).exitCode, code);
+    if (completed) assert.equal(events[0].type, 'dispatch.started');
+    else {
+      assert.equal(events[0].type, 'dispatch.start-failed');
+      assert.match(renderDispatchLine(events[0]), /within 2\.5 s/);
+    }
+  }
+});
+
+test('an unreadable receipt stays running while other selected receipts settle', async t => {
+  const store = receipts(t), damaged = randomUUID(), healthy = randomUUID();
+  for (const id of [damaged, healthy]) store.create({ id, createdAt: Date.now() });
+  const initial = store.read(damaged);
+  fs.writeFileSync(store.file(damaged), JSON.stringify({ ...initial, version: 27 }));
+  await store.update(healthy, { settled: true, ended: endEvent(healthy), exitCode: 0 });
+  const events = [];
+  assert.equal(await waitDetached({ ids: [damaged, healthy], timeout: 0 }, { store, onEvent: event => events.push(event) }), 75);
+  assert.deepEqual(events.filter(event => event.type !== 'dispatch.notice').map(event => [event.type, event.id]), [
+    ['dispatch.ended', healthy], ['dispatch.running', damaged],
+  ]);
+  fs.writeFileSync(store.file(damaged), JSON.stringify(initial));
+  await store.update(damaged, { settled: true, ended: endEvent(damaged), exitCode: 0 });
+  assert.equal(await waitDetached({ ids: [damaged], timeout: 0 }, { store, onEvent: event => events.push(event) }), 0);
+  assert.equal(events.at(-1).id, damaged);
+  assert.equal(events.at(-1).type, 'dispatch.ended');
 });
 
 test('conditional parent settlement refuses a transient fresh read and preserves an ended receipt', async t => {

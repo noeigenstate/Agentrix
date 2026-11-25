@@ -114,6 +114,7 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
   assert.deepEqual(dispatchCompanions, ['role-tools.cjs', 'role-artifacts.cjs']);
   assert.ok(dispatchCompanions.every(file => !(file in carried)));
   const helper = ['dispatch.cjs', ...dispatchCompanions].reduce((bytes, file) => bytes + Buffer.byteLength(read(`integration/${file}`)), 0);
+  assert.ok(count <= 48, `SSH carries ${count} runtime modules; the limit is 48`);
   assert.ok(count <= limit('DISPATCH_MODULE_COUNT') * 0.75, `${count} runtime modules leave under 25% of DISPATCH_MODULE_COUNT`);
   assert.ok(bytes <= limit('DISPATCH_MODULE_BYTES') * 0.75, `${bytes} bytes of runtime modules leave under 25% of DISPATCH_MODULE_BYTES`);
   assert.ok(helper <= limit('DISPATCH_HELPER_BYTES') * 0.75, `the ${helper}-byte helper leaves under 25% of DISPATCH_HELPER_BYTES`);

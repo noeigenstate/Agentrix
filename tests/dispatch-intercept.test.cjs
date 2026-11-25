@@ -20,6 +20,20 @@ const powershells = [['5.1', windowsPowerShell], ['7', powershell7]];
 const wrapperSettings = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'fixture' }] }] } });
 const wrapperHooks = { channel: 'command', settings: { fallback: wrapperSettings } };
 
+const badLaunchPlan = `
+const args = process.env.AGENTRIX_INTERCEPT_ARGV ? JSON.parse(process.env.AGENTRIX_INTERCEPT_ARGV) : process.argv.slice(2);
+const action = args[2], mode = process.env.FIXTURE_FAILURE;
+if (action === 'classify') {
+  if (mode === 'classify') process.exit(5);
+  process.stdout.write('format=agentrix.launch-route\\nversion=' + (mode === 'route' ? '2' : '1') + '\\nroute=print\\n');
+} else if (action === 'json') {
+  process.stdout.write(JSON.stringify({ v: mode === 'words' ? 2 : 1, type: 'launch.words', argv: [], unset: [], env: {} }));
+} else {
+  process.stdout.write('format=agentrix.launch-words\\0version=' + (mode === 'words' ? '2' : '1') + '\\0');
+}
+if (action !== 'classify' && mode === 'wordsExit') process.exitCode = 9;
+`;
+
 function assertWrapperSettings(args, session) {
   const [flag, file, ...rest] = args;
   assert.equal(flag, '--settings');
@@ -384,6 +398,72 @@ for (const kind of ['bash', 'zsh']) test(`the ${kind} terminal's PATH has no shi
   assert.deepEqual(others, [['-p', 'say "hi" \\'], ['--version'], ['fix it']]);
 });
 
+for (const kind of ['bash', 'zsh']) test(`${kind} reports Claude launch failures and closes the event pair when setup started`, {
+  skip: !shellFor(kind) && `${kind} is unavailable`, timeout: 60000,
+}, t => {
+  const folder = temporary(t), { file: bootstrap } = sessionBootstrap(folder, { conductor: true });
+  const plan = path.join(folder, 'plan.cjs'), executable = path.join(folder, 'claude'), note = path.join(folder, 'note');
+  fs.writeFileSync(plan, badLaunchPlan);
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf "UNEXPECTED-CLI\\n"\n', { mode: 0o755 });
+  const source = kind === 'zsh' ? 'source "$1" zshrc' : 'source "$1"';
+  const script = `${source}
+__pg_intercept=$2
+__pg_send() { printf 'EVENT=%s:%s\\n' "$1" "$2"; }
+for failure in classify route words wordsExit settings shims missing; do
+  export FIXTURE_FAILURE=$failure
+  if [[ $failure == settings ]]; then mktemp() { return 1; }; fi
+  if [[ $failure == shims ]]; then __pg_shims_failed=1; fi
+  if [[ $failure == missing ]]; then __pg_shims_failed=0; __pg_program() { return 1; }; fi
+  claude -p test
+  printf 'STATUS=%s:%s\\n' "$failure" "$?"
+done`;
+  const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_NODE: posix(process.execPath),
+    AGENTRIX_CLAUDE_EXECUTABLE: posix(executable), AGENTRIX_READING_NOTE_FILE: posix(note), AGENTRIX_HOOK_FALLBACK: '{}' };
+  const result = spawnSync(shellFor(kind), ['-c', script, 'probe', posix(path.join(root, `integration/${kind}-integration.${kind}`)), posix(plan)],
+    { env, cwd: folder, encoding: 'utf8', timeout: 50000, windowsHide: true });
+  const rows = result.stdout.split(/\r?\n/).filter(line => /^(EVENT|STATUS)=/.test(line));
+  assert.deepEqual(rows, ['STATUS=classify:5', 'STATUS=route:3', 'EVENT=agent-started:0', 'EVENT=agent-exited:1', 'STATUS=words:1',
+    'EVENT=agent-started:0', 'EVENT=agent-exited:1', 'STATUS=wordsExit:1', 'EVENT=agent-started:0', 'EVENT=agent-exited:1',
+    'STATUS=settings:1', 'STATUS=shims:1', 'STATUS=missing:127'], result.stderr + result.stdout);
+  assert.doesNotMatch(result.stdout, /UNEXPECTED-CLI/);
+  const messages = result.stderr.trim().split(/\r?\n/);
+  assert.deepEqual(messages.map(line => line.match(/退出码 (\d+)/)?.[1]), ['5', '3', '1', '1', '1', '1', '127'], result.stderr);
+});
+
+for (const kind of ['bash', 'zsh']) test(`${kind} keeps Claude alias assignments, falls back to PATH, and expands a named home`, {
+  skip: !shellFor(kind) && `${kind} is unavailable`, timeout: 45000,
+}, t => {
+  const folder = temporary(t), executable = path.join(folder, 'claude'), modes = path.join(folder, 'modes');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf "CLI=%s|%s\\n" "${FIXTURE_ALIAS-unset}" "$*"\n', { mode: 0o755 });
+  fs.writeFileSync(modes + '.mode', 'native\r\n');
+  const source = kind === 'zsh' ? 'source "$1" zshrc' : 'source "$1"';
+  const resetAlias = kind === 'zsh' ? "__pg_aliases[claude]='missing-program'" : "__pg_alias_claude='missing-program'";
+  const probe = `
+PATH="$2:$PATH"
+alias claude='FIXTURE_ALIAS=owner command noglob claude --version'
+${source}
+__pg_node=
+claude test
+${resetAlias}
+claude test
+AGENTRIX_BOOTSTRAP=$3
+printf 'MODE=%s\\n' "$(__pg_session_mode)"
+user=$(id -un)
+home=$(eval "printf '%s' ~$user")
+if [[ $home == /* ]]; then
+  actual=$(__pg_alias_path "~$user/fixture")
+  [[ $actual == "$home/fixture" ]] || exit 89
+  printf 'HOME=expanded\\n'
+fi`;
+  const { file } = sessionBootstrap(folder);
+  const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: file, AGENTRIX_NODE: posix(process.execPath) };
+  const result = spawnSync(shellFor(kind), ['-c', probe, 'probe', posix(path.join(root, `integration/${kind}-integration.${kind}`)), posix(folder), posix(modes)],
+    { env, cwd: folder, encoding: 'utf8', timeout: 35000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.deepEqual(result.stdout.split(/\r?\n/).filter(line => /^(CLI|MODE)=/.test(line)), ['CLI=owner|--version test', 'CLI=unset|test', 'MODE=native']);
+  if (process.platform !== 'win32') assert.match(result.stdout, /^HOME=expanded$/m);
+});
+
 const shimCases = powershells.flatMap(([version, shell]) => ['cmd', 'ps1'].map(extension => ({ version, shell, extension })));
 for (const { version, shell, extension } of shimCases) test(`PowerShell ${version} gives claude.${extension} one file-backed role option, hook settings and a clean shell`, {
   skip: (process.platform !== 'win32' || !shell) && 'requires the specified Windows PowerShell executable', timeout: 60000,
@@ -448,6 +528,10 @@ static class StandIn { static int Main(string[] args) {
   foreach (var arg in args) line.Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(arg)));
   var location = System.Reflection.Assembly.GetExecutingAssembly().Location;
   File.AppendAllText(location + ".log", line + "\\n");
+  if (Environment.GetEnvironmentVariable("AGENTRIX_STAND_IN_STDIN") == "1") {
+    var stdin = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
+    File.WriteAllText(location + ".stdin", Directory.GetCurrentDirectory() + "\\n" + stdin.ReadToEnd(), new UTF8Encoding(false));
+  }
   var settings = Array.IndexOf(args, "--settings");
   File.AppendAllText(location + ".settings", File.ReadAllText(args[settings + 1]) + "\\n");
   return 0; } }`;
@@ -468,15 +552,18 @@ for (const [version, shell] of powershells) test(`PowerShell ${version} gives cl
     `. ${quoted(path.join(copied, 'bootstrap.ps1'))}`, 'function global:Send-AgentrixEvent {}',
     `claude 'fix the test'`, `[IO.File]::WriteAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', @('sonnet', 'high', '0', '${seats}'))`,
     `claude 'say "hi" \\' --mcp-config own.json`, `claude -p 'say "hi"'`, 'claude --version', 'claude mcp list',
-    `$global:AgentrixSession.nodePath = 'missing-node.exe'`, 'claude again', ''].join('\n'));
+    `$global:AgentrixSession.nodePath = 'missing-node.exe'`, 'claude again',
+    '$env:AGENTRIX_STAND_IN_STDIN = "1"', '$global:AgentrixSession.nodePath = $global:AgentrixNode',
+    `New-PSDrive -Name Fixture -PSProvider FileSystem -Root ${quoted(folder)} | Out-Null`, 'Set-Location Fixture:\\',
+    "@('中文输入', 'second line') | claude -p 'read stdin'", 'exit $global:LASTEXITCODE', ''].join('\n'));
   const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: claude, PSModuleAnalysisCachePath: path.join(folder, 'module-cache') };
   const result = spawnSync(shell, ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
     { cwd: folder, env, encoding: 'utf8', timeout: 60000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   const runs = fs.readFileSync(claude + '.log', 'utf8').trimEnd().split('\n').map(line => line.split(' ').map((word, index) => index ? Buffer.from(word, 'base64').toString() : word));
-  assert.equal(runs.length, 6, result.stdout + result.stderr);
+  assert.equal(runs.length, 7, result.stdout + result.stderr);
   const [[first, bare, ...prompt], [depth, tools, ...words], ...others] = runs, lead = ['--model', 'sonnet', '--effort', 'high'];
-  assert.deepEqual(fs.readFileSync(claude + '.settings', 'utf8').trimEnd().split(/\r?\n/), Array(6).fill(wrapperSettings));
+  assert.deepEqual(fs.readFileSync(claude + '.settings', 'utf8').trimEnd().split(/\r?\n/), Array(7).fill(wrapperSettings));
   assert.deepEqual([first, toolServer(bare).env.AGENTRIX_SEATS, assertWrapperSettings(prompt, folder)], ['0', 'null', ['fix the test']]);
   assert.deepEqual([depth, assertWrapperSettings(words, folder)], ['0', [...lead, 'say "hi" \\', '--mcp-config', 'own.json']]);
   const server = toolServer(tools);
@@ -484,7 +571,36 @@ for (const [version, shell] of powershells) test(`PowerShell ${version} gives cl
   assert.deepEqual(server.env, { ELECTRON_RUN_AS_NODE: '1', AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SEATS: seats, AGENTRIX_DISPATCH_DEPTH: '0', AGENTRIX_SHIMS: posix(shims),
     AGENTRIX_SHIM_NODE: process.execPath, CODEX_HOME: env.CODEX_HOME });
   assert.deepEqual(others.map(([depth, ...args]) => [depth, ...assertWrapperSettings(args, folder)]),
-    [['0', ...lead, '-p', 'say "hi"'], ['0', '--version'], ['0', 'mcp', 'list'], ['', ...lead, 'again']]);
+    [['0', ...lead, '-p', 'say "hi"'], ['0', '--version'], ['0', 'mcp', 'list'], ['', ...lead, 'again'], ['0', ...lead, '-p', 'read stdin']]);
+  assert.deepEqual(fs.readFileSync(claude + '.stdin', 'utf8').trimEnd().split(/\r?\n/), [folder, '中文输入', 'second line']);
+});
+
+for (const [version, shell] of powershells) test(`PowerShell ${version} reports Claude launch failures and their exit codes`, {
+  skip: (process.platform !== 'win32' || !shell) && 'requires the specified Windows PowerShell executable', timeout: 60000,
+}, t => {
+  const folder = temporary(t), { file: bootstrap } = sessionBootstrap(folder, { hooks: wrapperHooks, conductor: true });
+  const plan = path.join(folder, 'plan.cjs'), executable = path.join(folder, 'claude.ps1'), script = path.join(folder, 'probe.ps1');
+  const quoted = file => `'${file.replace(/'/g, "''")}'`;
+  fs.writeFileSync(plan, badLaunchPlan);
+  fs.writeFileSync(executable, 'Write-Output "UNEXPECTED-CLI"\n');
+  fs.writeFileSync(script, '\uFEFF' + [
+    "$env:AGENTRIX_AGENT_ONLY='1'", `. ${quoted(path.join(root, 'integration/bootstrap.ps1'))}`, `$global:AgentrixIntercept=${quoted(plan)}`,
+    'function global:Send-AgentrixEvent($Type, $ExitCode) { if ($null -eq $ExitCode) { $ExitCode=0 }; Write-Host "EVENT=${Type}:${ExitCode}" }',
+    "foreach ($failure in @('classify', 'route', 'words', 'wordsExit', 'settings', 'missing', 'shims')) {",
+    '  $env:FIXTURE_FAILURE = $failure',
+    `  if ($failure -eq 'settings') { function global:New-AgentrixClaudeSettingsPath { ${quoted(folder)} } }`,
+    "  if ($failure -eq 'missing') { $global:AgentrixClaudeCommand = $null }",
+    `  if ($failure -eq 'shims') { $global:AgentrixIntercept = ${quoted(plan + '.missing')} }`,
+    '  claude -p test', '  Write-Host "STATUS=${failure}:${global:LASTEXITCODE}"', '}',
+  ].join('\n'));
+  const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: executable };
+  const result = spawnSync(shell, ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { env, cwd: folder, encoding: 'utf8', timeout: 50000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /UNEXPECTED-CLI/);
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/), ['STATUS=classify:5', 'STATUS=route:3', 'EVENT=agent-started:0', 'EVENT=agent-exited:1',
+    'STATUS=words:1', 'EVENT=agent-started:0', 'EVENT=agent-exited:1', 'STATUS=wordsExit:1', 'EVENT=agent-started:0', 'EVENT=agent-exited:1',
+    'STATUS=settings:1', 'STATUS=missing:127', 'STATUS=shims:1']);
+  assert.deepEqual(result.stderr.trim().split(/\r?\n/).map(line => line.match(/退出码 (\d+)/)?.[1]), ['5', '3', '1', '1', '1', '127', '1'], result.stderr);
 });
 
 // Two Agentrix installs: copies of the shim folder, as beta beside stable or a GUI check that a worker launches has.

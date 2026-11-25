@@ -21,7 +21,7 @@ function send(socket, event) {
   return new Promise(resolve => {
     const connection = net.connect(socket);
     const done = () => { clearTimeout(deadline); connection.destroy(); resolve(); };
-    const deadline = setTimeout(done, 750);
+    const deadline = setTimeout(done, event.type === 'agent-started' ? 1500 : 750);
     connection.on('error', done);
     connection.on('close', done);
     connection.on('connect', () => connection.end(JSON.stringify(event) + '\n'));
@@ -212,7 +212,9 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
       const noteFile = rest[0] || process.env.AGENTRIX_READING_NOTE_FILE;
       const context = noteFile && sessionContext(JSON.parse(input), fs.readFileSync(noteFile, 'utf8'));
       if (context) await writeOutput(context);
-    } catch {}
+    } catch {
+      await writeOutput({ systemMessage: 'Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。' });
+    }
   }
   const event = action === 'codex-notify' ? codexEvent(argument, projectId, sessionKey)
     : action === 'claude-hook' ? claudeEvent(input, projectId, sessionKey, argument)
@@ -223,9 +225,9 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
 if (require.main === module) {
   // Bound input and reporting even when a native pipe operation keeps the event loop alive.
   const bridgedDecision = process.argv[6] === 'worker-permission' && process.env.AGENTRIX_WORKER_PERMISSION_BRIDGE === '1';
-  if (!bridgedDecision) setTimeout(() => process.exit(0), 1500).unref();
+  if (!bridgedDecision) setTimeout(() => process.exit(0), 1750).unref();
   // A pending Windows pipe connect can keep Node alive after its socket is destroyed.
   main(process.argv.slice(2)).catch(() => {}).finally(() => process.exit(0));
 }
 
-module.exports = { codexEvent, claudeEvent, shellEvent, seatRouting, workerPermission };
+module.exports = { send, codexEvent, claudeEvent, shellEvent, seatRouting, workerPermission };

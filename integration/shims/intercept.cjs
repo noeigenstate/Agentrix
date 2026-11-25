@@ -246,7 +246,10 @@ if (require.main === module) {
   delete process.env.AGENTRIX_INTERCEPT_ARGV;
   if (!Array.isArray(argv) || !argv.every(word => typeof word === 'string')) argv = [];
   if (argv[0] === '--bootstrap-shims') {
-    process.stdout.write(readBootstrap(process.env.AGENTRIX_BOOTSTRAP)?.value.shims || '');
+    const file = process.env.AGENTRIX_BOOTSTRAP;
+    const bootstrap = file && readBootstrap(file);
+    if (file && !bootstrap) process.exitCode = 1;
+    else process.stdout.write(bootstrap?.value.shims || '');
   } else if (argv[0] === '--launch') {
     const [, agent, action, mode, ...args] = argv;
     // Terminals already open across an in-place update still send the original launch request.

@@ -174,8 +174,10 @@ class DetachedRuns {
       try {
         if (signal?.aborted) { finish(null, null); return; }
         signal?.addEventListener('abort', abort, { once: true });
-        watcher = watch(this.directory, inspect);
-        watcher.on('error', error => finish(error));
+        try {
+          watcher = watch(this.directory, inspect);
+          watcher.on('error', () => { watcher?.close(); watcher = undefined; });
+        } catch { /* The polling fallback also covers failure to subscribe. */ }
         timer = schedule(() => { void inspect().then(() => finish(null, null)); }, timeout);
         // A killed helper may leave no final filesystem event; periodically probe its liveness too.
         polling = setInterval(inspect, 1000);

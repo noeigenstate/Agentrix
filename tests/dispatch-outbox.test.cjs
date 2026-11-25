@@ -8,6 +8,24 @@ const { randomUUID } = require('node:crypto');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { acceptDispatch, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 
+test('receipt observation polls after a watch subscription or watch event fails', { timeout: 6000 }, async () => {
+  const { EventEmitter } = require('node:events');
+  const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
+  const store = new DetachedRuns(os.tmpdir());
+  const setupFailure = () => { throw Object.assign(new Error('watch unavailable'), { code: 'ENOSPC' }); };
+  const eventFailure = () => {
+    const watcher = new EventEmitter();
+    watcher.close = () => {};
+    queueMicrotask(() => watcher.emit('error', new Error('watch closed')));
+    return watcher;
+  };
+  await Promise.all([setupFailure, eventFailure].map(async watch => {
+    let reads = 0;
+    assert.equal(await store.observe(() => ++reads === 2 ? 'receipt' : undefined, 4000, { watch }), 'receipt');
+    assert.equal(reads, 2);
+  }));
+});
+
 test('a terminal restart while a worker runs keeps its row: events under the admission key are accepted until the run ends', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-outbox-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -35,6 +35,7 @@ MAX_MESSAGE = 2 * 1024 * 1024
 # leaving the rest for JSON escaping and the envelope. tests/boundary-dispatch.test.cjs reads these names.
 DISPATCH_HELPER_BYTES = 256 * 1024
 DISPATCH_MODULE_COUNT = 64
+EVENT_CONNECTION_LIMIT = 32
 DISPATCH_MODULE_BYTES = 768 * 1024
 DISPATCH_COMPANIONS = frozenset(("role-tools.cjs", "role-artifacts.cjs"))
 DISPATCH_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", re.I)
@@ -336,10 +337,11 @@ def deliver_skills(hook, identity):
     key_file=os.environ.get("AGENTRIX_SKILL_KEY_FILE")
     if not state_dir or not key_file: return
     with open(key_file,encoding="utf-8") as source_file: key=source_file.read(65)
-    if not re.fullmatch(r"[a-f0-9]{64}",key): return
+    if not key: return
+    if not re.fullmatch(r"[a-f0-9]{64}",key): raise ValueError("Invalid skill manifest key")
     manifest=os.path.join(os.path.dirname(state_dir),"references",key,"instructions.md")
     with open(manifest,encoding="utf-8") as source_file: instructions=source_file.read(2*1024*1024+1)
-    if not instructions.strip() or len(instructions)>2*1024*1024: return
+    if not instructions.strip() or len(instructions)>2*1024*1024: raise ValueError("Invalid skill manifest")
     provider=os.path.join(state_dir,"claude")
     folder=os.path.join(provider,hashlib.sha256(identity.encode()).hexdigest()[:32])
     for directory in (state_dir,provider,folder):
@@ -349,15 +351,27 @@ def deliver_skills(hook, identity):
         # Older recursive mkdir calls gave this intermediate directory the default umask's permissions.
         if directory==provider: os.chmod(directory,0o700)
         elif hasattr(os,"getuid") and info.st_mode&0o077: return
-    filename=os.path.join(folder,key[:32])
-    if source in ("compact","clear"):
-        for name in os.listdir(folder):
-            if re.fullmatch(r"[a-f0-9]{32}",name): os.unlink(os.path.join(folder,name))
+    lock=None
     try:
+        if os.name=="posix":
+            import fcntl
+            lock=os.open(folder,os.O_RDONLY)
+            fcntl.flock(lock,fcntl.LOCK_EX)
+        write_skill_context(folder,key,source,instructions)
+    finally:
+        if lock is not None: os.close(lock)
+def write_skill_context(folder,key,source,instructions):
+    filename=os.path.join(folder,key[:32])
+    force=source in ("compact","clear")
+    if not force and os.path.lexists(filename): return
+    print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}),flush=True)
+    try:
+        if force:
+            for name in os.listdir(folder):
+                if re.fullmatch(r"[a-f0-9]{32}",name): os.unlink(os.path.join(folder,name))
         descriptor=os.open(filename,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         os.close(descriptor)
-    except FileExistsError: return
-    print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}))
+    except OSError: pass
 def seat_map(raw):
     try:
         size = len(raw.encode("utf-8"))
@@ -428,6 +442,18 @@ def terminal_launch(agent, action, *args):
     else:
         sys.stdout.buffer.write(launch_words(layout))
 
+if sys.argv[1:2] == ["login-path"]:
+    import subprocess
+    try:
+        command="printf '\\nAGENTRIX_LOGIN_PATH=%s\\n' \"$PATH\""
+        result=subprocess.run([sys.argv[2],"-lc",command],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=5)
+        for line in reversed(result.stdout.splitlines()):
+            if line.startswith(b"AGENTRIX_LOGIN_PATH="):
+                sys.stdout.buffer.write(line.partition(b"=")[2])
+                sys.exit(0)
+    except (OSError,subprocess.TimeoutExpired): pass
+    sys.exit(1)
+
 if sys.argv[1:2] == ["terminal-launch"]:
     try:
         terminal_launch(*sys.argv[2:])
@@ -440,7 +466,11 @@ try:
     event_type=sys.argv[1]
     # Keep the old event names on the socket during the 1.6.4 transition.
     mode={"codex-started":"agent-started","codex-exited":"agent-exited"}.get(event_type,event_type)
-    event={"v":1,"type":event_type,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),
+    token_file=os.environ.get("AGENTRIX_EVENT_TOKEN_FILE")
+    if token_file:
+        with open(token_file,encoding="utf-8") as source_file: token=source_file.read()
+    else: token=os.environ["AGENTRIX_TOKEN"]
+    event={"v":1,"type":event_type,"token":token,"cwd":os.getcwd(),
            "codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
     if mode=="notify":
         payload=json.loads(sys.argv[2])
@@ -501,7 +531,8 @@ try:
                      prompt=str(hook["prompt"])[:2000] if kind=="start" and hook.get("prompt") else None)
         if kind=="session":
             try: deliver_skills(hook,identity)
-            except Exception: pass
+            except (OSError,ValueError):
+                print(json.dumps({"systemMessage":"Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。"}),flush=True)
         if kind=="start":
             notes=[]
             for name in ("mode-note.txt","prompt-note.txt"):
@@ -542,29 +573,37 @@ except Exception: pass
 
 BASH_SOURCE = r'''if [ -r "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi
 cd -- "$AGENTRIX_ROOT" || exit 1
-__pg_note=$AGENTRIX_READING_NOTE; unset AGENTRIX_READING_NOTE
+__pg_note=${AGENTRIX_READING_NOTE-}; unset AGENTRIX_READING_NOTE
 __pg_note_file=$AGENTRIX_READING_NOTE_FILE; unset AGENTRIX_READING_NOTE_FILE
-__pg_role_tools=$AGENTRIX_ROLE_TOOLS; unset AGENTRIX_ROLE_TOOLS
-__pg_role_error=$AGENTRIX_ROLE_ERROR; unset AGENTRIX_ROLE_ERROR
-__pg_role_node=$AGENTRIX_ROLE_NODE; unset AGENTRIX_ROLE_NODE
-__pg_role_intercept=$AGENTRIX_ROLE_INTERCEPT; unset AGENTRIX_ROLE_INTERCEPT
+__pg_role_tools=${AGENTRIX_ROLE_TOOLS-}; unset AGENTRIX_ROLE_TOOLS
+__pg_role_error=${AGENTRIX_ROLE_ERROR-}; unset AGENTRIX_ROLE_ERROR
+__pg_role_node=${AGENTRIX_ROLE_NODE-}; unset AGENTRIX_ROLE_NODE
+__pg_role_intercept=${AGENTRIX_ROLE_INTERCEPT-}; unset AGENTRIX_ROLE_INTERCEPT
+__pg_login_path=${AGENTRIX_LOGIN_PATH-}; unset AGENTRIX_LOGIN_PATH
 __pg_reading_note() { if [ -r "$__pg_note_file" ]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi; }
 unalias codex 2>/dev/null || true
 unalias claude 2>/dev/null || true
 __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
+__pg_launch_error() {
+    printf 'Agentrix：%s（退出码 %s）。%s。\n' "$2" "$1" "$3" >&2
+}
+__pg_claude_setup_failed() {
+    __pg_emit agent-exited 1 "$1"
+    __pg_launch_error 1 '无法写入 Claude 设置' '请检查目录权限和可用磁盘空间'
+}
 # The first word given to an agent when it is a subcommand or an option (update, --version): Agentrix tells such a run
 # from a conversation by it. Anything else is not sent.
 __pg_command() { local pattern='^-{0,2}[A-Za-z][A-Za-z-]{0,23}$'; [[ ${1-} =~ $pattern ]] && printf '%s' "$1"; return 0; }
 __pg_read_wire() {
-    local expected=$1 text line key value format version seen=' '
+    local expected=$1 text line key value format= version= seen=' '
     local LC_ALL=C
     # A successful bounded read means either a NUL delimiter or too many bytes.
-    if IFS= read -r -d '' -n 16385 text; then return 1; fi
+    if IFS= read -r -d '' -n 16385 text; then return 2; fi
     text=${text#$'\xef\xbb\xbf'}
     while IFS= read -r line; do
         key=${line%%=*}
         value=${line#*=}
-        [[ $line == *=* && $key =~ ^[a-z][a-z0-9_]*$ && $value != *$'\r'* && $seen != *" $key "* ]] || return 1
+        [[ $line == *=* && $key =~ ^[a-z][a-z0-9_]*$ && $value != *$'\r'* && $seen != *" $key "* ]] || return 2
         seen+="$key "
         case $key in
             format) format=$value;;
@@ -578,7 +617,8 @@ __pg_read_wire() {
             seats) [[ $expected != agentrix.lead-seat ]] || seat_map=$value;;
         esac
     done <<< "${text%$'\n'}"
-    [[ $format == "$expected" && $version == 1 ]]
+    [[ $format == "$expected" && $seen == *' version '* ]] || return 2
+    [[ $version == 1 ]] || return 3
 }
 __pg_load_launch_seat() {
     local file=$1 seat_fast ultracode legacy_seats invalid=1
@@ -611,14 +651,24 @@ __pg_load_mode() {
         [[ $session_mode == native || $session_mode == conductor ]]
     elif [[ -r $file ]]; then
         session_mode=$(< "$file")
+        session_mode=${session_mode%$'\r'}
+        [[ $session_mode == native || $session_mode == conductor ]]
     fi
 }
 # Both terminal entrypoints ask the same transported CLI definition.
 function agentrix_agent {
     local agent=$1; shift
-    local executable arguments route reply
-    reply=$(__pg_launch_plan "$agent" classify "$@") || return
-    __pg_read_wire agentrix.launch-route <<< "$reply" || return 1
+    local executable arguments route= reply code launch_path=$PATH
+    reply=$(__pg_launch_plan "$agent" classify "$@" 2>/dev/null) || {
+        code=$?
+        __pg_launch_error "$code" '无法判断启动方式' '请重开终端后重试'
+        return "$code"
+    }
+    __pg_read_wire agentrix.launch-route <<< "$reply" || {
+        code=$?
+        __pg_launch_error "$code" '启动方式的数据格式或版本不受支持' '请重开终端后重试'
+        return "$code"
+    }
     case $route in
         native)
             arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
@@ -629,12 +679,19 @@ function agentrix_agent {
             printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2
             return 2;;
         passthrough|utility|print|conversation) ;;
-        *) return 1;;
+        *)
+            __pg_launch_error 2 '启动方式的数据格式或版本不受支持' '请重开终端后重试'
+            return 2;;
     esac
-    executable=$(type -P "$agent")
+    if ! executable=$(type -P "$agent") && [[ $route != passthrough ]]; then
+        if [[ -z $__pg_login_path ]]; then
+            __pg_login_path=$("$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" login-path "$BASH" 2>/dev/null) || __pg_login_path=
+        fi
+        if [[ -n $__pg_login_path ]] && executable=$(PATH=$__pg_login_path type -P "$agent"); then launch_path=$__pg_login_path; fi
+    fi
     if [[ $route == passthrough ]]; then
         if [ -z "$executable" ]; then printf 'Codex CLI was not found on this SSH host.\n'; return 127; fi
-        "$executable" "$@"
+        PATH=$launch_path "$executable" "$@"
         return
     fi
     __pg_hook_agent "$agent" "$route" "$executable" "$@"
@@ -644,8 +701,11 @@ function claude { agentrix_agent claude "$@"; }
 __pg_hook_agent() {
     local agent=$1 route=$2 executable=$3; shift 3
     local result settings
-    if [ -z "$executable" ]; then printf 'Claude Code CLI was not found on this SSH host.\n'; return 127; fi
-    local model effort seat_map fast=0 ultra=0 session_mode=native unusable=0
+    if [[ -z $executable ]]; then
+        __pg_launch_error 127 '在远端 PATH 中找不到 Claude Code' '请在 SSH 主机安装后重开终端'
+        return 127
+    fi
+    local model= effort= seat_map= fast=0 ultra=0 session_mode=native unusable=0
     local lead_file=${AGENTRIX_CLAUDE_LEAD_FILE-}
     if [[ $route != utility && -n $lead_file ]]; then
         __pg_load_launch_seat "$lead_file" || {
@@ -659,9 +719,13 @@ __pg_hook_agent() {
         model= effort= seat_map= fast=0 ultra=0
     fi
     [[ ${seat_map-} == \{* ]] || seat_map=null
+    if [[ $route == conversation && $session_mode == conductor && -z $__pg_role_tools && -n $__pg_role_error ]]; then
+        __pg_launch_error 1 '无法加载远端角色工具' '请检查 SSH 主机的 Node.js 和 Git，再重开终端'
+        return 1
+    fi
     __pg_emit agent-started "$(__pg_command "$@")" "$agent"
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
-    settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" "$ultra" <<'PY'
+    settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" "$ultra" 2>/dev/null <<'PY'
 import json,shlex,sys
 command=" ".join(shlex.quote(word) for word in (sys.executable,sys.argv[1],"claude-hook"))
 hooks={name:[{"hooks":[{"type":"command","command":command+" "+kind}]}] for name,kind in
@@ -674,15 +738,19 @@ if sys.argv[2]=="1": settings["fastMode"]=True
 if sys.argv[3]=="1": settings["ultracode"]=True
 print(json.dumps(settings))
 PY
-    )
+    ) || { __pg_claude_setup_failed "$agent"; return 1; }
     local role_tools= role_error= current_note=$(__pg_reading_note)
     if [[ $route == conversation && $session_mode == conductor ]]; then
         if [[ -n $__pg_role_tools ]]; then role_tools=$__pg_role_tools
         else role_error=$__pg_role_error; fi
     fi
     local settings_file
-    settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX") || return 1
-    printf '%s' "$settings" > "$settings_file"
+    settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX" 2>/dev/null) || { __pg_claude_setup_failed "$agent"; return 1; }
+    if ! printf '%s' "$settings" 2>/dev/null > "$settings_file"; then
+        rm -f -- "$settings_file"
+        __pg_claude_setup_failed "$agent"
+        return 1
+    fi
     local allowed
     local -a background=(-u CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
     allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
@@ -690,19 +758,25 @@ PY
     result=1
     local -a launch_args=() launch_unsets=() launch_env=()
     if __pg_read_launch_words < <(AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" AGENTRIX_LAUNCH_NOTE="$current_note" \
-        AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_LAUNCH_ROLE="$role_tools" AGENTRIX_LAUNCH_ROLE_ERROR="$role_error" __pg_launch_plan "$agent" words); then
-        command env "${launch_unsets[@]}" "${background[@]}" "${launch_env[@]}" AGENTRIX_SKIP_LIVE_SEATS="$unusable" \
+        AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_LAUNCH_ROLE="$role_tools" AGENTRIX_LAUNCH_ROLE_ERROR="$role_error" \
+        __pg_launch_plan "$agent" words 2>/dev/null && printf '\000'); then
+        PATH=$launch_path command env ${launch_unsets[@]+"${launch_unsets[@]}"} "${background[@]}" ${launch_env[@]+"${launch_env[@]}"} AGENTRIX_SKIP_LIVE_SEATS="$unusable" \
             AGENTRIX_SEATS="{\"format\":\"agentrix.seat-map\",\"version\":1,\"seats\":$seat_map}" \
-            AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" "${launch_args[@]}" "$@"
+            AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" ${launch_args[@]+"${launch_args[@]}"} "$@"
         result=$?
+    else
+        __pg_launch_error 1 '无法读取启动参数，数据格式不受支持或生成失败' '请重开终端后重试'
     fi
     rm -f -- "$settings_file"
     __pg_emit agent-exited "$result" "$agent"
     return "$result"
 }
 __pg_read_launch_words() {
-    local record key value format version format_seen=0 version_seen=0
+    local record key value format= version= format_seen=0 version_seen=0 completed=
     while IFS= read -r -d '' record; do
+        [[ -z $completed ]] || return 1
+        # The wrapper appends this only when launch planning exits successfully.
+        if [[ -z $record ]]; then completed=1; continue; fi
         [[ $record == *=* ]] || return 1
         key=${record%%=*}
         value=${record#*=}
@@ -714,13 +788,14 @@ __pg_read_launch_words() {
             arg) launch_args+=("$value");;
         esac
     done
-    [[ -z $record && $format == agentrix.launch-words && $version == 1 ]]
+    [[ -z $record && $format == agentrix.launch-words && $version == 1 && $completed == 1 ]]
 }
 __pg_launch_plan() {
     local agent=$1 action=$2; shift 2
     if [[ -n $__pg_role_node && -n $__pg_role_intercept ]]; then
         # This wrapper reads the versioned fields; without the flag the planner answers an older wrapper's bare words.
-        AGENTRIX_LAUNCH_WIRE=1 "$__pg_role_node" "$__pg_role_intercept" --launch "$agent" "$action" remote "$@" && return
+        AGENTRIX_LAUNCH_WIRE=1 "$__pg_role_node" "$__pg_role_intercept" --launch "$agent" "$action" remote "$@"
+        return
     fi
     "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" terminal-launch "$agent" "$action" "$@"
 }
@@ -1746,8 +1821,9 @@ class Worker:
         branch = ""
         try:
             # rev-parse names the branch on every Git; branch --show-current needs 2.22 and -C needs 1.8.5.
-            result = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3)
-            if result.returncode == 0 and result.stdout.strip() != "HEAD": branch = result.stdout.strip()[:120]
+            result = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)
+            name = result.stdout.decode("utf-8", "replace").strip()
+            if result.returncode == 0 and name != "HEAD": branch = name[:120]
         except (OSError, subprocess.TimeoutExpired): pass
         return {"root": self.root, "branch": branch, "platform": sys.platform}
 
@@ -2256,12 +2332,14 @@ class Worker:
             return dict(self.dispatch_server, args=self.dispatch_server["args"] + [agent])
 
     def update_skill_note(self, sequence, note, bundle):
-        if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
+        with self.sequence_lock:
+            if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
+            ready = self.skill_note_ready
         try:
             self.skills_bundle = bundle
             self.write_launch_note(self.startup_note(note), self.terminal_manifest())
             return self.skill_paths
-        finally: self.skill_note_ready.set()
+        finally: ready.set()
 
     def write_launch_note(self, note, document):
         # Both terminal launchers receive the same note. SessionStart reads its own skill manifest.
@@ -2318,9 +2396,16 @@ class Worker:
         self.socket_path = os.path.join(self.temp, "events.sock")
         self.listener.bind(self.socket_path)
         os.chmod(self.socket_path, 0o600)
-        self.listener.listen(8)
+        self.listener.listen(EVENT_CONNECTION_LIMIT)
         self.listener.settimeout(0.5)
-        env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
+        self.write_routing_file("event-token", self.token)
+        env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root,
+            AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path,
+            AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
+        env.pop("AGENTRIX_TOKEN", None)
+        env["AGENTRIX_EVENT_TOKEN_FILE"] = os.path.join(self.temp, "event-token")
+        if self.dispatch_login and self.dispatch_login.get("AGENTRIX_PATH"):
+            env["AGENTRIX_LOGIN_PATH"] = self.dispatch_login["AGENTRIX_PATH"]
         env["AGENTRIX_CLAUDE_BACKGROUND_FILE"] = os.path.join(self.temp, "claude-background")
         env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "dispatch.json.lead")
         env["AGENTRIX_SEATS"] = encoded if native else "null"
@@ -2457,10 +2542,18 @@ class Worker:
         threading.Thread(target=self.terminal_loop, daemon=True).start()
 
     def events_loop(self):
+        slots = threading.BoundedSemaphore(EVENT_CONNECTION_LIMIT)
         while not self.stopping:
             try: client, _ = self.listener.accept()
             except socket.timeout: continue
             except OSError: break
+            if not slots.acquire(blocking=False):
+                client.close()
+                continue
+            threading.Thread(target=self.handle_event_connection, args=(client, slots), daemon=True).start()
+
+    def handle_event_connection(self, client, slots):
+        try:
             with client:
                 client.settimeout(2)
                 data = b""
@@ -2469,48 +2562,50 @@ class Worker:
                         chunk = client.recv(4096)
                         if not chunk: break
                         data += chunk
-                    if len(data) > 65536: continue
+                    if len(data) > 65536: return
                     event = json.loads(data)
-                    if not isinstance(event, dict): continue
+                    if not isinstance(event, dict): return
                     dispatch = str(event.get("type", "")).startswith("dispatch-")
                     if dispatch:
-                        if event.pop("sessionKey", None) != self.token or event.get("projectId") != self.project_id: continue
+                        if event.pop("sessionKey", None) != self.token or event.get("projectId") != self.project_id: return
                     else:
-                        if event.pop("token", None) != self.token: continue
+                        if event.pop("token", None) != self.token: return
                         read_wire_envelope(event, channel="shell")
                     # Remove next version. Older emitters can still be attached.
                     for old, new in (("codex-started", "agent-started"), ("codex-exited", "agent-exited")):
                         if event.get("type") == old: event["type"] = new
-                    route = event.pop("accountRoute", None)
-                    if not dispatch and event.get("agent") == "claude":
-                        # No credential values cross even the host-local socket. Never forward route paths to Agentrix.
-                        valid = isinstance(route, dict) and set(route) == {"home", "configDir", "secureDir", "overridden"} and type(route["overridden"]) is bool
-                        if valid and all(value is None or isinstance(value, str) and os.path.isabs(value) and len(value) <= 4096 and "\0" not in value
-                                         for value in (route["home"], route["configDir"], route["secureDir"])) and route["home"]:
-                            if self.claude_route != route: self.claude_route = route
-                            self.claude_home = route["configDir"] or os.path.join(route["home"], ".claude")
-                        else: self.claude_route = None
-                        if event.get("type") == "agent-started":
-                            # Use the environment that launched Claude, even if a later hook runs elsewhere.
-                            self.claude_fast_home = self.claude_home if self.claude_route else None
-                        elif event.get("type") == "agent-exited":
-                            self.claude_fast_home = None
-                    codex_home = event.pop("codexHome", None)
-                    if event.get("type") in ("shell-prompt", "agent-started"):
-                        if isinstance(codex_home, str) and os.path.isabs(codex_home): self.codex_home = codex_home
-                        if isinstance(event.get("cwd"), str) and os.path.isabs(event["cwd"]): self.coding_root = event["cwd"]
                     with self.sequence_lock:
+                        route = event.pop("accountRoute", None)
+                        if not dispatch and event.get("agent") == "claude":
+                            # No credential values cross even the host-local socket. Never forward route paths to Agentrix.
+                            valid = isinstance(route, dict) and set(route) == {"home", "configDir", "secureDir", "overridden"} and type(route["overridden"]) is bool
+                            if valid and all(value is None or isinstance(value, str) and os.path.isabs(value) and len(value) <= 4096 and "\0" not in value
+                                             for value in (route["home"], route["configDir"], route["secureDir"])) and route["home"]:
+                                if self.claude_route != route: self.claude_route = route
+                                self.claude_home = route["configDir"] or os.path.join(route["home"], ".claude")
+                            else: self.claude_route = None
+                            if event.get("type") == "agent-started":
+                                # Use the environment that launched Claude, even if a later hook runs elsewhere.
+                                self.claude_fast_home = self.claude_home if self.claude_route else None
+                            elif event.get("type") == "agent-exited":
+                                self.claude_fast_home = None
+                        codex_home = event.pop("codexHome", None)
+                        if event.get("type") in ("shell-prompt", "agent-started"):
+                            if isinstance(codex_home, str) and os.path.isabs(codex_home): self.codex_home = codex_home
+                            if isinstance(event.get("cwd"), str) and os.path.isabs(event["cwd"]): self.coding_root = event["cwd"]
                         self.sequence += 1
                         event.update(projectId=self.project_id, sessionKey=self.token, sequence=self.sequence)
                         needs_note = event.get("type") == "agent-started" and event.get("agent") == "claude"
                         if needs_note:
                             self.skill_note_sequence = self.sequence
-                            self.skill_note_ready.clear()
+                            self.skill_note_ready = ready = threading.Event()
                         self.emit({"type": "event", "event": event})
                     if event.get("type") == "agent-started":
-                        if needs_note: self.skill_note_ready.wait(4)
+                        if needs_note: ready.wait(4)
                         client.sendall(b"\n")
                 except (OSError, ValueError): pass
+        finally:
+            slots.release()
 
     def terminal_loop(self):
         import select

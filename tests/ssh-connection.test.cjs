@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const net = require('node:net');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
@@ -20,6 +21,26 @@ const { createRemoteCodexProcess } = require('../electron/features/ssh/codex-pro
 const execGit = require('node:util').promisify(require('node:child_process').execFile);
 
 const integrationDir = path.resolve(__dirname, '..', 'integration');
+
+test('SSH askpass rejects oversized and incomplete responses without writing a password', async t => {
+  let response;
+  const server = http.createServer((request, reply) => {
+    request.resume();
+    reply.writeHead(200, { 'content-type': 'application/json' });
+    reply.end(JSON.stringify(response));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const execute = require('node:util').promisify(require('node:child_process').execFile);
+  const script = path.join(integrationDir, 'ssh-askpass.cjs');
+  const env = { ...process.env, AGENTRIX_ASKPASS_URL: `http://127.0.0.1:${server.address().port}` };
+  for (const invalid of [{}, { response: 123 }, { response: '字'.repeat(24000) }]) {
+    response = invalid;
+    await assert.rejects(execute(process.execPath, [script], { env }), { code: 1, stdout: '' });
+  }
+  response = { response: '' };
+  assert.equal((await execute(process.execPath, [script], { env })).stdout, '\n');
+});
 const sshPath = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/OpenSSH/ssh.exe') : 'ssh';
 const waitFor = async (callback, what = 'SSH test', timeoutMs = 15000) => { const started = Date.now(); while (Date.now() - started < timeoutMs) { if (await callback()) return; await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error(`Timed out waiting for ${what}`); };
 
