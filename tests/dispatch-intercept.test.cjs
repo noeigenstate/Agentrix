@@ -78,6 +78,19 @@ function toolServer(word) {
   return JSON.parse(word.slice('--mcp-config='.length)).mcpServers.agentrix;
 }
 
+test('the shell can look up shims with an empty bootstrap but reports a missing named bootstrap', t => {
+  const folder = temporary(t), helper = path.join(shims, 'intercept.cjs');
+  const lookup = bootstrap => spawnSync(process.execPath, [helper, '--bootstrap-shims'], {
+    env: { ...dispatchEnvironment(), AGENTRIX_BOOTSTRAP: bootstrap }, encoding: 'utf8', windowsHide: true, timeout: 5000,
+  });
+  const empty = lookup('');
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.equal(empty.stdout, '');
+  const missing = lookup(path.join(folder, 'missing.json'));
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.equal(missing.stdout, '');
+});
+
 test('Claude role arguments use the carried seat reader without loading dispatch and survive a reader failure', async t => {
   const folder = temporary(t), shimFile = path.join(folder, 'shims', 'intercept.cjs');
   const helper = path.join(folder, 'dispatch.cjs'), bootstrap = path.join(folder, 'bootstrap.json');
@@ -537,7 +550,8 @@ static class StandIn { static int Main(string[] args) {
   return 0; } }`;
 for (const [version, shell] of powershells) test(`PowerShell ${version} gives claude.exe hook settings and adds role tools only to conversations`, {
   skip: (process.platform !== 'win32' || !shell) && 'requires the specified Windows PowerShell executable', timeout: 90000 }, t => {
-  const folder = temporary(t), copied = path.join(folder, 'integration'), claude = path.join(folder, 'claude.exe'), script = path.join(folder, 'probe.ps1');
+  const folder = fs.realpathSync.native(temporary(t)), copied = path.join(folder, 'integration');
+  const claude = path.join(folder, 'claude.exe'), script = path.join(folder, 'probe.ps1');
   const quoted = file => `'${file.replace(/'/g, "''")}'`;
   fs.mkdirSync(copied); fs.copyFileSync(path.join(root, 'integration/bootstrap.ps1'), path.join(copied, 'bootstrap.ps1'));
   // A stand-in refresh-path.ps1, so this computer's stored PATH is never read.

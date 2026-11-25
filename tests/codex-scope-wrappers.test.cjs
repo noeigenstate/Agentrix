@@ -165,7 +165,9 @@ done
         PROBE_CLI: shellPath(cli), PROBE_WRAPPER: shellPath(wrapper),
         AGENTRIX_NODE: shellPath(process.execPath), AGENTRIX_EVENT_HELPER: shellPath(path.join(integration, 'agent-event.cjs')) },
       windowsHide: true, timeout: 50000 * timeoutScale });
-    assert.equal(result.stderr, '');
+    const missingManagement = cases.some(([program, args]) => program === 'absent' && args[0] === '--version');
+    const diagnostic = 'Agentrix：在 PATH 中找不到 Codex CLI（退出码 127）。请安装后重开终端。';
+    assert.equal(result.stderr.replace(/\r\n/g, '\n'), missingManagement ? diagnostic + '\n' : '');
     const results = result.stdout.split(/^CASE_END\r?\n/gm);
     assert.equal(results.pop(), '');
     assert.equal(results.length, cases.length);
@@ -204,7 +206,7 @@ done
     }
     // Not installed: said like Claude Code's wrapper says it, and a conversation is still the host's to open.
     const absent = results.at(-2);
-    assert.match(absent.stdout, /Codex CLI was not found in PATH/);
+    assert.doesNotMatch(absent.stdout, /Codex CLI/); // The error is checked on stderr.
     assert.equal(absent.status, 127); assert.equal(absent.request, null); assert.equal(absent.ran, null);
     assert.deepEqual(results.at(-1).request, ['resume', '--last']);
   });

@@ -369,7 +369,7 @@ test('Windows PowerShell parses the generated setup scripts with special charact
 
 test('the setup work verifies and launches the same private copy or refuses it', { skip: process.platform !== 'win32' }, async t => {
   const fs = require('node:fs'), os = require('node:os');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-setup-copy-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-setup-copy-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const original = path.join(root, 'bin', "Owner's codex.exe"), stage = path.join(root, 'staging');
   const resources = path.join(root, 'codex-resources'), companion = path.join(resources, 'codex-windows-sandbox-setup.exe');

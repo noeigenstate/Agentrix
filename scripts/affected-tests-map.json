@@ -503,7 +503,7 @@
       "reason": "The Lab loads the configured source or packaged dispatch helper to get its runtime bundle and render delegated events."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "bd82eca1bed4e919f6328c4574cbf5b27fbf528eb0bcded47ea9ec2723511567",
+      "digest": "4a8da1fc1757b8bc8e0f3cd1b06218d489aa3b90c5e88467a8d852cadc220ff1",
       "targets": [
         "integration/dispatch.cjs",
         "electron/features/agents/call-seat.cjs",

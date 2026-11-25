@@ -17,7 +17,7 @@ test('G4 legacy Codex messages with the same timestamp and length get separate r
   for (const message of ['one', 'two']) codexConversation(log, { type: 'event_msg', timestamp, payload: { type: 'agent_message', message } });
   assert.deepEqual(log.snapshot().map(entry => entry.original), ['one', 'two']);
   assert.equal(new Set(log.snapshot().map(entry => entry.id)).size, 2);
-  for (const message of ['sun', 'sea']) codexConversation(log, { type: 'event_msg', timestamp, payload: { type: 'user_message', message } });
+  for (const message of ['sun', 'sea', 'sun']) codexConversation(log, { type: 'event_msg', timestamp, payload: { type: 'user_message', message } });
   assert.deepEqual(log.snapshot().filter(entry => entry.role === 'user').map(entry => entry.original), ['sun', 'sea']);
 });
 async function transcript(t) {

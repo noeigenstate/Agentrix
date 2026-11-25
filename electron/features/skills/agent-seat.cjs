@@ -9,20 +9,24 @@ function agentSeat(input, seats) {
   const choice = seats[seat], expected = seatExpectation(choice);
   if (!expected) return {};
   const { model, effort, agentModel: alias = model } = choice;
-  if (familyOf(model) !== 'claude') return { expected, note: `[${seat}] uses Codex. Launch this seat through the dispatch helper.` };
+  if (familyOf(model) !== 'claude') return { seat, expected, note: `[${seat}] uses Codex.` };
   if (typeof alias !== 'string' || !CLAUDE_ALIAS.test(alias) || typeof effort !== 'string' || !CLAUDE_EFFORT.test(effort) || tool.subagent_type === 'fork') {
-    return { expected, note: `[${seat}] Claude Agent cannot apply this seat's model and effort.` };
+    return { seat, expected, note: `[${seat}] Claude Agent cannot apply this seat's model and effort.` };
   }
   return { model: alias, effort, expected };
 }
 
 function seatHookOutput(input, seats, report = () => {}) {
   if (input?.hook_event_name !== 'PreToolUse') return {};
-  const { model, effort, note, expected } = agentSeat(input, seats);
+  const { seat, model, effort, note, expected } = agentSeat(input, seats);
   if (!expected) return {};
   const observed = seatObservation(input, model, effort, 'pre');
   if (observed) report({ ...observed, expected });
-  return note ? { systemMessage: note } : seatToolOutput(input.tool_input, model, effort);
+  if (!note) return seatToolOutput(input.tool_input, model, effort);
+  const permissionDecisionReason = `${note} Use start_role with seat="${seat}". `
+    + 'If start_role is not loaded, use ToolSearch to load mcp__agentrix__start_role first. '
+    + 'Do not retry with an Agent call that omits [seat].';
+  return { systemMessage: note, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } };
 }
 
 function seatToolOutput(tool, model, effort) {

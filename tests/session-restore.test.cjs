@@ -17,7 +17,7 @@ test('a fast automatic continuation completing before restoreTerminal resolves i
   let armed = false, armings = 0;
   const context = { restorePlans: new Map(), startupErrors: new Map(), broadcast() {},
     ...require('../electron/features/cli-adapters/registry.cjs'),
-    store: { findTerminal: () => ({ record: { restore: saved } }), setRestore(_id, patch) { Object.assign(saved, patch); },
+    store: { findTerminal: () => ({ project: { kind: 'local', path: __dirname }, record: { restore: saved } }), setRestore(_id, patch) { Object.assign(saved, patch); },
       expectCompletion() { armed = true; armings++; } },
     nativeSessions: { start: async () => ({ runtimeSessionId: 'runtime' }), async continueInterrupted(_id, _runtime, beforeSend) {
       beforeSend(); assert.equal(saved.interrupted, false);

@@ -46,7 +46,7 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
             $start.EnvironmentVariables['AGENTRIX_WORKER_PERMISSION_BRIDGE'] = '1'
         }
         $start.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
-        $helper = Join-Path $PSScriptRoot 'agent-event.cjs'
+        $helper = [IO.Path]::Combine($PSScriptRoot, 'agent-event.cjs')
         $start.Arguments = '"{0}" claude-hook "\\.\pipe\{1}" "{2}" "{3}" {4}' -f $helper, $PipeName, $ProjectId, $SessionKey, $Kind
         Write-HookTrace 'node-launch'
         $child = [Diagnostics.Process]::Start($start)

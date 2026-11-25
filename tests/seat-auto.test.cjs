@@ -23,6 +23,16 @@ const hook = (tool_input = input, tool_name = 'Agent', hook_event_name = 'PreToo
   ({ tool_input, tool_name, hook_event_name, session_id: 'fixture', tool_use_id: 'toolu_1' });
 const rewritten = { ...input, model: 'sonnet', effort: 'high' };
 const expected = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: rewritten } };
+function assertSeatDenied(output, seat, message) {
+  const { hookSpecificOutput: decision } = output ?? {};
+  assert.equal(decision?.permissionDecision, 'deny');
+  assert.equal(decision.hookEventName, 'PreToolUse');
+  assert.match(decision.permissionDecisionReason, message);
+  assert.ok(decision.permissionDecisionReason.includes(`Use start_role with seat="${seat}".`));
+  assert.match(decision.permissionDecisionReason, /use ToolSearch to load mcp__agentrix__start_role/);
+  assert.match(decision.permissionDecisionReason, /Do not retry with an Agent call that omits \[seat\]/);
+  assert.equal(decision.updatedInput, undefined);
+}
 const developer = { model: 'opus', effort: 'low' };
 const frontend = { model: 'claude-sonnet-5-5', agentModel: 'sonnet', effort: 'high' };
 const specialtyCases = [
@@ -78,23 +88,39 @@ test('a seat rewrite failure leaves the SDK hook answer empty while policy error
 test('unknown, untagged, disabled, and non-Agent calls leave their inputs untouched', async t => {
   const pre = sdkHooks(t).PreToolUse[0].hooks[0];
   for (const description of ['Sketch', '[unknown] Sketch', 'Use [designer] Sketch']) {
-    assert.deepEqual(await pre(hook({ ...input, description })), {});
+    const payload = hook({ ...input, description });
+    assert.deepEqual(await pre(payload), {});
+    assert.deepEqual(seatRouting(JSON.stringify(payload), JSON.stringify(seats)), {});
   }
   assert.deepEqual(await pre(hook(input, 'Bash')), {});
   assert.deepEqual(await sdkHooks(t, null).PreToolUse[0].hooks[0](hook()), {});
 });
 
-test('Codex and unsupported Agent settings show a note without changing tool input or policy', async t => {
+test('native and terminal Agent hooks deny the Codex Developer seat and still report the mismatch', async t => {
+  const reports = [];
+  const pre = sdkHooks(t, seats, deferred, (_input, result) => reports.push(result)).PreToolUse[0].hooks[0];
+  const payload = hook({ ...input, description: '[developer] P2-A world layout' });
+  const native = await pre(payload);
+  const terminal = seatRouting(JSON.stringify(payload), JSON.stringify(seats));
+  assert.deepEqual([native, terminal.output].map(output => output?.hookSpecificOutput?.permissionDecision), ['deny', 'deny']);
+  assertSeatDenied(native, 'developer', /uses Codex/);
+  assertSeatDenied(terminal.output, 'developer', /uses Codex/);
+  const observed = { toolUseId: payload.tool_use_id, phase: 'pre', model: null, effort: null, expected: seats.developer };
+  assert.deepEqual(reports, [observed, { note: terminal.output.systemMessage }]);
+  assert.match(terminal.output.systemMessage, /uses Codex/);
+  assert.deepEqual(terminal.observed, { ...observed, sessionId: payload.session_id });
+});
+
+test('unsupported Claude Agent settings are denied without replacing existing SDK policy', async t => {
   const notices = [];
   const pre = sdkHooks(t, seats, deferred, (_input, result) => { if (result.note) notices.push(result.note); }).PreToolUse[0].hooks[0];
-  for (const seat of ['developer', 'qa', 'reviewer']) {
-    const result = await pre(hook({ ...input, description: `[${seat}] Review` }));
-    assert.deepEqual(result, {});
-    assert.match(notices.at(-1), seat === 'developer' ? /dispatch helper/ : /cannot apply/);
+  for (const [seat, tool] of [['qa', input], ['reviewer', input], ['designer', { ...input, subagent_type: 'fork' }]]) {
+    const payload = hook({ ...tool, description: `[${seat}] Review` });
+    assertSeatDenied(await pre(payload), seat, /cannot apply/);
+    assertSeatDenied(seatRouting(JSON.stringify(payload), JSON.stringify(seats)).output, seat, /cannot apply/);
+    assert.match(notices.at(-1), /cannot apply/);
   }
-  assert.deepEqual(await pre(hook({ ...input, subagent_type: 'fork' })), {});
-  assert.match(notices.at(-1), /cannot apply/);
-  assert.equal(notices.length, 4);
+  assert.equal(notices.length, 3);
   const denied = sdkHooks(t, seats, () => ({ behavior: 'deny', reason: 'limited' })).PreToolUse[0].hooks[0];
   assert.deepEqual(await denied(hook()), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'limited' } });
 });
@@ -196,13 +222,13 @@ test('a running terminal and SDK query read new seats and fall back on malformed
   await check(live);
   assert.deepEqual(seatRouting(JSON.stringify(payload), 'null', bootstrapFile).output, live);
   for (const [choice, tool, message] of [
-    [seats.developer, input, /dispatch helper/], [seats.qa, input, /cannot apply/],
+    [seats.developer, input, /uses Codex/], [seats.qa, input, /cannot apply/],
     [seats.designer, { ...input, subagent_type: 'fork' }, /cannot apply/],
   ]) {
     updateDispatchSeats(bootstrapFile, { designer: choice });
     const current = hook(tool);
-    assert.deepEqual(await pre(current), {});
-    assert.match(seatRouting(JSON.stringify(current), null, bootstrapFile).output.systemMessage, message);
+    assertSeatDenied(await pre(current), 'designer', message);
+    assertSeatDenied(seatRouting(JSON.stringify(current), null, bootstrapFile).output, 'designer', message);
     assert.match(notices.at(-1), message);
   }
   assert.equal(notices.length, 3);

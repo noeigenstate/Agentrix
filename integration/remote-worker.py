@@ -499,10 +499,14 @@ try:
         supported=claude and alias in ("sonnet","opus","haiku","fable") and effort in ("low","medium","high","xhigh","max") and tool.get("subagent_type")!="fork"
         phase=hook.get("hook_event_name")
         if phase=="PreToolUse":
-            if not claude:
-                print(json.dumps({"systemMessage":"["+seat+"] uses Codex. Launch this seat through the dispatch helper."}))
-            elif not supported:
-                print(json.dumps({"systemMessage":"["+seat+"] Claude Agent cannot apply this seat's model and effort."}))
+            if not supported:
+                problem = "uses Codex." if not claude else "Claude Agent cannot apply this seat's model and effort."
+                note = "[" + seat + "] " + problem
+                reason = (note + ' Use start_role with seat="' + seat + '". '
+                          'If start_role is not loaded, use ToolSearch to load mcp__agentrix__start_role first. '
+                          'Do not retry with an Agent call that omits [seat].')
+                print(json.dumps({"systemMessage": note, "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}), flush=True)
             elif tool.get("model")!=alias or tool.get("effort")!=effort:
                 updated=dict(tool, model=alias, effort=effort)
                 print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":updated}}))

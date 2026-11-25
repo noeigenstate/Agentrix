@@ -43,7 +43,7 @@ function workspace(t) {
 function nativeHost(f, calls) {
   const project = { id: 'project', kind: 'local', path: f.cwd }, sessions = new Map(), nativeSpecs = new Map();
   const s = { terminalId: 'terminal', agent: 'claude', nativeStructured: true, cliActive: true,
-    status: 'codex', nativeRuntimeSessionId: 'native-run', claudeSessionId: f.parentId };
+    status: 'codex', nativeMessages: new Map(), nativeRuntimeSessionId: 'native-run', claudeSessionId: f.parentId };
   let scheduled = 0;
   const context = vm.createContext({ path, randomUUID, sessions, nativeSpecs, quitting: false,
     store: { findTerminal: () => ({ project, record: { restore: {} } }), settings: {}, expectCompletion() { assert.fail('a child hook must not rearm completion'); } },

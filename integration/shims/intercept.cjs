@@ -247,7 +247,7 @@ if (require.main === module) {
   if (!Array.isArray(argv) || !argv.every(word => typeof word === 'string')) argv = [];
   if (argv[0] === '--bootstrap-shims') {
     const file = process.env.AGENTRIX_BOOTSTRAP;
-    const bootstrap = file && readBootstrap(file);
+    const bootstrap = file ? readBootstrap(file) : null;
     if (file && !bootstrap) process.exitCode = 1;
     else process.stdout.write(bootstrap?.value.shims || '');
   } else if (argv[0] === '--launch') {

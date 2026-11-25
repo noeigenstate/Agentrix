@@ -27,8 +27,11 @@ test('journal appends version one and reads unmodified historical rows', t => {
   assert.deepEqual(first, legacy);
   assert.deepEqual(current, { v: 1, type: 'consolidate', meeting: 'current', time: current.time });
   assert.ok(Number.isSafeInteger(current.time));
-  fs.appendFileSync(team.journal, jsonLine({ type: 'consolidate', v: 9, time: 2 }));
-  assert.throws(() => team.entries(), versionError('journal.jsonl', 9));
+  const future = jsonLine({ type: 'consolidate', v: 9, time: 2 });
+  fs.appendFileSync(team.journal, future);
+  assert.deepEqual(team.journalHistory(), { entries: [first, current], skipped: 2 });
+  assert.deepEqual(team.entries(), [first, current]);
+  assert.ok(fs.readFileSync(team.journal, 'utf8').endsWith(future));
 });
 
 test('board reads historical peers and validates the version before using or deleting an entry', async t => {

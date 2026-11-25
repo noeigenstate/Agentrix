@@ -85,7 +85,7 @@ function settingsDialogFixture(t, props = {}) {
   mod.require = name => name === 'react' ? hooks : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => empty })
     : name === '../../shared/i18n' ? { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => values[key]), currentLanguage: () => 'zh' }
     : name === '../../shared/Select' ? { Select: empty }
-    : name === '../../shared/platform' ? { isMac: false, isLinux: false }
+    : name === '../../shared/platform' ? { isMac: false, isLinux: false, commandShortcut: key => 'Ctrl+' + key }
     : name === '../shortcuts/shortcuts' ? { shortcut: () => 'Ctrl+Shift+V' } : components[name] || original(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const settings = { language: 'zh', surface: 'solid', glassTransparency: null, uiZoom: null, terminalFontWeight: 400, userAvatar: '', shortcuts: {} };

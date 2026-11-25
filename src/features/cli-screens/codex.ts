@@ -175,7 +175,9 @@ function input(rows: string[]) {
 
 function otherDialog(rows: string[]) {
   const input = cliInputArea(rows);
-  return closingKeyHint(rows) || !!codexDialog(rows) || !!input && codexPickerBelow(rows, input.footer);
+  const authorization = !input && rows.some(row => row.trim() === 'Sign in to Codex')
+    && rows.some(row => /^Paste the authorization code below:/.test(row));
+  return authorization || closingKeyHint(rows) || !!codexDialog(rows) || !!input && codexPickerBelow(rows, input.footer);
 }
 
 export const codex: CliScreen = {

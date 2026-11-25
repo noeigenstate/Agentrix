@@ -261,7 +261,9 @@ class Team {
         if (fs.lstatSync(file, { throwIfNoEntry: false })) clearDeadLock(file);
         else {
           try { fs.renameSync(temporary, file); break; }
-          catch (error) { if (!LOCK_RETRY.has(error.code)) throw error; }
+          catch (error) {
+            if (!LOCK_RETRY.has(error.code) || process.platform !== 'win32' && ['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+          }
         }
         if (Date.now() > deadline) throw new Error('Team lock is busy');
         await delay(25);

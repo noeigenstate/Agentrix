@@ -110,14 +110,17 @@ test('memory includes the newest two entries and matches older bodies within its
   assert.match(large, /Latest[\s\S]*Entry truncated[\s\S]*Very recent[\s\S]*Entry truncated/);
 });
 
-test('an unknown memory version reports the channel and preserves the existing Markdown', t => {
+test('an unknown memory version stays on disk and leaves later findings readable', t => {
   const { team } = project(t);
   const future = '{"v":8,"type":"memory.entry","at":0,"title":"Future","text":"New"}\n';
   fs.writeFileSync(team.memory, 'Preserve the last human view.\n');
   fs.writeFileSync(team.memoryJsonl, future);
-  const error = { code: 'wire.unsupported_version', message: 'memory.jsonl: unsupported version 8' };
-  assert.throws(() => team.context(null, null), error);
-  assert.throws(() => recordFindings({ memory: team.memory }, ['Pending'], 'New entry'), error);
+  assert.match(team.context(null, null).join('\n'), /Skipped 1 unreadable memory rows/);
   assert.equal(fs.readFileSync(team.memoryJsonl, 'utf8'), future);
-  assert.equal(fs.readFileSync(team.memory, 'utf8'), 'Preserve the last human view.\n');
+  assert.equal(recordFindings({ memory: team.memory }, ['Pending'], 'New entry'), true);
+  assert.ok(fs.readFileSync(team.memoryJsonl, 'utf8').startsWith(future));
+  const markdown = fs.readFileSync(team.memory, 'utf8');
+  assert.match(markdown, /Skipped 1 unreadable memory rows/);
+  assert.match(markdown, /- Pending/);
+  assert.doesNotMatch(markdown, /Future/);
 });

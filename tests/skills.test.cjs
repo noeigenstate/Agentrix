@@ -734,7 +734,9 @@ for (const selected of [false, true]) test(`seat delivery stays frozen through c
   const currentBytes = fs.readFileSync(current, 'utf8');
   assert.doesNotMatch(currentBytes, /gpt-6\.2-sol/);
   for (const source of ['compact', 'clear']) {
-    const instructions = sessionContext({ session_id: `catalog-cli-${selected}`, source }, note).hookSpecificOutput.additionalContext;
+    let output;
+    await sessionContext({ session_id: `catalog-cli-${selected}`, source }, note, value => { output = value; });
+    const instructions = output.hookSpecificOutput.additionalContext;
     assert.ok(instructions.includes(original.path.replace(/\\/g, '/')));
     assert.match(fs.readFileSync(original.path, 'utf8'), /\| developer \|.*\| gpt-6\.1-sol · high · fast \|/);
   }

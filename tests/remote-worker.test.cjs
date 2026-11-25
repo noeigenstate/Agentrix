@@ -315,11 +315,12 @@ test('the SSH command hook matches the local Agent tool routing rules and observ
     ['claude-opus-5-5', 'opus', 'max'], ['claude-other', 'opus', 'adaptive'], ['claude-other', 'opus-next', 'high'],
     ['opus-next', 'opus', 'high'], ['gpt-6.2-sol', null, 'high'],
   ];
-  const choices = [...pairs.map(([model, agentModel, effort]) => ['reviewer', { reviewer: { model, agentModel, effort } }]), ...specialtyCases];
-  const cases = choices.flatMap(([seat, map]) => ['PreToolUse', 'PostToolUse'].map(hook_event_name => {
+  const choices = [...pairs.map(([model, agentModel, effort]) => ['reviewer', { reviewer: { model, agentModel, effort } }]),
+    ...specialtyCases, ['reviewer', { reviewer: { model: 'opus', effort: 'low' } }, { subagent_type: 'fork' }]];
+  const cases = choices.flatMap(([seat, map, options]) => ['PreToolUse', 'PostToolUse'].map(hook_event_name => {
     const snapshot = JSON.stringify(map);
     const hook = { hook_event_name, tool_name: 'Agent', tool_use_id: 'toolu_1', session_id: 'fixture',
-      tool_input: { description: `[${seat}] Review`, prompt: 'Review', model: 'haiku', effort: 'medium' } };
+      tool_input: { description: `[${seat}] Review`, prompt: 'Review', model: 'haiku', effort: 'medium', ...options } };
     return { snapshot, hook, expected: seatRouting(JSON.stringify(hook), snapshot) };
   }));
   pythonProbe(t, String.raw`
@@ -362,9 +363,14 @@ with tempfile.TemporaryDirectory(prefix='live-ssh-seats-') as directory:
     coder = {'reviewer': {'model': 'gpt-6.2-sol', 'effort': 'high', 'fast': True}}
     channel.receive({'op': 'claude-lead', 'id': 2, 'claudeLead': {'seatsMap': coder}})
     assert messages[-1]['ok']
-    warning = invoke(old, hook_globals)
-    assert 'dispatch helper' in warning['output']['systemMessage']
-    assert warning['observed']['expected'] == coder['reviewer']
+    denied = invoke(old, hook_globals)
+    assert '[reviewer] uses Codex.' in denied['output']['systemMessage']
+    decision = denied['output']['hookSpecificOutput']
+    assert decision['hookEventName'] == 'PreToolUse' and decision['permissionDecision'] == 'deny'
+    assert 'Use start_role with seat="reviewer".' in decision['permissionDecisionReason']
+    assert 'use ToolSearch to load mcp__agentrix__start_role' in decision['permissionDecisionReason']
+    assert 'Do not retry with an Agent call that omits [seat]' in decision['permissionDecisionReason']
+    assert denied['observed']['expected'] == coder['reviewer']
     sidecar.write_text(json.dumps({'format':'agentrix.seat-map', 'version':2, 'seats':new}))
     assert invoke(old, hook_globals) == {}
     sidecar.write_text(json.dumps(new))

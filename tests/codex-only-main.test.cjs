@@ -25,7 +25,8 @@ test('legacy codexView is ignored without rewriting preferences; later saves omi
 test('startup restores a legacy local and SSH Codex using its thread while normal shells stay terminals', async () => {
   for (const kind of ['local', 'ssh']) for (const agent of ['codex', 'claude']) for (const active of [true, false]) {
     const calls = [], saved = { agent, codex: active, threadId: 'same-thread', cwd: '/synthetic/subfolder' };
-    const context = { adapterOf, legacyRestoreAgent, store: { findTerminal: () => ({ project: { kind }, record: { restore: saved } }) },
+    const context = { adapterOf, legacyRestoreAgent, fs: { statSync: () => ({ isDirectory: () => true }) },
+      store: { findTerminal: () => ({ project: { kind, path: '/synthetic' }, record: { restore: saved } }) },
       restorePlans: new Map([['t', {}]]), startupErrors: new Map(), broadcast() {}, startTerminal: id => calls.push(['terminal', id]),
       nativeSessions: { start: async (id, options) => calls.push(['app-server', id, options]) } };
     await createTerminalLifecycle(context).restoreTerminal('t');

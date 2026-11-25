@@ -4,7 +4,7 @@
 // Usage: agent-event.cjs codex-notify <socket> <projectId> <sessionKey> <payload>
 //        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> <kind>   (the hook's JSON on stdin)
 //        agent-event.cjs shell-event v=1 type=<type> sequence=<sequence> socket=<socket> projectId=<id> sessionKey=<key> ...
-// SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
+// SessionStart prints instructions. The seat-routing hook can rewrite or deny a tool call before reporting the seat.
 const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');

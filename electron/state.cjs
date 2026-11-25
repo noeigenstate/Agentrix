@@ -233,8 +233,8 @@ class WorkspaceStore {
     const existing = this.projects.find(p => {
       if (p.kind === 'ssh') return false;
       if (folderKey(p.path) === key) return true;
-      if (process.platform !== 'darwin' || p.path.toLowerCase() !== key.toLowerCase()) return false;
-      // Older profiles can retain a different spelling. A case-sensitive volume can also contain both names.
+      if (process.platform !== 'darwin') return false;
+      // A saved path can use both a different letter case and a system alias such as /var.
       try {
         const saved = fs.statSync(p.path);
         return saved.dev === stat.dev && saved.ino === stat.ino;

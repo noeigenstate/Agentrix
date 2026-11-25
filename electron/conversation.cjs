@@ -119,7 +119,6 @@ class ConversationLog {
     this.pictures = pictures;
     this.changed = changed; this.limit = limit; this.list = []; this.cwd = null;
     this.queue = []; this.received = new Map(); this.deliveries = [];
-    this.codexMessageSequence = 0;
   }
   // Records still feed activity tracking during replay, but reading snapshots wait for the file tail.
   beginHistory() { this.loading = true; }
@@ -127,7 +126,6 @@ class ConversationLog {
   snapshot() { return this.loading ? [] : this.list; }
   reset() {
     this.codexUser = null; this.codexPictures = null; this.codexTurn = null;
-    this.codexMessageSequence = 0;
     this.queue = []; this.received.clear(); this.deliveries = [];
     if (!this.list.length) return;
     this.list = []; this.changed({ reset: true });
@@ -317,6 +315,12 @@ function questionReply(text) {
   return answers.map(item => [said(item?.question), said(item?.answer)]).filter(([question, answer]) => question || answer)
     .map(([question, answer]) => question && answer ? `${question}\n→ ${answer}` : question || `→ ${answer}`).join('\n\n');
 }
+// Legacy events have no item ID. A stable fingerprint distinguishes different messages in the same millisecond
+// without letting a repeated receipt consume another queued prompt.
+function legacyCodexMessageId(at, payload) {
+  return `${at}:legacy:${createHash('sha256').update(JSON.stringify(payload)).digest('hex')}`;
+}
+
 // Newer Codex reports each message once as a completed item; older versions as event messages.
 function codexConversation(log, record, cwd) {
   if (!record?.payload) return;
@@ -341,7 +345,7 @@ function codexConversation(log, record, cwd) {
       const original = messageText(payload.item.content), text = clean(original);
       if (text) log.put({ id: `a:${payload.item.id || at}`, at, role: 'assistant', text: bounded(text), original });
     } else if (['user_message', 'agent_message'].includes(payload.type) && (typeof payload.message === 'string' || Array.isArray(payload.message) || payload.type === 'user_message' && (payload.images?.length || payload.local_images?.length))) {
-      const original = messageText(payload.message), id = `${at}:legacy:${++log.codexMessageSequence}`;
+      const original = messageText(payload.message), id = legacyCodexMessageId(at, payload);
       if (payload.type === 'user_message') { codexUserMessage(log, record, payload, id, 'event'); return; }
       const text = clean(original);
       if (text) log.put({ id: `a:${id}`, at, role: 'assistant', text: bounded(text), original });
@@ -350,7 +354,7 @@ function codexConversation(log, record, cwd) {
   }
   if (record.type !== 'response_item') return;
   if (payload.type === 'message' && payload.role === 'user') {
-    codexUserMessage(log, record, payload, payload.id || `${at}:legacy:${++log.codexMessageSequence}`, 'response');
+    codexUserMessage(log, record, payload, payload.id, 'response');
     return;
   }
   if (['custom_tool_call_output', 'function_call_output', 'local_shell_call_output'].includes(payload.type)) { log.finish(String(payload.call_id || ''), codexFailed(payload), true); return; }

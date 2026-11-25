@@ -163,7 +163,7 @@ test('other failures survive the launch Stop and leave on the next delivered not
     assert.equal(f.calls.snapshot()[0].items[0].state, 'reviewing');
     f.calls.apply({ type: 'queue-operation', operation: 'enqueue', timestamp: new Date(7000).toISOString(), content: notification });
     f.calls.apply(stop(8000)); assert.equal(f.calls.snapshot().length, 1);
-    f.calls.apply(record('user', 9000, notification));
+    f.calls.apply({ ...record('user', 9000, notification), isMeta: true });
     f.calls.apply(stop(10000)); assert.deepEqual(f.calls.snapshot(), []);
   }
   const launch = start(); f.send(launch); f.send(end(launch.id, { reason: 'error', exitCode: 1 }));

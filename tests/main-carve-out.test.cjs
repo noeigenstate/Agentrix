@@ -44,7 +44,9 @@ test('main.cjs only wires the terminal activity, bootstrap, switch host, host in
   const carved = new Set(['observeDispatchAccount', 'dispatchAccounts']);
   for (const [file, name] of Object.entries(modules)) {
     const specifier = './' + path.posix.relative('electron', file), exports = require(path.join(root, file));
-    if (name === 'writeBootstrap') assert.deepEqual(imports.get(specifier), Object.keys(exports));
+    if (name === 'writeBootstrap') {
+      assert.deepEqual(imports.get(specifier), Object.keys(exports).filter(key => key !== 'readBootstrap'));
+    }
     else {
       assert.ok(imports.get(specifier)?.includes(name), 'main requires ' + file);
       assert.ok(factories.has(name), 'main gives the host to ' + name);

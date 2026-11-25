@@ -14,9 +14,9 @@ const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 function preview(t) {
   const oldWindow = globalThis.window, oldDocument = globalThis.document;
   globalThis.window = {};
-  globalThis.document = { createElement: () => ({
-    innerHTML: '', append(fragment) { this.innerHTML = fragment.html; }, querySelectorAll: () => [],
-  }) };
+  globalThis.document = { createElement: tag => tag === 'template' ? {
+    content: { html: '', querySelectorAll: () => [] }, set innerHTML(html) { this.content.html = html; },
+  } : { innerHTML: '', append(fragment) { this.innerHTML = fragment.html; }, querySelectorAll: () => [] } };
   t.after(() => {
     if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
     if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument;
@@ -26,7 +26,7 @@ function preview(t) {
   const original = mod.require.bind(mod);
   mod.require = name => {
     if (name === 'react') return { useMemo: make => make(), useRef: () => ({ current: null }) };
-    if (name === 'dompurify') return { default: () => ({ sanitize: html => ({ html }) }) };
+    if (name === 'dompurify') return { default: () => ({ sanitize: fragment => fragment }) };
     if (name === './markdown.css') return {};
     if (name === '../../shared/i18n') return { t: text => text };
     if (name === '../../shared/markdown-emphasis') return require('../src/shared/markdown-emphasis.ts');

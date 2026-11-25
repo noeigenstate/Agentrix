@@ -61,6 +61,8 @@ test('every unavailable capability of a terminal-only adapter has an English rea
   for (const key of CAPABILITY_KEYS.filter(key => key !== 'terminal')) {
     const outcome = support(testAdapter.manifest, key);
     assert.deepEqual(outcome, { ok: false, reason: UNSUPPORTED[key] });
-    assert.match(translate('en', outcome.reason), /^This CLI /, key);
+    const words = translate('en', outcome.reason);
+    if (['screenReading', 'screenImageRemoval'].includes(key)) assert.equal(words, 'Continue in the terminal.', key);
+    else assert.match(words, /^This CLI /, key);
   }
 });

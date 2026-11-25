@@ -50,9 +50,9 @@ function inputQueue(onTake = () => {}) {
 function routeAgentSeat(input, seats, onSeat) {
   const report = observed => { try { onSeat(input, observed); } catch {} };
   try {
-    const output = seatHookOutput(input, seats, report);
-    if (output.systemMessage) report({ note: output.systemMessage });
-    else return output;
+    const { systemMessage, ...output } = seatHookOutput(input, seats, report);
+    if (systemMessage) report({ note: systemMessage });
+    return output;
   } catch {}
   return {};
 }

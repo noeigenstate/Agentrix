@@ -74,11 +74,16 @@ test('unsupported Agent seats publish one reading notice without making a reply'
   const [matcher] = fake.calls[0].options.hooks.PreToolUse;
   const input = { session_id: fake.sessionId, tool_use_id: 'toolu_seat', hook_event_name: 'PreToolUse',
     tool_name: 'Agent', tool_input: { description: '[developer] Review', prompt: 'Review' } };
-  assert.deepEqual(await matcher.hooks[0](input), {});
-  assert.deepEqual(await matcher.hooks[0](input), {});
+  // A Codex seat cannot run as Claude's own Agent: the call is refused and the lead is pointed at start_role.
+  for (let n = 0; n < 2; n++) {
+    const { hookSpecificOutput: decision, systemMessage } = await matcher.hooks[0](input);
+    assert.equal(systemMessage, undefined, 'the note goes to the reading view, not into the lead conversation twice');
+    assert.equal(decision.permissionDecision, 'deny');
+    assert.match(decision.permissionDecisionReason, /start_role with seat="developer"/);
+  }
   const notices = events.filter(event => event.type === 'error' && event.payload.code === 'seat_routing_notice');
   assert.equal(notices.length, 1);
-  assert.match(notices[0].payload.message, /dispatch helper/);
+  assert.match(notices[0].payload.message, /\[developer\] uses Codex/);
   assert.ok(!events.some(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message'));
   assert.ok(!events.some(event => event.type === 'turn.completed'));
 });

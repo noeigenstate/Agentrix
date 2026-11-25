@@ -518,6 +518,7 @@ test('Unix Claude wrapper keeps the startup note on the command line, with skill
   const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`);
   const note = f.noteFields('unix'), bootstrap = path.join(f.root, 'terminal.json');
   fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, note.full);
+  fs.writeFileSync(bootstrap, JSON.stringify({ projectId: terminalSession, projectPath: f.root, sessionKey: 'fixture', pipeName: 'unused' }));
   fs.writeFileSync(bootstrap + '.launch-note', note.launch);
   const script = path.join(f.root, 'fake.cjs');
   fs.writeFileSync(script, `const fs=require('node:fs'),args=process.argv.slice(3);fs.writeFileSync(require('node:path').join(process.env.CAPTURE_ROOT, process.argv[2]+'.json'),JSON.stringify({note:process.env.AGENTRIX_READING_NOTE_FILE,args,settings:process.argv[2]==='claude'?JSON.parse(fs.readFileSync(args[1],'utf8')):null}));`);
@@ -531,7 +532,7 @@ test('Unix Claude wrapper keeps the startup note on the command line, with skill
   const hooks = hooksFor({ posix: true, node: process.execPath, helper: env.AGENTRIX_EVENT_HELPER, noteFile });
   Object.assign(env, { AGENTRIX_HOOK_PORT: String(hooks.port), AGENTRIX_HOOK_CHANNEL: hooks.channel, AGENTRIX_HOOK_SETTINGS: hooks.settings.http, AGENTRIX_HOOK_FALLBACK: hooks.settings.fallback });
   await new Promise((resolve, reject) => {
-    const child = spawn(shell, ['-c', 'source "$1" zshrc; claude hello; codex hello', '_', source], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(shell, ['-c', 'source "$1" zshrc && claude hello && codex hello', '_', source], { env, stdio: ['ignore', 'ignore', 'pipe'] });
     let errors = ''; child.stderr.on('data', bytes => { errors += bytes; }); child.once('error', reject);
     child.once('close', code => code === 0 ? resolve() : reject(new Error(errors)));
   });

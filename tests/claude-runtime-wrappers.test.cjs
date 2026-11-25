@@ -25,7 +25,8 @@ for (const kind of ['bash', 'zsh']) {
     const begin = source.indexOf('__pg_program() {'), program = source.slice(begin, source.indexOf('\n}\n', begin) + 3);
     const probe = path.join(root, 'probe.sh'), words = kind === 'bash' ? '"${__pg_words[@]}"' : '"${reply[@]}"';
     const alias = kind === 'bash' ? '[[ -n $PROBE_ALIAS ]] && __pg_alias_claude=$PROBE_ALIAS\n' : 'typeset -gA __pg_aliases\n[[ -n $PROBE_ALIAS ]] && __pg_aliases[claude]=$PROBE_ALIAS\n';
-    fs.writeFileSync(probe, `${alias}${program}for name in claude codex; do __pg_program $name && printf 'WORDS=%s\\n' "$(printf '%s|' ${words})" || printf 'WORDS=none\\n'; done\n`);
+    const wire = slashes(path.join(integration, 'shims/hooks/terminal-wire.sh'));
+    fs.writeFileSync(probe, `source "${wire}"\n${alias}${program}for name in claude codex; do __pg_program $name && printf 'WORDS=%s\\n' "$(printf '%s|' ${words})" || printf 'WORDS=none\\n'; done\n`);
     const run = async (hint, aliasWords = '') => {
       const env = { ...dispatchEnvironment(), PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`,
         PROBE_ALIAS: aliasWords, AGENTRIX_CLAUDE_EXECUTABLE: hint };
