@@ -2,8 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { readJsonl } = require('./jsonl.cjs');
-const { readEnvelope } = require('../agents/dispatch-events.cjs');
+const { readJsonl, FILE_LIMIT, READ_LIMIT } = require('./jsonl.cjs');
+const { readRows } = require('../team/inbox.cjs');
 
 const execute = promisify(execFile);
 const RETRY_MIN = 1000, RETRY_MAX = 60_000;
@@ -16,8 +16,24 @@ async function gitCommon(projectPath) {
 }
 
 async function readJournal(file) {
-  const rows = await readJsonl(file, { version: null, timeKey: 'time' });
-  return rows.map(row => readEnvelope(row, { channel: 'journal.jsonl' }).value);
+  const directory = path.dirname(file);
+  const files = await fs.promises.readdir(directory, { withFileTypes: true }).catch(() => []);
+  const archives = files.filter(entry => entry.isFile() && /^journal\.jsonl\.\d+-[a-f\d-]{36}\.archive$/.test(entry.name))
+    .map(entry => entry.name).sort().reverse();
+  const entries = [];
+  let skipped = 0, bytes = FILE_LIMIT;
+  for (const candidate of [file, ...archives.map(name => path.join(directory, name))]) {
+    if (!bytes || entries.length >= READ_LIMIT) break;
+    const stat = await fs.promises.stat(candidate).catch(() => null);
+    if (!stat?.isFile()) continue;
+    const allowance = Math.min(bytes, stat.size);
+    const rows = await readJsonl(candidate, { version: null, timeKey: 'time', bytes: allowance, limit: READ_LIMIT - entries.length });
+    const decoded = readRows(rows, 'journal.jsonl');
+    entries.unshift(...decoded.entries);
+    skipped += decoded.skipped;
+    bytes -= allowance;
+  }
+  return { entries, skipped };
 }
 
 class DashboardJournals {
@@ -109,7 +125,7 @@ class DashboardJournals {
       histories.set(project.common, readJournal(path.join(project.directory, 'journal.jsonl')));
     }
     return Promise.all(this.projects.map(async project => ({ projectId: project.id, project: project.name, key: project.common,
-      entries: await histories.get(project.common) })));
+      ...await histories.get(project.common) })));
   }
   stop() {
     this.active = false;

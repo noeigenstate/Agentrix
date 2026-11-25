@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { createHmac, randomUUID } = require('node:crypto');
 const { run, runDetached, detachedRuns } = require('../integration/dispatch.cjs');
 const { createRoleTools } = require('../integration/role-tools.cjs');
@@ -675,7 +675,7 @@ function inputClock() {
     } };
 }
 
-function launchHarness(t, configure) {
+function launchHarness(t, configure, onEvent = () => {}, supportsFinish = false) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-launch-')));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const parent = parentTerminal(root); parent.write({});
@@ -691,11 +691,78 @@ function launchHarness(t, configure) {
   let handler, control;
   registerClaudeWorker({ control: { onRequest: (_name, fn) => { handler = fn; } }, claude: {}, settings: () => ({}), terminals });
   const binding = { runId: 'launch', projectId: 'terminal', agent: 'claude', cwd: root, worktree: root, allow: [], local: true, leadMode: 'terminal' };
-  const stream = { emit: event => events.push(event), onControl: fn => { control = fn; return () => {}; } };
+  const stream = { supportsFinish, emit: event => { events.push(event); onEvent(event); }, onControl: fn => { control = fn; return () => {}; } };
   return { root, parent, spawned, events, clock, terminals, launched: launched.promise,
     hook: (event, payload = {}) => terminals.hook({ terminalId: 'worker-launch', event, sessionId: SESSION, payload }),
     start: (prompt = 'Synthetic brief', readOnly = false) => handler({ ...binding, readOnly }, { prompt }, stream), control: message => control(message) };
 }
+
+test('worker shell checks run before Bash and PowerShell tools and share the SDK Git policy', async t => {
+  const f = launchHarness(t);
+  const result = f.start(), pty = await f.launched;
+  const settings = JSON.parse(fs.readFileSync(pty.args[pty.args.indexOf('--settings') + 1], 'utf8'));
+  const [group] = settings.hooks.PreToolUse.filter(entry => entry.matcher === 'Bash|PowerShell');
+  const [guard] = group.hooks;
+  assert.equal(guard.onFailure, 'block');
+  const windows = process.platform === 'win32';
+  const run = (tool_name, command) => spawnSync(windows ? 'powershell.exe' : '/bin/sh', windows
+    ? ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(guard.command, 'utf16le').toString('base64')] : ['-c', guard.command],
+  { input: JSON.stringify({ tool_name, tool_input: { command } }), encoding: 'utf8', windowsHide: true, timeout: 15_000 });
+  assert.deepEqual([run('Bash', 'git -C . commit').status, run('PowerShell', 'git status').status], [2, 0]);
+  pty.exit({ exitCode: 1 });
+  assert.deepEqual(await result, { status: 'failed' });
+});
+
+test('one failed owner message write stays queued and retries before the next message', async t => {
+  const idle = Promise.withResolvers();
+  const f = launchHarness(t, undefined, event => {
+    if (event.type === 'session.state' && event.payload.state === 'idle') idle.resolve();
+  }, true);
+  const result = f.start(), pty = await f.launched;
+  f.hook('UserPromptSubmit');
+  f.hook('StopFailure');
+  await idle.promise;
+  const writeFile = fs.writeFileSync;
+  const mock = t.mock.method(fs, 'writeFileSync', (file, ...args) => {
+    if (path.basename(file) === 'message-1.md') throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    return writeFile(file, ...args);
+  });
+  const failed = randomUUID(), next = randomUUID();
+  assert.equal(await f.control({ type: 'intervene', messageId: failed, text: 'First message' }), 'queued');
+  assert.equal(await f.control({ type: 'intervene', messageId: next, text: 'Second message' }), 'queued');
+  assert.deepEqual(pty.writes, []);
+  f.clock.advance(200);
+  mock.mock.restore();
+  assert.equal(pty.writes.length, 1);
+  const folder = path.join(f.root, 'worker-launch', 'brief');
+  assert.equal(fs.readFileSync(path.join(folder, 'message-2.md'), 'utf8'), 'First message');
+  assert.equal(fs.existsSync(path.join(folder, 'message-3.md')), false);
+  pty.exit({ exitCode: 1 }); await result;
+});
+
+test('a transcript read error publishes a failed turn and settles the worker', async t => {
+  const f = launchHarness(t);
+  const result = f.start();
+  await f.launched;
+  const log = transcript(f.parent.claudeHome, f.root, SESSION);
+  log.append(log.prompt('synthetic', 'Prompt', Date.now()));
+  const { TranscriptTail } = require('../electron/transcript-tail.cjs');
+  t.mock.method(TranscriptTail.prototype, 'read', async () => { throw new Error('unreadable transcript'); });
+  f.hook('UserPromptSubmit');
+  assert.deepEqual(await result, { status: 'failed' });
+  assert.equal(f.events.find(event => event.type === 'error').payload.code, 'worker_transcript_failed');
+  assert.deepEqual(f.events.find(event => event.type === 'turn.completed').payload, { status: 'failed' });
+});
+
+test('a worker refuses an unsupported parent bootstrap before starting the PTY', async t => {
+  const f = launchHarness(t, (_deps, _root, parent) => {
+    const bootstrap = JSON.parse(fs.readFileSync(parent.bootstrap, 'utf8'));
+    fs.writeFileSync(parent.bootstrap, JSON.stringify({ ...bootstrap, format: 'agentrix.bootstrap', version: 9 }));
+  });
+  await f.start();
+  assert.equal(f.spawned.length, 0);
+  assert.equal(f.events.at(-1).payload.reason, 'wire.unsupported_version');
+});
 
 test('a read-only terminal role passes an exact short brief to the executable and uses a file for Windows limits or shell shims', async t => {
   const short = '--inspect\n\nKeep "quotes", %VARIABLE% and ! in the brief.';
@@ -1174,7 +1241,9 @@ test("a worker's hooks never reach a project terminal or its completion", async 
 
   // The worker's --settings use terminalHooks() for its own id and key, with no note file; its only added
   // directory is the brief folder, which holds neither the settings nor the start-up hook copy.
-  assert.equal(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'), workerHookSettings(expected));
+  const actual = JSON.parse(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'));
+  actual.hooks.PreToolUse.pop();
+  assert.deepEqual(actual, JSON.parse(workerHookSettings(expected)));
   for (const channel of ['http', expected.fallback]) {
     const permission = JSON.parse(workerHookSettings({ ...expected, channel })).hooks.PermissionRequest[0].hooks[0];
     assert.match(permission.command, /-Kind worker-permission/);
@@ -1184,7 +1253,7 @@ test("a worker's hooks never reach a project terminal or its completion", async 
   assert.ok(!Object.keys(env).some(name => /READING_NOTE/i.test(name)));
   assert.equal(f.pty.args.filter(arg => arg === '--add-dir').length, 1);
   assert.equal(f.pty.args[f.pty.args.indexOf('--add-dir') + 1], path.join(folder, 'brief'));
-  assert.deepEqual(fs.readdirSync(folder).sort(), ['brief', 'claude-env.sh', 'settings.json']);
+  assert.deepEqual(fs.readdirSync(folder).sort(), ['brief', 'claude-env.sh', 'settings.json', 'shell-policy.cjs']);
   assert.deepEqual(fs.readdirSync(path.join(folder, 'brief')), []);
 
   // A command-hook event with the worker's key and the HTTP hooks reach only the worker's call.

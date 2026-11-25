@@ -7,7 +7,9 @@ const { removePath } = require('./disk.cjs');
 const MAX_EXPERIMENTS = 100, MAX_STATE = 16 * 1024 * 1024;
 
 class LabStore {
-  constructor(userData) { this.directory = path.join(userData, 'lab'); this.pending = Promise.resolve(); }
+  constructor(userData, { report = error => console.warn('Lab experiment read failed:', error.code) } = {}) {
+    this.directory = path.join(userData, 'lab'); this.pending = Promise.resolve(); this.report = report;
+  }
   folder(id) {
     if (!validId(id)) throw new Error('无效的实验编号。');
     return path.join(this.directory, id);
@@ -27,7 +29,10 @@ class LabStore {
         if (value.id === entry.name && Array.isArray(value.runs) && value.runs.length <= 600 && Array.isArray(value.tasks)) {
           experiments.push(upgradeExperiment(value));
         }
-      } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code) && !(error instanceof SyntaxError)) throw error; }
+      } catch (error) {
+        if (['EACCES', 'EPERM'].includes(error.code)) { this.report(error); continue; }
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code) && !(error instanceof SyntaxError)) throw error;
+      }
     }
     return experiments.sort((a, b) => b.createdAt - a.createdAt);
   }

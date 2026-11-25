@@ -26,9 +26,9 @@ function updateBootstrapLead(file, lead) {
   const next = lead && writeKeyValue({ format: 'agentrix.lead-seat', version: '1', model: lead.model, effort: lead.effort,
     fast, ultracode: ultra ? '1' : '0', seats: bounded });
   const legacy = lead ? [lead.model, lead.effort, fast, bounded, ...(ultra ? ['ultracode'] : []), ''].join('\n') : '';
-  writeFileAtomic(file + '.lead', legacy);
   if (next) writeFileAtomic(file + '.lead.env', next);
-  else fs.rmSync(file + '.lead.env', { force: true });
+  writeFileAtomic(file + '.lead', legacy);
+  if (!next) fs.rmSync(file + '.lead.env', { force: true });
 }
 
 function writeSeatSnapshot(file, seats) {
@@ -97,22 +97,13 @@ function removeBootstrap(file) {
 
 const readBootstrap = file => readEnvelope(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''), { format: BOOTSTRAP_FORMAT }).value;
 
-// Refresh only launch policy: keys, hook settings and the private startup hook remain unchanged.
-async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
-  delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
-  // Hooks can hold the bootstrap open on Windows. Launchers always re-read this independent policy, including after
-  // the bounded bootstrap refresh fails. It contains no key and stays authoritative until the session is removed.
-  const policy = { format: BACKGROUND_FORMAT, version: 1, claudeBackgroundTasks: allow === true };
-  fs.writeFileSync(file + '.background.json', JSON.stringify(policy), { mode: 0o600 });
-  const data = readBootstrap(file);
-  data.claudeBackgroundTasks = allow === true;
+async function replaceBackground(file, data, check, { rename, delay }) {
   const temporary = file + '.' + randomUUID() + '.background.tmp';
   try {
     fs.writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
     for (let attempt = 0; ; attempt++) {
       try {
-        const current = readBootstrap(file);
-        if (current.sessionKey !== data.sessionKey) throw Object.assign(new Error('The bootstrap session changed.'), { code: 'ESTALE' });
+        check();
         rename(temporary, file); break;
       }
       catch (error) {
@@ -123,4 +114,26 @@ async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateBootstrapMode, updateDispatchSeats, updateDispatchLaunchSeats };
+const backgroundWrites = new Map();
+
+// Launchers re-read the independent policy even if the bounded bootstrap refresh fails.
+async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  const sessionKey = readBootstrap(file).sessionKey;
+  const policy = { format: BACKGROUND_FORMAT, version: 1, claudeBackgroundTasks: allow === true };
+  const check = () => {
+    const current = readBootstrap(file);
+    if (current.sessionKey !== sessionKey) throw Object.assign(new Error('The bootstrap session changed.'), { code: 'ESTALE' });
+    return current;
+  };
+  const update = (backgroundWrites.get(file) || Promise.resolve()).catch(() => {}).then(async () => {
+    await replaceBackground(file + '.background.json', policy, check, { rename, delay });
+    await replaceBackground(file, { ...check(), claudeBackgroundTasks: policy.claudeBackgroundTasks }, check, { rename, delay });
+  });
+  backgroundWrites.set(file, update);
+  try { await update; }
+  finally { if (backgroundWrites.get(file) === update) backgroundWrites.delete(file); }
+}
+
+module.exports = { writeBootstrap, readBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateBootstrapMode,
+  updateDispatchSeats, updateDispatchLaunchSeats };

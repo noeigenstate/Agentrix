@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const nodePath = require('node:path');
 const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
-const { mergePath, readStoredPath, variable } = require('../claude-runtime/path-env.cjs');
+const { mergePath, readStoredPath, variable, queueSearch } = require('../claude-runtime/path-env.cjs');
 const { reason } = require('../../shared/reason.cjs');
 const { SHIM_MARKER, STAND_IN_MARKER } = require('../../shared/agentrix-shims.cjs');
 // Every `via` a found Codex can have (codex-runtime/BOUNDARY.md).
@@ -170,7 +170,7 @@ const onShareOf = (folder, real, path) => !shareOf(real, path) || shareOf(real, 
 function createCodexLocator({ probe = execFile, files = fs, storedPath = readStoredPath, registry = readRegistry, readNpmPrefix, now = Date.now,
   scan = null, store = null, changed = () => {}, wait = ms => new Promise(resolve => { setTimeout(resolve, ms).unref?.(); }) } = {}) {
   const versions = new Map();
-  let stored = null, registered = null, lastFull = null, last = null, latest = null, running = null, trailing = null;
+  let stored = null, registered = null, lastFull = null, last = null, latest = null;
   // The running scan, when this process last began one, and how many scans settled with what last (a hit or null).
   // `scanOutcome` is how this process's last scan that found nothing ended: 'done' (everywhere) or 'partial'.
   let scanning = null, scannedAt = null, scansSettled = 0, scanAnswer = null, scanOutcome = null;
@@ -403,17 +403,7 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
   }
   const normalized = ({ env = process.env, platform = process.platform, arch = process.arch, home, prefer } = {}) =>
     ({ env, platform, arch, home: home ?? variable(env, platform === 'win32' ? 'USERPROFILE' : 'HOME') ?? null, prefer });
-  const start = (options, mode) => {
-    const entry = { promise: answer(normalized(options), mode).finally(() => { if (running === entry) running = null; }) };
-    running = entry;
-    return entry.promise;
-  };
-  // Calls that overlap share one search; a refresh asked for while one runs is done once after it, however many ask.
-  function shared(options, mode) {
-    if (!running) return start(options, mode);
-    if (mode !== 'refresh' && mode !== 'scan') return running.promise;
-    return trailing ||= running.promise.catch(() => {}).then(() => { trailing = null; return start(options, mode); });
-  }
+  const shared = queueSearch(answer, normalized);
   return {
     // `prefer`: a file to try before the search (the dispatch helper's AGENTRIX_CODEX_EXECUTABLE).
     locate: options => shared(options, 'locate'),

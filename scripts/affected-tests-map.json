@@ -97,6 +97,16 @@
     "tests/workspace-ipc-updates.test.cjs"
   ],
   "tests": {
+    "tests/module-audit-regressions.test.cjs": [
+      "electron/features/claude-runtime/BOUNDARY.md",
+      "electron/features/cli-adapters/BOUNDARY.md",
+      "electron/features/codex-runtime/BOUNDARY.md",
+      "electron/features/files/BOUNDARY.md",
+      "electron/features/lab/BOUNDARY.md",
+      "electron/features/skills/BOUNDARY.md",
+      "electron/features/ssh/BOUNDARY.md",
+      "electron/features/terminal-events/BOUNDARY.md"
+    ],
     "tests/wire-format.test.cjs": [
       "integration/BOUNDARY.md",
       "integration/shims/BOUNDARY.md",
@@ -376,7 +386,7 @@
         "electron/features/agents/agent-command.cjs"
       ],
       "reason": "The shell event handler loads the Codex argument mapper when admitting a native launch.",
-      "digest": "426406bb39d88d28ac56e07eb2c604fe19df25e995586440ecb1ee3bcf1ce768"
+      "digest": "f40c6425ba5ac339f8fba1b4fb3de2d390f343dc022a17db0d1e90327e4b9556"
     },
     "electron/features/agents/agent-command.cjs": {
       "targets": [
@@ -503,7 +513,7 @@
       "reason": "Intercept resolves the helper, lead reader and terminal facets in source, packaged and SSH layouts. Packaged and SSH copies use the generated launcher envelope."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "4ba5b38401283ffaecf9953ab6f91423a6f2a114a8fade17c8890ea2b40327d8",
+      "digest": "cd12e31a3cf1345cab7137fec62ef94d0811fee17918ae9f9620595e06470633",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

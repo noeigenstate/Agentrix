@@ -11,7 +11,9 @@ function pruneDeliveryFiles(folder, live, report, now = Date.now()) {
     try {
       if (!fs.lstatSync(directory).isDirectory()) return;
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        if (!entry.isSymbolicLink()) inspect(entry, path.join(directory, entry.name));
+        if (entry.isSymbolicLink()) continue;
+        try { inspect(entry, path.join(directory, entry.name)); }
+        catch (error) { if (error.code !== 'ENOENT') report(error); }
       }
     } catch (error) { if (error.code !== 'ENOENT') report(error); }
   };

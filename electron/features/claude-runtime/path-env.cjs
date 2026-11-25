@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { isDeepStrictEqual } = require('node:util');
 const STORED_PATH_TIMEOUT_MS = 5000;
 
 // An environment variable by name, in any letter case (Windows names are case-insensitive; a copied env keeps its spelling).
@@ -44,4 +45,29 @@ function readStoredPath(env, { run = execFile, timeoutMs = STORED_PATH_TIMEOUT_M
   });
 }
 
-module.exports = { mergePath, readStoredPath, variable };
+// Keep locator cache publication ordered. Callers with different environments wait for their own search.
+function queueSearch(answer, normalized) {
+  const queue = [];
+  function start() {
+    const entry = queue[0];
+    const finish = (settle, value) => {
+      queue.shift();
+      settle(value);
+      if (queue.length) start();
+    };
+    answer(entry.options, entry.mode).then(value => finish(entry.resolve, value), error => finish(entry.reject, error));
+  }
+  return (input, mode) => {
+    const options = normalized(input);
+    const full = mode === 'refresh' || mode === 'scan';
+    const last = queue.at(-1);
+    if (last && isDeepStrictEqual(last.options, options) && (!full || queue.length > 1 && last.mode === mode)) return last.promise;
+    const entry = { options, mode };
+    entry.promise = new Promise((resolve, reject) => Object.assign(entry, { resolve, reject }));
+    queue.push(entry);
+    if (queue.length === 1) start();
+    return entry.promise;
+  };
+}
+
+module.exports = { mergePath, readStoredPath, variable, queueSearch };

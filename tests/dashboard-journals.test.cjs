@@ -53,7 +53,23 @@ test('dashboard reads historical and version-one journal rows and reports unsupp
   assert.deepEqual((await source.read())[0].entries, rows);
   assert.equal(fs.readFileSync(file, 'utf8'), original);
   fs.appendFileSync(file, '{"v":7,"type":"finding","time":3}\n');
-  await assert.rejects(source.read(), { code: 'wire.unsupported_version', message: 'journal.jsonl: unsupported version 7' });
+  const [history] = await source.read();
+  assert.deepEqual(history.entries, rows);
+  assert.equal(history.skipped, 1);
+});
+
+test('journal rotation leaves recent archived entries visible in order', async t => {
+  const { directory, common, file } = lab(t);
+  const source = new DashboardJournals({ getProjects: () => [{ id: 'a', path: directory }], changed() {}, resolveCommon: async () => common });
+  t.after(() => source.stop());
+  const old = { v: 1, type: 'finding', time: 1, title: 'Archived' };
+  const current = { v: 1, type: 'finding', time: 2, title: 'Current' };
+  const archive = file + '.100-00000000-0000-0000-0000-000000000000.archive';
+  fs.writeFileSync(archive, JSON.stringify(old) + '\n');
+  fs.writeFileSync(archive + '.pending', JSON.stringify(old) + '\n');
+  fs.writeFileSync(file, JSON.stringify(current) + '\n');
+  const [history] = await source.read();
+  assert.deepEqual(history.entries, [old, current]);
 });
 
 test('opening a dashboard before Team exists observes creation and begins watching its journal', async t => {

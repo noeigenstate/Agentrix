@@ -37,13 +37,26 @@ async function assertOwner(projectPath, before) {
 
 const excludedPath = (file, exclude) => exclude.some(name => file === name || file.startsWith(name + '/'));
 
+async function linkTarget(file, depth = 0) {
+  try { return await fs.realpath(file); }
+  catch (error) {
+    if (error.code !== 'ENOENT' || depth >= 40) throw error;
+    const entry = await fs.lstat(file).catch(failure => {
+      if (failure.code !== 'ENOENT') throw failure;
+      return null;
+    });
+    if (entry?.isSymbolicLink()) return linkTarget(path.resolve(path.dirname(file), await fs.readlink(file)), depth + 1);
+    return path.join(await linkTarget(path.dirname(file), depth + 1), path.basename(file));
+  }
+}
+
 async function validateLinks(directory, root, { exclude = [], signal, onFile } = {}) {
   root ||= await fs.realpath(directory);
   aborted(signal);
   for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
     const file = path.join(directory, entry.name), relative = path.relative(root, file).split(path.sep).join('/');
     if (entry.isSymbolicLink()) {
-      const target = await fs.realpath(file);
+      const target = await linkTarget(file);
       if (!inside(root, target)) throw new Error('A snapshot or dependency link escapes the isolated workspace.');
     }
     // Excluded environments may have runtime links of their own. Never walk them, but still check a root link.

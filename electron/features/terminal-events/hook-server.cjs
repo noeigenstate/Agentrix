@@ -14,8 +14,22 @@ function targetOf(request) {
 // item 5). The CLI waits for each answer, so it is written before `ingest` sees the event, and nothing ingest does can
 // hold a turn. A refused request is answered 404; an event over the size limit is still answered and taken, without
 // its payload; an aborted one is counted.
-async function createHookServer(ingest, { limit = BODY_LIMIT } = {}) {
-  const server = http.createServer((request, response) => {
+async function createHookServer(ingest, { limit = BODY_LIMIT, createServer = http.createServer } = {}) {
+  const notes = new Map();
+  function reserveNote(target, key, response) {
+    if (target.event !== 'UserPromptSubmit') return null;
+    const id = target.terminalId, previous = notes.get(id);
+    if (previous?.key === key && previous.response) return null;
+    const note = ingest.note?.(id, target.event) ?? (previous?.key === key ? previous.note : null);
+    if (note === null) { notes.delete(id); return null; }
+    const entry = { key, note, response };
+    notes.set(id, entry);
+    if (notes.size > 1024) notes.delete(notes.keys().next().value);
+    response.once('finish', () => { if (notes.get(id) === entry) notes.delete(id); });
+    response.once('close', () => { if (notes.get(id) === entry) entry.response = null; });
+    return note;
+  }
+  const server = createServer((request, response) => {
     const target = targetOf(request), admitted = ingest.admit(target?.terminalId ?? null, request.headers['x-agentrix-key']);
     const chunks = [];
     let size = 0;
@@ -25,7 +39,7 @@ async function createHookServer(ingest, { limit = BODY_LIMIT } = {}) {
     request.on('close', () => { if (!request.complete) ingest.abort(); });
     request.on('end', () => {
       response.writeHead(admitted ? 200 : 404, { 'content-type': 'application/json' });
-      response.end(hookResponse(target?.event, admitted ? ingest.note?.(target.terminalId, target.event) : null), () => {
+      response.end(hookResponse(target?.event, admitted ? reserveNote(target, request.headers['x-agentrix-key'], response) : null), () => {
         if (admitted) ingest.take(target.terminalId, target.event, size > limit ? null : Buffer.concat(chunks).toString('utf8'));
       });
     });
@@ -34,6 +48,7 @@ async function createHookServer(ingest, { limit = BODY_LIMIT } = {}) {
   let closing;
   return { port: server.address().port, close() {
     return closing ||= new Promise(resolve => {
+      notes.clear();
       server.close(() => resolve());
       server.closeAllConnections();
     });

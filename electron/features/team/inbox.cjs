@@ -12,6 +12,22 @@ const inboxLine = control => JSON.stringify({ v: 1, ...control }) + '\n';
 const inside = (root, file) => { const relative = path.relative(root, file); return relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative); };
 const timestamp = value => Number.isSafeInteger(value) && value >= 0;
 
+function readRows(rows, channel, validate = () => true) {
+  const entries = [];
+  let skipped = 0;
+  for (const row of rows) {
+    if (typeof row === 'string' && !row.trim()) continue;
+    try {
+      const { value } = readEnvelope(row, { channel, legacy: channel !== 'memory.jsonl' });
+      if (validate(value)) { entries.push(value); continue; }
+    } catch (error) {
+      if (!(error instanceof SyntaxError) && !['wire.invalid', 'wire.unsupported_version'].includes(error.code)) throw error;
+    }
+    skipped++;
+  }
+  return { entries, skipped };
+}
+
 function controlOf(input, { withdrawal = false } = {}) {
   const { value, legacy } = readEnvelope(input, { channel: 'inbox.jsonl' });
   if (!runId(value.id) || !(timestamp(value.at) || legacy && withdrawal && value.type === 'withdrawn')) throw new Error('无效的工作者消息。');
@@ -65,8 +81,8 @@ function updateWorker(team, id, patch) {
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
 }
 
-// Both producers and the helper's final empty check hold the team lock. A successful receipt therefore cannot race
-// past finalization. The callback validates the binding; wake-up signals happen after this transaction commits.
+// Both producers and the final empty check hold the process-owned lock, including while notify is pending.
+// The callback validates the binding; wake-up signals happen after this transaction commits.
 async function queueControl(team, id, input, notify = () => {}) {
   const control = controlOf(input);
   return team.locked(async () => {
@@ -167,4 +183,4 @@ class RunInbox {
   }
 }
 
-module.exports = { RunInbox, queueControl, recordControl, controlOf, readBoard, boardEntry, validText, runId, MAX_INBOX };
+module.exports = { RunInbox, queueControl, recordControl, controlOf, readBoard, boardEntry, validText, runId, MAX_INBOX, readRows };

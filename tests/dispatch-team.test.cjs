@@ -187,10 +187,13 @@ test('dead board entries and stale locks are removed while a live lock is respec
     assert.equal(exists(path.join(team.board, 'dead.json')), false);
   });
   team.release(id);
-  sync.writeFileSync(lock, 'held');
+  const held = Promise.withResolvers(), release = Promise.withResolvers();
+  const holder = team.locked(() => { held.resolve(); return release.promise; });
+  await held.promise;
+  await fs.utimes(lock, staleTime, staleTime);
   let entered = false, observed;
-  const checked = new Promise(resolve => { observed = resolve; }), stat = sync.statSync;
-  const intercepted = t.mock.method(sync, 'statSync', function (file, ...args) {
+  const checked = new Promise(resolve => { observed = resolve; }), stat = sync.lstatSync;
+  const intercepted = t.mock.method(sync, 'lstatSync', function (file, ...args) {
     const result = stat.call(this, file, ...args);
     if (file === lock) observed();
     return result;
@@ -199,11 +202,71 @@ test('dead board entries and stale locks are removed while a live lock is respec
   try {
     await Promise.race([checked, pending.then(() => { throw new Error('Lock was not respected'); })]);
     assert.equal(entered, false);
-    sync.unlinkSync(lock); await pending; assert.equal(entered, true);
+    release.resolve(); await holder; await pending; assert.equal(entered, true);
   } finally {
     intercepted.mock.restore();
-    await fs.rm(lock, { force: true }); await pending.catch(() => {});
+    release.resolve(); await holder; await pending.catch(() => {});
   }
+});
+
+test('a dead lock owner is reclaimed and a queued inbox write keeps finalization out until admission finishes', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true), lock = path.join(team.directory, 'lock');
+  const dead = spawn(process.execPath, ['-e', ''], { windowsHide: true }); await once(dead, 'close');
+  await fs.mkdir(lock);
+  await fs.writeFile(path.join(lock, `${dead.pid}-${randomUUID()}`), '');
+  const id = randomUUID();
+  team.register(options(f.repo, ['--allow', 'src/a.js']), id);
+  const inbox = new (require('../electron/features/team/inbox.cjs').RunInbox)(team, id);
+  await inbox.open();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const message = { id: randomUUID(), at: Date.now(), text: 'still pending' };
+  const queued = team.queueControl(id, message, () => { entered.resolve(); return release.promise; });
+  await entered.promise;
+  await fs.utimes(lock, staleTime, staleTime);
+  let finalized = false;
+  const taking = inbox.take(true).then(value => { finalized = true; return value; });
+  assert.equal(finalized, false);
+  release.resolve();
+  await queued;
+  assert.deepEqual(await taking, [message]);
+});
+
+test('memory keeps readable rows, counts corruption, and appends after a torn final row', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const before = { v: 1, type: 'memory.entry', at: 1, title: 'Previously', text: 'Readable finding' };
+  const future = { ...before, v: 9, title: 'Future format' };
+  await fs.writeFile(team.memoryJsonl, JSON.stringify(before) + '\n' + JSON.stringify(future) + '\n{"v":1,"text":"torn');
+  assert.match(team.context('current', null)[0], /Skipped 2 unreadable memory rows/);
+  await team.finish({ title: 'A run', agent: 'claude' }, { id: 'run', findings: ['New finding'], header: 'Today' });
+  const [first, second, torn, appended] = (await fs.readFile(team.memoryJsonl, 'utf8')).split('\n');
+  assert.deepEqual(JSON.parse(first), before);
+  assert.deepEqual(JSON.parse(second), future);
+  assert.equal(torn, '{"v":1,"text":"torn');
+  assert.equal(JSON.parse(appended).text, '- New finding');
+  assert.match(await fs.readFile(team.memory, 'utf8'), /Generated project memory[\s\S]*Readable finding[\s\S]*New finding/);
+  await fs.appendFile(team.journal, '{"v":9,"time":100}\n');
+  assert.equal(team.journalHistory().skipped, 1);
+  assert.deepEqual(team.entries().map(entry => entry.id), ['run']);
+});
+
+test('large team logs retain complete archived rows and bounded active files', async t => {
+  const f = await lab(t), team = projectTeam(f.repo, true);
+  const memory = { v: 1, type: 'memory.entry', at: 1, title: 'Archive', text: 'm'.repeat(256 * 1024) };
+  const journal = { v: 1, type: 'incident', time: 1, text: 'j'.repeat(256 * 1024) };
+  await fs.writeFile(team.memoryJsonl, (JSON.stringify(memory) + '\n').repeat(17));
+  await fs.writeFile(team.journal, (JSON.stringify(journal) + '\n').repeat(65));
+  await team.locked(() => {
+    team.appendMemory({ title: 'New memory', text: 'new' });
+    team.append({ type: 'end', id: 'latest' });
+  });
+  for (const [file, record, bound] of [[team.memoryJsonl, memory, 4], [team.journal, journal, 16]]) {
+    const name = path.basename(file);
+    const archive = (await fs.readdir(team.directory)).find(entry => entry.startsWith(name + '.') && entry.endsWith('.archive'));
+    assert.ok(archive);
+    assert.deepEqual(JSON.parse((await fs.readFile(path.join(team.directory, archive), 'utf8')).split('\n')[0]), record);
+    assert.ok((await fs.stat(file)).size < bound * 1024 * 1024);
+  }
+  assert.equal(team.entries().at(-1).id, 'latest');
 });
 
 test('board entries leave on failed spawn and interruption', async t => {
@@ -355,14 +418,14 @@ test('bookkeeping failures preserve worker results and never retry findings', as
 test('a fresh replacement lock survives stale-lock removal', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), file = path.join(team.directory, 'lock');
   await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
-  const rename = sync.renameSync, stat = sync.statSync;
+  const unlink = sync.unlinkSync, stat = sync.lstatSync;
   let replaced = false, entered = false, observed;
   const checked = new Promise(resolve => { observed = resolve; });
-  const intercepted = t.mock.method(sync, 'renameSync', function (from, to) {
-    rename.call(this, from, to);
-    if (from === file) { assert.ok(to.endsWith('.stale')); replaced = true; sync.writeFileSync(file, 'fresh holder'); }
+  const intercepted = t.mock.method(sync, 'unlinkSync', function (name) {
+    unlink.call(this, name);
+    if (name === file) { replaced = true; sync.writeFileSync(file, 'fresh holder'); }
   });
-  const checkedLock = t.mock.method(sync, 'statSync', function (name, ...args) {
+  const checkedLock = t.mock.method(sync, 'lstatSync', function (name, ...args) {
     const result = stat.call(this, name, ...args);
     if (name === file && replaced) observed();
     return result;
@@ -371,7 +434,7 @@ test('a fresh replacement lock survives stale-lock removal', async t => {
   try {
     await Promise.race([checked, pending.then(() => { throw new Error('Replacement lock was not respected'); })]);
     assert.equal(replaced, true); assert.equal(entered, false); assert.equal(sync.readFileSync(file, 'utf8'), 'fresh holder');
-    sync.unlinkSync(file); await pending;
+    unlink(file); await pending;
     assert.equal(entered, true); assert.equal(exists(file), false);
   } finally {
     intercepted.mock.restore(); checkedLock.mock.restore();
@@ -379,13 +442,18 @@ test('a fresh replacement lock survives stale-lock removal', async t => {
   }
 });
 
-for (const operation of ['renameSync', 'unlinkSync']) {
+const preventReplacingEmptyLock = (operation, file) => (from, to) => {
+  if (operation === 'rmdirSync' && to === file && exists(file)) throw Object.assign(new Error('Lock exists'), { code: 'EEXIST' });
+  sync.renameSync(from, to);
+};
+
+for (const operation of ['unlinkSync', 'rmdirSync']) {
   test(`stale-lock ${operation} retries only transient failures`, async t => {
     const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
-    const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
+    const applies = name => name === file;
     const real = sync[operation];
     let failures = ['EPERM', 'EBUSY'], attempts = 0;
-    const injected = { ...sync, [operation](...args) {
+    const injected = { ...sync, renameSync: preventReplacingEmptyLock(operation, file), [operation](...args) {
       if (applies(args[0])) {
         attempts++;
         const code = failures.shift();
@@ -394,14 +462,18 @@ for (const operation of ['renameSync', 'unlinkSync']) {
       return real(...args);
     } };
     const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), { 'node:fs': injected }).projectTeam(f.repo);
-    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    const makeOld = async () => {
+      if (operation === 'rmdirSync') await fs.mkdir(file);
+      else { await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime); }
+    };
+    await makeOld();
     let entered = false;
     await team.locked(() => { entered = true; });
-    assert.equal(entered, true); assert.equal(attempts, 3);
+    assert.equal(entered, true); assert.equal(attempts, operation === 'rmdirSync' ? 4 : 3);
     assert.equal(exists(file), false);
     assert.deepEqual((await fs.readdir(team.directory)).filter(name => name.endsWith('.stale')), []);
 
-    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    await makeOld();
     failures = ['EACCES']; entered = false;
     await assert.rejects(team.locked(() => { entered = true; }), error => error.code === 'EACCES');
     assert.equal(entered, false);
@@ -409,18 +481,19 @@ for (const operation of ['renameSync', 'unlinkSync']) {
 
   test(`stale-lock ${operation} stops retrying at the lock deadline`, async t => {
     const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
-    const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
+    const applies = name => name === file;
     const real = sync[operation];
     let attempts = 0;
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
-    const injected = { ...sync, [operation](...args) {
+    const injected = { ...sync, renameSync: preventReplacingEmptyLock(operation, file), [operation](...args) {
       if (applies(args[0])) { attempts++; throw Object.assign(new Error('Injected lock contention'), { code: 'EPERM' }); }
       return real(...args);
     } };
     const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), {
       'node:fs': injected, 'node:timers/promises': { setTimeout: async () => { t.mock.timers.tick(15001); } },
     }).projectTeam(f.repo);
-    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    if (operation === 'rmdirSync') await fs.mkdir(file);
+    else { await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime); }
     let entered = false;
     await assert.rejects(team.locked(() => { entered = true; }), /Team lock is busy/);
     assert.equal(entered, false); assert.equal(attempts, 1);
@@ -428,24 +501,25 @@ for (const operation of ['renameSync', 'unlinkSync']) {
 
   test(`a replacement lock survives transient stale-lock ${operation} failure`, async t => {
     const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
-    const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
+    const applies = name => name === file;
     const real = sync[operation];
     let replaced = false, entered = false, observed;
     const checked = new Promise(resolve => { observed = resolve; });
-    const injected = { ...sync, [operation](...args) {
+    const injected = { ...sync, renameSync: preventReplacingEmptyLock(operation, file), [operation](...args) {
       if (!replaced && applies(args[0])) {
-        if (operation === 'renameSync') sync.unlinkSync(file);
+        real(file);
         sync.writeFileSync(file, 'fresh holder'); replaced = true;
         throw Object.assign(new Error('Injected lock contention'), { code: 'EBUSY' });
       }
       return real(...args);
-    }, statSync(name, ...args) {
-      const result = sync.statSync(name, ...args);
+    }, lstatSync(name, ...args) {
+      const result = sync.lstatSync(name, ...args);
       if (name === file && replaced) observed();
       return result;
     } };
     const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), { 'node:fs': injected }).projectTeam(f.repo);
-    await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
+    if (operation === 'rmdirSync') await fs.mkdir(file);
+    else { await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime); }
     const pending = team.locked(() => { entered = true; });
     try {
       await Promise.race([checked, pending.then(() => { throw new Error('Replacement lock was not respected'); })]);

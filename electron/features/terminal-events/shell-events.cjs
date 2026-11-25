@@ -247,6 +247,27 @@ function exitAgent(deps, s, project, event) {
   if (code && code !== 130 && code !== -1073741510) s.error = deps.t('{agent} 已退出（代码 {code}），请查看终端输出。', { agent: deps.adapterOf(s.agent)?.manifest.label ?? 'Codex', code });
 }
 
+const MAX_NATIVE_MESSAGES = 512;
+
+function trackNativeInput(s, event) {
+  const { type, payload, receivedAtMs, itemId } = event;
+  if (type === 'item.upsert' && payload.kind === 'user-message' && payload.content.unsent !== true && payload.content.text) {
+    const id = payload.content.clientMessageId || itemId;
+    s.nativeMessages.set(id, payload.content.text);
+    s.promptQueue.enqueue(payload.content.text, receivedAtMs, id);
+    if (s.nativeMessages.size > MAX_NATIVE_MESSAGES) {
+      const oldest = s.nativeMessages.keys().next().value;
+      s.promptQueue.cancel(s.nativeMessages.get(oldest), receivedAtMs, oldest);
+      s.nativeMessages.delete(oldest);
+    }
+  }
+  if (type !== 'input.receipt' || !['consumed', 'rejected', 'unknown'].includes(payload.status)) return;
+  const id = payload.clientMessageId, text = s.nativeMessages.get(id);
+  if (!s.nativeMessages.delete(id)) return;
+  if (payload.status === 'consumed') s.promptQueue.start(text, receivedAtMs, id);
+  else s.promptQueue.cancel(text, receivedAtMs, id);
+}
+
 function structuredEvent(deps, id, event) {
   if (event.replay || deps.quitting) return;
   if (event.type === 'switch.updated') {
@@ -285,15 +306,7 @@ function structuredEvent(deps, id, event) {
     if (typeof observed?.model === 'string') s.nativeObservedModel = observed.model;
     s.agentSettings = Object.fromEntries(['model', 'effort', 'fast', 'ultracode'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
   }
-  if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
-    const clientId = event.payload.content.clientMessageId || event.itemId;
-    s.nativeMessages.set(clientId, event.payload.content.text);
-    s.promptQueue.enqueue(event.payload.content.text, event.receivedAtMs, clientId);
-  }
-  if (event.type === 'input.receipt' && event.payload.status === 'consumed') {
-    const text = s.nativeMessages.get(event.payload.clientMessageId);
-    if (text) s.promptQueue.start(text, event.receivedAtMs, event.payload.clientMessageId);
-  }
+  trackNativeInput(s, event);
   if (event.type === 'turn.started') {
     if (event.payload.origin === 'user') { s.completionWork.begin(event.receivedAtMs); deps.store.expectCompletion(project.id); }
     s.activityInputAt = event.receivedAtMs;
@@ -306,6 +319,8 @@ function structuredEvent(deps, id, event) {
   if (event.type === 'session.state') {
     s.nativeState = event.payload.state;
     if (['stopped', 'failed', 'disconnected'].includes(event.payload.state)) {
+      for (const [clientId, text] of s.nativeMessages) s.promptQueue.cancel(text, event.receivedAtMs, clientId);
+      s.nativeMessages.clear();
       s.calls?.endSession();
       s.status = 'exited'; s.cliActive = false;
       deps.store.setRestore(id, { terminal: false, codex: false });

@@ -4,7 +4,8 @@ const { createHmac, randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { withoutShims } = require('../../shared/agentrix-shims.cjs');
 const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
-const { workerPolicy, workerToolEnvironment } = require('../claude-runtime/decide.cjs');
+const { workerPolicy, workerToolEnvironment, forbiddenGit } = require('../claude-runtime/decide.cjs');
+const { readBootstrap } = require('../terminal-events/bootstrap-file.cjs');
 const { isTerminalResponse } = require('../../terminal-input.cjs');
 const { TranscriptTail } = require('../../transcript-tail.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
@@ -116,11 +117,20 @@ function fitsInitialArgument(file, args, prompt, platform) {
   return [file, ...args, '--', prompt].reduce((length, arg) => length + 2 * arg.length + 3, 1) <= 30_000;
 }
 
-function workerHookSettings({ channel, settings }, fast) {
+function workerShellHook(file, platform) {
+  const quote = value => platform === 'win32' ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`;
+  const invocation = [process.execPath, file].map(quote).join(' ');
+  return { type: 'command', timeout: 10, onFailure: 'block', ...(platform === 'win32'
+    ? { shell: 'powershell', command: `$env:ELECTRON_RUN_AS_NODE='1'; $OutputEncoding=[Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | & ${invocation}; exit $LASTEXITCODE` }
+    : { command: `ELECTRON_RUN_AS_NODE=1 ${invocation}` }) };
+}
+
+function workerHookSettings({ channel, settings }, fast, shellHook) {
   const value = JSON.parse(channel === 'http' ? settings.http : settings.fallback);
   // Leave room for cold PowerShell and Node startup as well as the bridge's own deadlines.
   const permission = value.hooks?.PermissionRequest?.[0]?.hooks?.[0];
   if (permission) permission.timeout = PERMISSION_HOOK_TIMEOUT;
+  if (shellHook) ((value.hooks ??= {}).PreToolUse ??= []).push({ matcher: 'Bash|PowerShell', hooks: [shellHook] });
   if (typeof fast === 'boolean') value.fastMode = fast;
   return JSON.stringify(value);
 }
@@ -234,7 +244,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       try { if (typeof used === 'string' && path.isAbsolute(used) && fs.statSync(used).isFile()) file = used; } catch {}
     }
     if (!file) throw Object.assign(new Error('Claude Code was not found for the worker terminal'), { code: 'native_cli_required' });
-    const { shims } = JSON.parse(fs.readFileSync(env0.bootstrapFile, 'utf8').replace(/^\uFEFF/, ''));
+    const { shims } = readBootstrap(env0.bootstrapFile);
     if (!shims) throw new Error('worker_shims_unavailable');
     // The worker's only added directory holds its brief and the owner's messages; its settings and start-up hook stay
     // beside it, out of that directory's reach.
@@ -244,7 +254,21 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     w.env = workerToolEnvironment(workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey,
       claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() }), platform);
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
-    fs.writeFileSync(settings, workerHookSettings(w.hooks, w.spec.fast), { mode: 0o600 });
+    const guard = path.join(w.folder, 'shell-policy.cjs');
+    fs.writeFileSync(guard, `const fs = require('node:fs');
+try {
+  const { tool_input: input } = JSON.parse(fs.readFileSync(0, 'utf8'));
+  if (typeof input?.command !== 'string') throw new Error();
+  if (${forbiddenGit}.test(input.command)) {
+    process.stderr.write('Git commit, push and reset --hard are forbidden for this role.\\n');
+    process.exitCode = 2;
+  }
+} catch {
+  process.stderr.write('Agentrix could not check this shell command.\\n');
+  process.exitCode = 2;
+}
+`, { mode: 0o600 });
+    fs.writeFileSync(settings, workerHookSettings(w.hooks, w.spec.fast, workerShellHook(guard, platform)), { mode: 0o600 });
     const roleConfig = w.spec.roleServer && path.join(w.folder, 'role-mcp.json');
     const { args: toolArgs, mode, mcpConfig } = workerPolicy(readOnly, platform, roleConfig, w.spec.roleServer);
     if (mcpConfig) fs.writeFileSync(roleConfig, JSON.stringify(mcpConfig), { mode: 0o600 });
@@ -309,18 +333,38 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   // An owner's message goes in as a file in the brief folder, named by one typed sentence, written once
   // while the CLI waits for a prompt. UserPromptSubmit confirms it.
   function write(w, input) {
-    w.idle = false; w.inFlight = input;
     const file = path.join(w.briefs, `message-${++w.messages}.md`);
-    fs.writeFileSync(file, input.text, { mode: 0o600 });
-    w.pty.write(sentence(`Read the owner's message in ${file} and act on it.`));
+    const reference = sentence(`Read the owner's message in ${file} and act on it.`);
+    try { fs.writeFileSync(file, input.text, { mode: 0o600 }); }
+    catch (error) {
+      try { fs.rmSync(file, { force: true }); } catch {}
+      throw error;
+    }
+    try { w.pty.write(reference); }
+    catch {
+      failWorker(w, 'worker_input_submit_failed', 'The worker terminal could not submit the owner message.');
+      return;
+    }
+    w.idle = false; w.inFlight = input;
     w.enterTimer = later(w, () => {
-      if (!w.closed && !w.exited && !w.asks.size && !w.menu.active && !w.ownerDraft && w.inFlight === input) w.pty.write('\r');
+      if (w.closed || w.exited || w.asks.size || w.menu.active || w.ownerDraft || w.inFlight !== input) return;
+      try { w.pty.write('\r'); }
+      catch { failWorker(w, 'worker_input_submit_failed', 'The worker terminal could not submit the owner message.'); }
     }, ENTER_DELAY_MS);
   }
   // A pause says nothing about a half-written prompt: leave it alone until submission or an explicit clear.
   function flushInput(w) {
-    if (w.closed || w.exited || !w.idle || w.inFlight || w.asks.size || w.menu.active || w.ownerDraft || !w.pending.length) return;
-    write(w, w.pending.shift());
+    if (w.closed || w.exited || w.failed || !w.idle || w.inFlight || w.inputRetry || w.asks.size || w.menu.active || w.ownerDraft || !w.pending.length) return;
+    const input = w.pending[0];
+    try { write(w, input); w.pending.shift(); }
+    catch {
+      if (++input.attempts < 3) {
+        w.inputRetry = later(w, () => { w.inputRetry = null; flushInput(w); }, SETTLE_MS);
+        return;
+      }
+      publish(w, 'input.receipt', { clientMessageId: input.clientMessageId, status: 'rejected', reason: 'worker_input_write_failed' });
+      failWorker(w, 'worker_input_write_failed', 'The worker terminal could not save the owner message.');
+    }
   }
   // The CLI waits for a prompt: deliver a queued intervention when the owner has no draft.
   function idle(w) {
@@ -337,9 +381,19 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
 
   // The transcript, found by the session the hooks name under the worker's own Claude home, never by a path a hook
   // gives. One read at a time: a tail is not re-entrant, and two reads would repeat or skip records.
-  function read(w) { return w.reading = w.reading.then(() => readTail(w)).catch(() => {}); }
+  function failWorker(w, code, message) {
+    if (w.closed || w.exited || w.failed) return;
+    w.failed = true; w.running = false; w.idle = false;
+    clearTimer(w, w.poll); clearTimer(w, w.enterTimer);
+    publish(w, 'error', { code, message, stage: 'runtime' });
+    publish(w, 'turn.completed', { status: 'failed' });
+    publish(w, 'session.state', { state: 'failed', reason: code });
+  }
+  function read(w) {
+    return w.reading = w.reading.then(() => readTail(w)).catch(() => failWorker(w, 'worker_transcript_failed', 'The worker transcript could not be read.'));
+  }
   async function readTail(w) {
-    if (!w.sessionId || w.closed || w.exited) return;
+    if (!w.sessionId || w.closed || w.exited || w.failed) return;
     if (!w.tail) {
       const filename = await findClaudeSession(w.spec.cwd, w.sessionId, w.env.CLAUDE_CONFIG_DIR || claudeHome(), { strict: true });
       if (!filename || w.closed || w.exited) return;
@@ -393,7 +447,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   }
 
   async function onHook(w, name, { sessionId, sentAt, toolUseId, agentId, requestId, elicitationId, payload = {} }) {
-    if (w.closed || w.exited) return;
+    if (w.closed || w.exited || w.failed) return;
     if (typeof sessionId === 'string' && /^[\w-]{1,160}$/.test(sessionId) && !w.sessionId) { w.sessionId = sessionId; w.stream.provider(sessionId); }
     const timed = Number.isFinite(sentAt);
     const notice = name === 'Notification' && ASK_NOTICES.has(payload.notification_type);
@@ -461,16 +515,18 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const agreed = () => { const text = finalText(w); return text !== null && (!hookText || plain(text).startsWith(plain(hookText))) ? text : null; };
     for (let tries = 0; name === 'Stop'; tries++) {
       await read(w);
-      if (agreed() !== null || tries >= SETTLE_TRIES || w.closed || w.exited) break;
+      if (agreed() !== null || tries >= SETTLE_TRIES || w.closed || w.exited || w.failed) break;
       await delay(w, SETTLE_MS);
     }
-    if (w.closed || w.exited) return;
+    if (w.closed || w.exited || w.failed) return;
     const text = name === 'Stop' ? agreed() ?? hookText : null;
     if (text !== null) publish(w, 'item.upsert', { kind: 'agent-message', status: 'completed', content: { text } }, { itemId: `final:${randomUUID()}` });
     publish(w, 'turn.completed', { status: name === 'Stop' ? 'completed' : 'failed' });
     idle(w);
   }
-  const deliver = (w, name, facts) => { w.queue = w.queue.then(() => onHook(w, name, facts)).catch(() => {}); };
+  const deliver = (w, name, facts) => {
+    w.queue = w.queue.then(() => onHook(w, name, facts)).catch(() => failWorker(w, 'worker_hook_failed', 'The worker terminal could not process a Claude Code event.'));
+  };
 
   function create(run, spec, stream) {
     if (workers.has(`worker-${run.runId}`)) throw new Error('worker_terminal_exists');
@@ -522,14 +578,15 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       get pid() { return w.pty?.pid ?? null; },
       answerRole: input => w.menu.answer(input, w.seq),
       async send({ clientMessageId, text }) {
-        if (w.closed || w.exited) return { status: 'rejected', reason: 'worker_ended' };
+        if (w.closed || w.exited || w.failed) return { status: 'rejected', reason: 'worker_ended' };
         if (!w.pty) {
           try { launch(w, text, clientMessageId); }
           catch (error) { error.beforeInput = !w.pty; throw error; }
           return { status: 'delivered' };
         }
-        const input = { clientMessageId, text };
+        const input = { clientMessageId, text, attempts: 0 };
         w.pending.push(input); flushInput(w);
+        if (w.failed) return { status: 'rejected', reason: 'worker_input_write_failed' };
         return { status: w.inFlight === input ? 'delivered' : 'queued' };
       },
       close: () => w.close(),

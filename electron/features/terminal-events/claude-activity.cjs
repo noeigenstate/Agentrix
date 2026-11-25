@@ -1,4 +1,5 @@
 const path = require('node:path');
+const fs = require('node:fs');
 const { createSessionMachine, reduce, cliFields, SCREEN_IDLE_MS } = require('./session-machine.cjs');
 const { AgentCalls } = require('../agents/agent-calls.cjs');
 const { adapterOf } = require('../cli-adapters/registry.cjs');
@@ -17,6 +18,26 @@ const matchesThread = (s, bound, id) => !bound || !id || bound === id || activit
 const queuedOf = s => s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
 // Background work the round waits for, as CompletionWork reports it.
 const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.notifications?.size || s.dispatchHold?.count);
+function canonicalTranscriptPath(file, depth = 0) {
+  try { return fs.realpathSync.native(file); }
+  catch (error) {
+    const parent = path.dirname(file);
+    if (error.code !== 'ENOENT' || depth >= 32 || parent === file || fs.lstatSync(file, { throwIfNoEntry: false })) return null;
+    const base = canonicalTranscriptPath(parent, depth + 1);
+    return base ? path.join(base, path.basename(file)) : null;
+  }
+}
+
+function localTranscript(file, root) {
+  try {
+    // SessionStart can arrive before Claude creates the transcript. Resolve every existing ancestor first.
+    const realRoot = canonicalTranscriptPath(path.resolve(root)), realFile = canonicalTranscriptPath(file);
+    if (!realRoot || !realFile) return null;
+    const relative = path.relative(realRoot, realFile);
+    if (relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) return realFile;
+  } catch (error) { if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) throw error; }
+  return null;
+}
 
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
@@ -51,10 +72,11 @@ function createClaudeActivity(deps) {
     const { sessions, store, claudeConfigDir, prepareReading, callsOf, TranscriptTail, monitorActivity, readEvery, usageHistory,
       claudeConversation, describeActions, claudeRecord, noteSettings, applyActivity } = deps;
     const remote = project.kind === 'ssh', paths = remote ? path.posix : path;
-    const file = typeof event.transcriptPath === 'string' && (!remote || paths.isAbsolute(event.transcriptPath)) ? paths.resolve(event.transcriptPath) : '';
-    if (!file || paths.basename(file) !== `${event.sessionId}.jsonl`) return;
+    const reported = typeof event.transcriptPath === 'string' && paths.isAbsolute(event.transcriptPath) ? paths.resolve(event.transcriptPath) : '';
+    if (!reported || paths.basename(reported) !== `${event.sessionId}.jsonl`) return;
     // The worker checks remote paths against its own Claude projects folder before reading them.
-    if (!remote && !file.toLowerCase().startsWith(claudeConfigDir().toLowerCase() + path.sep)) return;
+    const file = remote ? reported : localTranscript(reported, claudeConfigDir());
+    if (!file || paths.basename(file) !== `${event.sessionId}.jsonl`) return;
     if (!remote) void prepareReading(s.terminalId, { agent: 'claude', threadId: event.sessionId }, file);
     s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.claudeSessionId = event.sessionId;

@@ -8,6 +8,7 @@ function createPageCapture(BrowserWindow, { timeout = 10000, settle = 500, fontW
     const page = new BrowserWindow({ show: false, width: 1280, height: 800, webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false,
       ...(offline ? { partition: OFFLINE_PARTITION } : {}) } });
     const contents = page.webContents;
+    const session = offline ? contents.session : null;
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
     contents.on('will-navigate', event => event.preventDefault());
     contents.on('will-redirect', event => event.preventDefault());
@@ -18,13 +19,13 @@ function createPageCapture(BrowserWindow, { timeout = 10000, settle = 500, fontW
       if (offline) {
         contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
         const host = new URL(url).hostname;
-        contents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+        session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
           const local = /^(?:data:|blob:|about:blank$)/.test(details.url);
           let samePage = false;
           try { const target = new URL(details.url); samePage = target.protocol === 'project-preview:' && target.hostname === host && resources.hasUrl(details.url); } catch { }
           callback({ cancel: !local && !samePage });
         });
-        contents.session.protocol.handle('project-preview', async request => {
+        session.protocol.handle('project-preview', async request => {
           if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405 });
           try { return resourceResponse(await resources.resolve(request.url), request); } catch { return new Response(null, { status: 404 }); }
         });
@@ -57,8 +58,8 @@ function createPageCapture(BrowserWindow, { timeout = 10000, settle = 500, fontW
       clearTimeout(deadline);
       if (!page.isDestroyed()) page.destroy();
       if (offline) {
-        contents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, denyRequest);
-        contents.session.protocol.unhandle('project-preview');
+        session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, denyRequest);
+        session.protocol.unhandle('project-preview');
       }
     }
   };

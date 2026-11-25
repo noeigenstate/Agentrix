@@ -29,25 +29,74 @@ function Test-SafeHome($homePath) {
         return $true
     } catch { return $false }
 }
-try {
-    $cli = $env:AGENTRIX_SETUP_CLI
-    $arguments = 'sandbox setup --elevated --user "{0}" --codex-home "{1}"' -f $env:AGENTRIX_SETUP_USER, $env:CODEX_HOME
-    try { $signature = Get-AuthenticodeSignature -LiteralPath $cli }
-    catch { exit 4 }
-    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*OpenAI OpCo, LLC*') { exit 4 }
-    if (!(Test-SafeHome $env:CODEX_HOME)) { exit 2 }
-    $process = Start-Process -FilePath $cli -ArgumentList $arguments -WorkingDirectory $PSHOME -WindowStyle Hidden -PassThru
-    $null = $process.Handle
-    if (!$process.WaitForExit(300000)) {
-        # Stop the tree from the same elevation that started it.
-        & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
-        exit 1
+function New-CodexSetupDirectory {
+    $folder = [IO.Path]::Combine([Environment]::SystemDirectory, 'AgentrixSetup-' + [Guid]::NewGuid().ToString('N'))
+    $security = [Security.AccessControl.DirectorySecurity]::new()
+    $security.SetAccessRuleProtection($true, $false)
+    $admins = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $security.SetOwner($admins)
+    foreach ($sid in @($admins, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+        $security.AddAccessRule($rule)
     }
-    if ($process.ExitCode -eq 0) { exit 0 }
-    exit 1
-} catch {
-    exit 1
+    return [IO.Directory]::CreateDirectory($folder, $security).FullName
 }
+function Copy-VerifiedCodexFile($original, $copy) {
+    $source = [IO.File]::OpenRead($original)
+    try {
+        $destination = [IO.File]::Open($copy, 'CreateNew', 'Write', 'None')
+        try { $source.CopyTo($destination) } finally { $destination.Dispose() }
+    } finally { $source.Dispose() }
+    try { $signature = Get-AuthenticodeSignature -LiteralPath $copy }
+    catch { return $false }
+    return $signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -like '*OpenAI OpCo, LLC*'
+}
+function Find-CodexCompanion($cliPath, $name) {
+    $directory = [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName($cliPath))
+    $candidates = @([IO.Path]::Combine($directory.FullName, $name))
+    if ($directory.Name -eq 'bin' -and $directory.Parent) {
+        $candidates += [IO.Path]::Combine($directory.Parent.FullName, 'codex-resources', $name)
+    }
+    $candidates += [IO.Path]::Combine($directory.FullName, 'codex-resources', $name)
+    foreach ($candidate in $candidates) { if ([IO.File]::Exists($candidate)) { return $candidate } }
+    return $null
+}
+function Invoke-CodexSetup($newStage = { New-CodexSetupDirectory }) {
+    $stage = $null
+    $originalPath = $env:PATH
+    try {
+        if (!(Test-SafeHome $env:CODEX_HOME)) { return 2 }
+        $stage = & $newStage
+        $original = $env:AGENTRIX_SETUP_CLI
+        $cli = [IO.Path]::Combine($stage, 'codex.exe')
+        if (!(Copy-VerifiedCodexFile $original $cli)) { return 4 }
+        foreach ($name in 'codex-windows-sandbox-setup.exe', 'codex-command-runner.exe') {
+            $companion = Find-CodexCompanion $original $name
+            if (!$companion) {
+                if ($name -eq 'codex-windows-sandbox-setup.exe') { return 4 }
+                continue
+            }
+            if (!(Copy-VerifiedCodexFile $companion ([IO.Path]::Combine($stage, $name)))) { return 4 }
+        }
+        $env:PATH = $stage + ';' + [Environment]::SystemDirectory + ';' + [IO.Directory]::GetParent([Environment]::SystemDirectory).FullName
+        $arguments = 'sandbox setup --elevated --user "{0}" --codex-home "{1}"' -f $env:AGENTRIX_SETUP_USER, $env:CODEX_HOME
+        $process = Start-Process -FilePath $cli -ArgumentList $arguments -WorkingDirectory $stage -WindowStyle Hidden -PassThru
+        $null = $process.Handle
+        if (!$process.WaitForExit(300000)) {
+            # Stop the tree from the same elevation that started it.
+            & ([IO.Path]::Combine([Environment]::SystemDirectory, 'taskkill.exe')) /PID $process.Id /T /F | Out-Null
+            return 1
+        }
+        if ($process.ExitCode -eq 0) { return 0 }
+        return 1
+    } catch {
+        return 1
+    } finally {
+        $env:PATH = $originalPath
+        if ($stage) { try { [IO.Directory]::Delete($stage, $true) } catch {} }
+    }
+}
+exit (Invoke-CodexSetup)
 `;
 
 function setupArgs(file, home) {
@@ -67,7 +116,7 @@ try {
         $value = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($entry.Value))
         '$env:{0} = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(''{1}''))' -f $entry.Key, $value
     }
-    $lines += [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encode(setupCommand)}'))
+    $lines += [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(setupCommand, 'utf8').toString('base64')}'))
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($lines -join [Environment]::NewLine))
     $process = Start-Process -FilePath "$PSHOME\powershell.exe" -Verb RunAs -WorkingDirectory $PSHOME -WindowStyle Hidden -PassThru -ArgumentList (
         "-NoProfile -NonInteractive -EncodedCommand $encoded"

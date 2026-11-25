@@ -221,7 +221,9 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   publish('input.receipt', { clientMessageId: 'second-input', status: 'consumed' }, 2400);
   publish('turn.started', { origin: 'user' }, 2400, { turnId: 'second' });
   assert.equal(next.rootThreadId, 'new-provider', 'new input cannot revive the old root binding');
-  assert.equal(next.nativeMessages.get('second-input'), 'Second task'); assert.equal(s.promptQueue.list().length, 0);
+  assert.equal(next.nativeMessages.has('second-input'), false);
+  assert.deepEqual(next.promptQueue.list().map(({ text, state }) => [text, state]), [['Second task', 'working']]);
+  assert.equal(s.promptQueue.list().length, 0);
   assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 0);
   const snapshot = next.activitySnapshot;
   h.user('Late old PTY input', 2450);

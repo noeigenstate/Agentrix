@@ -22,6 +22,7 @@ project files untouched. Writable workers use acceptEdits and follow their assig
 ## May import
 - `electron/terminal-input.cjs` (filters xterm protocol replies out of owner input)
 - `electron/features/claude-runtime/decide.cjs` (the shared read-only launch flags)
+- `electron/features/terminal-events/bootstrap-file.cjs` (validated launch settings)
 - `electron/command-phrase.cjs` (classifies approval commands without forwarding arguments)
 - `electron/shared/claude-background.cjs` (the current Settings choice replaces the parent's saved background policy)
 - `electron/shared/agentrix-shims.cjs` (withoutShims: the worker starts from the owner's environment)

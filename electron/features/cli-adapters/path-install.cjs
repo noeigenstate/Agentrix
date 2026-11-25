@@ -26,9 +26,10 @@ function probeVersion(file, env, platform, run) {
   const options = { env, timeout: 10000, maxBuffer: 65536, windowsHide: true };
   let args = ['--version'];
   if (platform === 'win32' && /\.(?:bat|cmd|ps1)$/i.test(file)) {
+    const policy = /\.ps1$/i.test(file) ? ['-ExecutionPolicy', 'Bypass'] : [];
     options.env = { ...env, AGENTRIX_INSTALL_PROBE_FILE: file };
     file = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    args = ['-NoProfile', '-NonInteractive', '-Command', '& $env:AGENTRIX_INSTALL_PROBE_FILE --version; exit $LASTEXITCODE'];
+    args = ['-NoProfile', '-NonInteractive', ...policy, '-Command', '& $env:AGENTRIX_INSTALL_PROBE_FILE --version; exit $LASTEXITCODE'];
   }
   return new Promise(resolve => {
     run(file, args, options, (error, stdout) => resolve(error ? { reason: error.killed ? 'timeout' : 'failed' } : { stdout }));

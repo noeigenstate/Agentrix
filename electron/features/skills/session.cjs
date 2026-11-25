@@ -8,6 +8,23 @@ const MARKER = / Agentrix skill delivery: ([a-f0-9]{64}):([A-Za-z0-9_-]+)\./;
 const MAX_MANIFEST = 2 * 1024 * 1024;
 // Receipt names keep 128 bits of each digest: the full pair made paths past Windows PowerShell's 260-character limit.
 const RECEIPT = 32;
+const MAX_BYTES = 512 * 1024;
+
+// The library and the carried worker guard decode the same skill names and metadata.
+function frontMatter(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_BYTES || text.includes('\0')) throw new Error('技能文件过大或格式无效。');
+  const match = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  if (!match) return null;
+  const fields = {};
+  for (const [, key, raw] of match[1].matchAll(/^([\w-]+):[ \t]*(.*(?:\r?\n[ \t]+.*)*)$/gm)) {
+    if (Object.hasOwn(fields, key)) continue;
+    let value = raw.trim();
+    if (value.startsWith('"')) value = JSON.parse(value);
+    else if (value.startsWith("'")) value = value.slice(1, -1).replace(/''/g, "'");
+    fields[key] = value;
+  }
+  return { fields, raw: match[1], body: text.slice(match[0].length) };
+}
 
 // Also used by the carried, plain-Node worker guard, which cannot import the library store.
 function assertUserSkillName(name, builtinNames) {
@@ -77,4 +94,4 @@ function sessionContext(hook, note) {
   return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: delivery.context } };
 }
 
-module.exports = { digest, deliveryMarker, readDelivery, sessionContext, assertUserSkillName };
+module.exports = { digest, deliveryMarker, readDelivery, sessionContext, assertUserSkillName, skillFrontMatter: { MAX_BYTES, frontMatter } };

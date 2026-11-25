@@ -139,13 +139,18 @@ test('outside captures reuse an offline session, restrict WebRTC and deny networ
   class Window {
     constructor(value) {
       options.push(value);
+      const session = { protocol: { handle: (_name, fn) => { handler = fn; }, unhandle: () => { removed++; } },
+        webRequest: { onBeforeRequest: (_arg, fn) => { filter = fn; filters.push(fn); } } };
       this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, setAudioMuted() {}, invalidate() {}, executeJavaScript: async () => true,
         setWebRTCIPHandlingPolicy: value => policies.push(value),
-        capturePage: async () => ({ isEmpty: () => false, resize: () => ({ toJPEG: () => Buffer.from('jpeg') }) }),
-        session: { protocol: { handle: (_name, fn) => { handler = fn; }, unhandle: () => { removed++; } }, webRequest: { onBeforeRequest: (_arg, fn) => { filter = fn; filters.push(fn); } } } });
+        capturePage: async () => ({ isEmpty: () => false, resize: () => ({ toJPEG: () => Buffer.from('jpeg') }) }) });
+      Object.defineProperty(this.webContents, 'session', { get: () => {
+        if (this.destroyed) throw new Error('Object has been destroyed');
+        return session;
+      } });
     }
     async loadURL() { queueMicrotask(() => this.webContents.emit('dom-ready')); }
-    isDestroyed() { return false; } destroy() {}
+    isDestroyed() { return this.destroyed === true; } destroy() { this.destroyed = true; }
   }
   const capture = createPageCapture(Window, { settle: 0 });
   assert.match(await capture(url, resources), /data:image/);

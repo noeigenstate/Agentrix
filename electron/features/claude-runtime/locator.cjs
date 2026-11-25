@@ -3,7 +3,7 @@ const nodePath = require('node:path');
 const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
-const { mergePath, readStoredPath, variable } = require('./path-env.cjs');
+const { mergePath, readStoredPath, variable, queueSearch } = require('./path-env.cjs');
 const manifests = require('../cli-adapters/manifests/worker.cjs');
 const REQUIRED = manifests.find(({ id }) => id === 'claude').install.minVersion;
 const MINIMUM = REQUIRED.split('.').map(Number), VERSION_TIMEOUT_MS = 10000, CLOSE_GRACE_MS = 1500;
@@ -104,7 +104,7 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
   timers = { setTimeout: (callback, delay) => setTimeout(() => setImmediate(callback), delay), clearTimeout, now: Date.now },
   timeoutMs = VERSION_TIMEOUT_MS, graceMs = CLOSE_GRACE_MS } = {}) {
   const versions = new Map();
-  let stored = null, lastFull = null, last = null, running = null, trailing = null;
+  let stored = null, lastFull = null, last = null;
 
   // The version a file printed, run once per file, size and mtime; one that printed none is run again after a while,
   // or at once for an explicit refresh (`retry`).
@@ -225,23 +225,15 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
       if (options.platform === 'win32') stored = await storedPath(options.env) ?? stored;
       lastFull = now();
     }
-    const key = JSON.stringify([options.platform, options.home, options.arch, variable(options.env, 'PATH') || '', stored]);
+    const inherited = variable(options.env, 'PATH') || '';
+    const effective = options.platform === 'win32' ? mergePath(inherited, stored || [], options.env) : inherited;
+    const key = JSON.stringify([options.platform, options.home, options.arch, effective, variable(options.env, 'PATHEXT')]);
     if (!full && last?.key === key && await stands()) return last.result;
     last = { key, result: await search(options, mode === 'refresh'), at: now() };
     return last.result;
   }
   const normalized = ({ env = process.env, platform = process.platform, arch = process.arch, home = os.homedir() } = {}) => ({ env, platform, arch, home });
-  const start = (options, mode) => {
-    const entry = { promise: answer(normalized(options), mode).finally(() => { if (running === entry) running = null; }) };
-    running = entry;
-    return entry.promise;
-  };
-  // Calls that overlap share one search; a refresh asked for while one runs is done once after it, however many ask.
-  function shared(options, mode) {
-    if (!running) return start(options, mode);
-    if (mode !== 'refresh') return running.promise;
-    return trailing ||= running.promise.catch(() => {}).then(() => { trailing = null; return start(options, 'refresh'); });
-  }
+  const shared = queueSearch(answer, normalized);
   return {
     locate: options => shared(options, 'locate'),
     // `throttled` (window focus) searches anew at most once a minute; an explicit refresh always does.

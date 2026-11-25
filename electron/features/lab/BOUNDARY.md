@@ -26,6 +26,7 @@ before rendering the same bounded CI log lines.
 - `electron/features/lab-oss/index.cjs`
 - `electron/features/lab-aa/index.cjs`
 - `electron/features/agents/dispatch-events.cjs` (dispatch stdout event envelopes)
+- `electron/features/team/inbox.cjs` (tolerant journal row reader)
 - `src/shared/lab-types.ts`
 
 ## Invariants

@@ -5,7 +5,8 @@ const manifests = require('./manifests/worker.cjs');
 
 const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
-const atCapacity = /\bat capacity\b|overloaded|capacity exceeded/i;
+const atCapacity = /\bat capacity\b|\boverloaded\b|\bcapacity exceeded\b/i;
+const capacityCodes = new Set(['overloaded_error', 'overloaded', 'capacity_exceeded', 529, '529']);
 const failedResult = record => /^error_/.test(record.subtype || '');
 
 // What Claude Code printed for one of its own commands: "Set model to `Opus 5.5` …", "Set effort level to max (…)",
@@ -46,12 +47,17 @@ function claudeCommandOutput(record) {
 function claudeSettings(record) {
   // A subagent's replies carry its own model, not the session's.
   if (record.isSidechain) return null;
-  if (record.type === 'assistant') {
-    const model = word(record.message?.model), speed = record.message?.usage?.speed;
-    return { model: model && model !== '<synthetic>' ? model : null, effort: word(record.perTurnEffort) ?? word(record.effort),
-      fast: speed === 'fast' ? true : speed === 'standard' ? false : null };
+  if (record.type === 'assistant' || record.type === 'user' || record.type === 'system' && record.subtype === 'init') {
+    const model = word(record.message?.model ?? record.model), speed = record.message?.usage?.speed ?? record.usage?.speed;
+    const effort = word(record.perTurnEffort) ?? word(record.effort);
+    const fast = speed === 'fast' ? true : speed === 'standard' ? false : null;
+    if (record.type === 'user') {
+      const echo = claudeCommandOutput(record);
+      if (!model && !effort && fast === null) return echo;
+      return { model: model || echo?.model || null, effort: effort ?? echo?.effort ?? null, fast: fast ?? echo?.fast ?? null, ultracode: echo?.ultracode ?? null };
+    }
+    return { model: model && model !== '<synthetic>' ? model : null, effort, fast };
   }
-  if (record.type === 'user') return claudeCommandOutput(record);
   if (record.type === 'attachment') {
     const kind = record.attachment?.type;
     if (kind === 'ultra_effort_enter' || kind === 'ultra_effort_exit') return { ultracode: kind === 'ultra_effort_enter' };
@@ -159,6 +165,13 @@ function codexRecord(record) {
   return { resetFailure: true, completed: true, stdoutUsage: codexUsage(usage.input_tokens, usage.cached_input_tokens, usage.output_tokens) };
 }
 
+function capacityFailure(record) {
+  const error = record.error;
+  if ([record.code, record.status, error?.code, error?.type, error?.status].some(code => capacityCodes.has(code))) return true;
+  return [record.message, typeof error === 'string' ? error : error?.message, ...(Array.isArray(record.errors) ? record.errors : [])]
+    .some(message => typeof message === 'string' && atCapacity.test(message));
+}
+
 function workerOutput(normalizeRecord) {
   function* records(record) {
     if (Array.isArray(record)) { for (const entry of record) yield* records(entry); return; }
@@ -166,7 +179,7 @@ function workerOutput(normalizeRecord) {
     const event = normalizeRecord(record);
     if (!event) return;
     if (['error', 'turn.failed'].includes(record.type) || record.is_error === true || record.type === 'result' && failedResult(record)) {
-      event.failure = { capacity: atCapacity.test(JSON.stringify(record)) };
+      event.failure = { capacity: capacityFailure(record) };
     }
     yield event;
   }
@@ -174,12 +187,11 @@ function workerOutput(normalizeRecord) {
     const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
     let value;
     try { value = JSON.parse(clean, imageMetadata); } catch {
-      const capacity = atCapacity.test(clean);
-      const header = /^(model|reasoning effort|service tier|speed|session id):\s*(.+)$/i.exec(clean);
+      const capacity = /^(?:error|failed):/i.test(clean) && atCapacity.test(clean);
+      const header = /^(model|reasoning effort|service tier|speed):\s*(.+)$/i.exec(clean);
       if (!header) { if (capacity) yield { capacity, silent: true }; return; }
       const [, key, text] = header, name = key.toLowerCase();
-      yield { ...(capacity && { capacity }), ...(name === 'session id' ? { sessionId: word(text) }
-        : { settings: [{ [name.replace('reasoning effort', 'effort').replace('service tier', 'service_tier')]: text }] }) };
+      yield { settings: [{ [name.replace('reasoning effort', 'effort').replace('service tier', 'service_tier')]: text }] };
       return;
     }
     yield* records(value);

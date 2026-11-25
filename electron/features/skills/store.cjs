@@ -689,10 +689,13 @@ class SkillsStore {
       if (!action.done) return;
       for (const file of action.files || []) {
         if (path.basename(file.path).toLowerCase() !== 'skill.md') continue;
-        const absolute = canonical(path.resolve(action.cwd || cwd, file.path));
+        const absolute = path.resolve(action.cwd || cwd, file.path);
         try {
           const text = readText(absolute);
-          if (text !== null) this.writers.set(absolute, { at: Date.now(), project, hash: safeId(text) });
+          if (text === null) continue;
+          const now = Date.now();
+          for (const [key, evidence] of this.writers) if (now - evidence.at > 60_000) this.writers.delete(key);
+          this.writers.set(canonical(absolute), { at: now, project, hash: safeId(text) });
         } catch (error) { this.report(error); }
       }
       return;

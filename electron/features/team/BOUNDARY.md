@@ -12,6 +12,7 @@ Inbox records add v1 in 1.6.4. The intervention type starts in 1.6.5 to keep old
 ## Interface
 - `projectTeam` (`electron/features/team/team.cjs`) — opens repository coordination state. `register` publishes a live entry, `context` builds the brief prefix, and `finish` appends findings and worker end metadata.
 - `RunInbox` (`electron/features/team/inbox.cjs`) — a dispatched run's bounded owner inbox: incremental reads, atomic final closure; `queueControl` and `recordControl` serialize owner controls, their audit record and the planner's notification, rolling back when the planner's admission fails
+- `readRows` (`electron/features/team/inbox.cjs`) — returns supported memory or journal entries and a count of skipped rows
 - `locateTeam` (`electron/features/team/team-locate.cjs`) — main's team lookup for a working directory without blocking: Git runs off the event loop, Git's common directory is remembered 30 s by the directory's real path and a failed lookup or a Git that takes over 10 s (null) is never kept, and whether the team folder exists is checked on every lookup; `createTeamLocator({ execFile, now })` lets a test delay or fail Git — covered by `tests/team-locate.test.cjs`; the helper keeps the synchronous `projectTeam`
 
 ## May import

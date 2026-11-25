@@ -1,4 +1,9 @@
-function createEditorGuard({ getWindow, showWindow, send, randomUUID, dialog, t }) {
+function editorPath(value, local = true, platform = process.platform) {
+  const normalized = value.replaceAll('\\', '/');
+  return local && platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function createEditorGuard({ getWindow, showWindow, send, randomUUID, dialog, t, platform = process.platform }) {
   let editorDirty = false, editorCloseRequest = null, editorFile = null;
   function allowEditorClose() {
     const window = getWindow();
@@ -14,8 +19,14 @@ function createEditorGuard({ getWindow, showWindow, send, randomUUID, dialog, t 
     return promise;
   }
 
-  function affectsEditor(id, paths) {
-    return editorDirty && editorFile?.id === id && paths.some(value => editorFile.path === value || editorFile.path.startsWith(value + '/'));
+  function affectsEditor(id, paths, local = false) {
+    if (!editorDirty || editorFile?.id !== id) return false;
+    const current = editorPath(editorFile.path, local, platform);
+    return paths.some(value => {
+      if (typeof value !== 'string') return false;
+      const candidate = editorPath(value, local, platform);
+      return current === candidate || current.startsWith(candidate + '/');
+    });
   }
 
   function registerEditorIpc({ handle, listen }) {
@@ -30,4 +41,4 @@ function createEditorGuard({ getWindow, showWindow, send, randomUUID, dialog, t 
   return { allowEditorClose, affectsEditor, getEditorFile: () => editorFile, registerEditorIpc };
 }
 
-module.exports = { createEditorGuard };
+module.exports = { createEditorGuard, editorPath };

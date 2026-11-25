@@ -20,7 +20,8 @@ function decodeTail(buffer, start, { since = 0, timeKey = 'at', version = 1, lim
 
 // Yield read arguments so async and startup-only sync I/O use the same bounded, short-read-safe loop.
 function* readTail(size, options) {
-  const start = Math.max(0, size - FILE_LIMIT), buffer = Buffer.alloc(Math.min(size, FILE_LIMIT));
+  const bytes = Math.min(FILE_LIMIT, options?.bytes ?? FILE_LIMIT, size);
+  const start = size - bytes, buffer = Buffer.alloc(bytes);
   let offset = 0;
   while (offset < buffer.length) {
     const bytesRead = yield [buffer, offset, buffer.length - offset, start + offset];

@@ -75,6 +75,21 @@ test('the user-name guard does not reject an explicitly approved shipped skill s
   assert.match(fs.readFileSync(file, 'utf8'), /Approved system update/);
 });
 
+test('an approved user skill with a case-changed or escaped built-in name is still rejected', t => {
+  const f = fixture(t, ['skills/old/SKILL.md', 'skills/other/SKILL.md']);
+  const builtinRoot = path.join(f.parent, 'shipped');
+  const manifest = path.join(f.root, 'delivery/manifest.md'), fingerprint = digest('escaped-names'); put(manifest, 'Instructions.');
+  put(`${manifest}.json`, JSON.stringify({ projectRoot: f.root, fingerprint, roots: [builtinRoot], builtinRoot, builtinNames: ['standard'] }));
+  const guard = new WorkerSkillProposals(f.options, { AGENTRIX_READING_NOTE: `Note. ${deliveryMarker({ manifest, fingerprint })}` });
+  put(f.file, '---\nname: Standard\n---\nChanged.');
+  const other = path.join(f.root, 'skills/other/SKILL.md');
+  put(other, '---\nname: "\\u0073tandard"\n---\nChanged.');
+  assert.equal(guard.finish('names'), 2);
+  const { proposals } = JSON.parse(fs.readFileSync(`${f.options.out}.skill-proposals-names/index.json`));
+  assert.ok(proposals.every(proposal => proposal.rejected && proposal.restored));
+  assert.equal(fs.existsSync(other), false);
+});
+
 test('concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored', t => {
   const f = fixture(t), external = path.join(f.root, 'managed'), global = path.join(external, 'global/a/SKILL.md'), builtin = path.join(external, 'builtin/a/SKILL.md');
   put(global, 'Global.'); put(builtin, 'Built in.');

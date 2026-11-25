@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { claudeBackgroundEnvironment } = require('../electron/shared/claude-background.cjs');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
-const { writeBootstrap, updateBootstrapBackground, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, updateBootstrapBackground, updateBootstrapLead, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 const { shimWords } = require('../integration/shims/intercept.cjs');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const root = path.join(__dirname, '..'), variable = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS';
@@ -74,11 +74,51 @@ test('bootstrap refresh retries busy renames and leaves fresh launch policy afte
     fs.renameSync(from, to);
   }, delay: async ms => { delays.push(ms); } });
   assert.deepEqual(delays, [25, 50, 100]);
-  await assert.rejects(updateBootstrapBackground(file, false, { rename: () => { throw Object.assign(new Error('busy'), { code: 'EPERM' }); },
+  await assert.rejects(updateBootstrapBackground(file, false, { rename: (from, to) => {
+    if (to === file) throw Object.assign(new Error('busy'), { code: 'EPERM' });
+    fs.renameSync(from, to);
+  },
     delay: async () => {} }), /busy/);
   assert.equal(JSON.parse(fs.readFileSync(file)).claudeBackgroundTasks, true, 'bootstrap remains old after the locked rename');
   const words = shimWords({ AGENTRIX_BOOTSTRAP: file, PATH: '' }, { depth: 0 });
   assert.ok(words.includes(variable + '=1'), 'next launch re-reads the latest policy despite the old bootstrap');
+});
+
+test('background policy readers see the old whole file through retries and concurrent updates publish in order', async t => {
+  const folder = temporary(t), file = path.join(folder, 'session.json'), policy = file + '.background.json';
+  writeBootstrap({ file, eventServer: { name: 'fixture', address: 'fixture' }, sessionKey: 'fixture' });
+  await updateBootstrapBackground(file, false);
+  const blocked = Promise.withResolvers(), release = Promise.withResolvers(), seen = [];
+  const first = updateBootstrapBackground(file, true, { rename: (from, to) => {
+    if (to === policy) {
+      seen.push(JSON.parse(fs.readFileSync(policy)).claudeBackgroundTasks);
+      if (seen.length === 1) { blocked.resolve(); throw Object.assign(new Error('busy'), { code: 'EBUSY' }); }
+      assert.equal(JSON.parse(fs.readFileSync(from)).claudeBackgroundTasks, true);
+    }
+    fs.renameSync(from, to);
+  }, delay: () => release.promise });
+  await blocked.promise;
+  const next = updateBootstrapBackground(file, false);
+  release.resolve();
+  await Promise.all([first, next]);
+  assert.deepEqual(seen, [false, false]);
+  assert.equal(JSON.parse(fs.readFileSync(policy)).claudeBackgroundTasks, false);
+  assert.equal(JSON.parse(fs.readFileSync(file)).claudeBackgroundTasks, false);
+});
+
+test('a new lead is present in the versioned sidecar before the legacy file changes', t => {
+  const folder = temporary(t), file = path.join(folder, 'session.json'), observed = [];
+  updateBootstrapLead(file, { model: 'opus', effort: 'high' });
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    rename(from, to);
+    observed.push({ target: path.extname(to), versioned: fs.readFileSync(file + '.lead.env', 'utf8'), legacy: fs.readFileSync(file + '.lead', 'utf8') });
+  });
+  updateBootstrapLead(file, { model: 'sonnet', effort: 'low' });
+  assert.deepEqual(observed.map(value => value.target), ['.env', '.lead']);
+  assert.equal(observed[0].versioned.split('\n').find(row => row.startsWith('model=')), 'model=sonnet');
+  assert.equal(observed[0].legacy.split('\n')[0], 'opus');
+  assert.equal(observed[1].legacy.split('\n')[0], 'sonnet');
 });
 
 test('Settings changes refresh existing local and SSH terminal launch policy', () => {

@@ -4,7 +4,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { repoFiles } = require('../../boundaries.cjs');
-const { readDelivery, assertUserSkillName } = require('./session.cjs');
+const { readDelivery, assertUserSkillName, skillFrontMatter: { frontMatter } } = require('./session.cjs');
 
 const skillFile = file => path.basename(file).toLowerCase() === 'skill.md';
 const canonical = file => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
@@ -129,8 +129,8 @@ class WorkerSkillProposals {
       if (current && this.userRoots.has(canonical(path.dirname(path.dirname(entry.file))))) {
         try {
           assertUserSkillName(path.basename(path.dirname(entry.file)), this.builtinNames);
-          const declared = current.bytes?.toString('utf8').match(/^name:[ \t]*["']?([a-z0-9-]+)["']?[ \t]*\r?$/m)?.[1];
-          assertUserSkillName(declared, this.builtinNames);
+          const declared = current.bytes && frontMatter(current.bytes.toString('utf8'))?.fields.name;
+          assertUserSkillName(declared?.toLowerCase(), this.builtinNames);
         } catch (error) { rejected = error.message; }
       }
       if (this.approved.has(key) && !rejected) continue;

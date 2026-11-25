@@ -26,6 +26,7 @@ Journal reader checks are in `tests/wire-format.test.cjs` and `tests/self-format
 - `electron/shared/ipc.cjs`
 - `electron/features/cli-adapters/registry.cjs` (session identity and quota scope)
 - `electron/features/agents/dispatch-events.cjs` (journal envelopes)
+- `electron/features/team/inbox.cjs` (tolerant journal row reader)
 
 ## Invariants
 - App records contain only the declared metadata fields, with the owner's sent-back note as the local text field — conversations, credentials and scope filenames do not belong in evaluation data — test: `tests/dashboard-records.test.cjs` › "run and grade hooks retain only local evaluation metadata"

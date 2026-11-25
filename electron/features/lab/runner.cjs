@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
-const { readEnvelope } = require('../agents/dispatch-events.cjs');
+const { readRows } = require('../team/inbox.cjs');
 const { LabUsage, phaseEvidence } = require('./usage.cjs');
 const { LabSession, recoverRuns } = require('./session.cjs');
 const { dispatch, taskBrief } = require('./dispatch.cjs');
@@ -194,11 +194,8 @@ async function runTask(options) {
   } catch (error) {
     failure = error;
     if (workspace && !captured) {
-      try {
-        await verifyWorktree(workspace);
-        const diff = await captureDiff(workspace, reference?.diffFiles || reference?.files?.map(entry => entry.file));
-        await fs.writeFile(path.join(artifacts, 'change.patch'), diff, { mode: 0o600 });
-      } catch {}
+      const diffError = await recoverDiff(workspace, reference, artifacts);
+      if (diffError) result.diffError = diffError;
     }
   } finally {
     clearTimeout(deadline); signal.removeEventListener('abort', abort);
@@ -219,15 +216,12 @@ async function runTask(options) {
           if (error.code === 'ENOENT') return '';
           throw error;
         });
-        const entries = text.split('\n').filter(Boolean).flatMap(line => {
-          try { return [readEnvelope(line, { channel: 'journal.jsonl' }).value]; }
-          catch (error) { if (error.code === 'wire.unsupported_version') throw error; return []; }
-        });
-        Object.assign(result, phaseEvidence(entries, measured.calls));
+        Object.assign(result, journalEvidence(text, measured.calls));
         await fs.writeFile(path.join(artifacts, 'journal.jsonl'), text, { mode: 0o600 });
       }
       await fs.writeFile(path.join(artifacts, 'measurements.json'),
-        JSON.stringify({ ...measured, modelStarted: result.modelStarted }), { mode: 0o600 });
+        JSON.stringify({ ...measured, modelStarted: result.modelStarted, ...(result.skippedJournalRows && { skippedJournalRows: result.skippedJournalRows }) }),
+        { mode: 0o600 });
     } catch (error) { failure ||= error; }
     if (stopped) try { await cleanupWorktrees(directory); } catch (error) { failure ||= error; }
     try {
@@ -253,7 +247,24 @@ async function runTask(options) {
   return result;
 }
 
+function journalEvidence(text, calls) {
+  const { entries, skipped } = readRows(text.split('\n'), 'journal.jsonl');
+  return { ...phaseEvidence(entries, calls), skippedJournalRows: skipped };
+}
+
+async function recoverDiff(workspace, reference, artifacts) {
+  try {
+    await verifyWorktree(workspace);
+    const diff = await captureDiff(workspace, reference?.diffFiles || reference?.files?.map(entry => entry.file));
+    await fs.writeFile(path.join(artifacts, 'change.patch'), diff, { mode: 0o600 });
+  } catch (error) {
+    try { await recordTestFailure(error, path.join(artifacts, 'tests.log')); }
+    catch (logError) { return logError.code ?? 'log_failed'; }
+  }
+  return null;
+}
+
 module.exports = {
   runTask, validateReference, recoverRuns, prepareWorktree, verifyWorktree, captureDiff, cleanupWorktrees,
-  cleanupContainer,
+  cleanupContainer, journalEvidence, recoverDiff,
 };

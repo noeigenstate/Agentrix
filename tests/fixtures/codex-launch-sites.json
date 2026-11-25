@@ -320,8 +320,8 @@
     "id": "electron/features/worker-terminals/worker-terminals.cjs:2b006e374b8ca40ac6b3fa4d"
   },
   {
-    "text": "w.pty.write(sentence(`Read the owner's message in ${file} and act on it.`))",
-    "id": "electron/features/worker-terminals/worker-terminals.cjs:a4aea2c32e51c83e76e8bc40"
+    "text": "w.pty.write(reference)",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:b808453b9be7bbe9e574df0a"
   },
   {
     "text": "w.pty.write('\\r')",

@@ -5,9 +5,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
-const { queueControl, recordControl, controlOf, readBoard, boardEntry } = require('./inbox.cjs');
+const { queueControl, recordControl, controlOf, readBoard, boardEntry, readRows } = require('./inbox.cjs');
 const { globRegExp } = require('../../boundaries.cjs');
-const { readEnvelope } = require('../agents/dispatch-events.cjs');
 
 const FINDINGS = '## Findings for the ledger';
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
@@ -16,6 +15,27 @@ const read = (file, missing = '', encoding = 'utf8') => {
 };
 const jsonLine = value => JSON.stringify(value) + '\n';
 const nonnegative = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+const MEMORY_ACTIVE_BYTES = 4 * 1024 * 1024, JOURNAL_ACTIVE_BYTES = 16 * 1024 * 1024;
+const LOCK_RETRY = new Set(['ENOENT', 'EEXIST', 'ENOTEMPTY', 'ENOTDIR', 'EISDIR', 'EPERM', 'EACCES', 'EBUSY']);
+
+function clearDeadLock(file) {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isDirectory()) {
+      if (Date.now() - stat.mtimeMs > 10_000) fs.unlinkSync(file);
+      return;
+    }
+    const names = fs.readdirSync(file);
+    if (!names.length) { fs.rmdirSync(file); return; }
+    if (names.length !== 1) return;
+    const owner = /^(\d+)-[\da-f-]{36}$/.exec(names[0]);
+    if (!owner) return;
+    try { process.kill(Number(owner[1]), 0); return; }
+    catch (error) { if (error.code !== 'ESRCH') return; }
+    fs.unlinkSync(path.join(file, names[0]));
+    fs.rmdirSync(file);
+  } catch (error) { if (error.code === 'EACCES' || !LOCK_RETRY.has(error.code)) throw error; }
+}
 
 function projectTeam(cwd, create = false) {
   let common;
@@ -93,6 +113,20 @@ function writeMemoryFile(file, text, once = false) {
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
+function rotate(file, data, limit) {
+  if (data.length <= limit) return data;
+  const split = data.indexOf(10, data.length - Math.floor(limit / 2)) + 1;
+  if (!split || split === data.length) return data;
+  // Keep a recoverable copy before replacing the active file. Readers see the archive only after the swap.
+  const archive = `${file}.${Date.now()}-${randomUUID()}.archive`, pending = archive + '.pending';
+  writeMemoryFile(pending, data.subarray(0, split), true);
+  const retained = data.subarray(split);
+  try { writeMemoryFile(file, retained); }
+  catch (error) { fs.rmSync(pending, { force: true }); throw error; }
+  fs.renameSync(pending, archive);
+  return retained;
+}
+
 function initializeMemory(markdownFile, file) {
   const original = read(markdownFile, null, null);
   const backup = path.join(path.dirname(markdownFile), path.parse(markdownFile).name + '.legacy.md');
@@ -103,35 +137,31 @@ function initializeMemory(markdownFile, file) {
 }
 
 const memoryHeading = ({ title, source }) => source === 'legacy-markdown' || !title ? title : '### ' + title;
+const validMemory = value => value.type === 'memory.entry' && nonnegative(value.at) && typeof value.title === 'string'
+  && (typeof value.text === 'string' || value.text && typeof value.text === 'object' && !Array.isArray(value.text));
 function renderMemoryEntry(entry) {
   const { text } = entry;
   return [memoryHeading(entry), typeof text === 'string' ? text : JSON.stringify(text)].filter(Boolean).join('\n\n');
 }
 
-function syncMemory(markdownFile, file, addition) {
+function syncMemory(markdownFile, file, addition, compact = false) {
   let data = read(file, null) ?? initializeMemory(markdownFile, file);
   for (;;) {
-    const rows = data.split(/\r?\n/).filter(line => line.trim()).map(line => {
-      const { value } = readEnvelope(line, { channel: 'memory.jsonl', legacy: false });
-      if (value.type !== 'memory.entry' || !nonnegative(value.at) || typeof value.title !== 'string'
-          || !(typeof value.text === 'string' || value.text && typeof value.text === 'object' && !Array.isArray(value.text))) {
-        throw Object.assign(new Error('memory.jsonl: invalid memory entry'), { code: 'wire.invalid' });
-      }
-      return value;
-    });
     if (addition) {
       const entry = memoryEntry(addition);
       const line = (data && !data.endsWith('\n') ? '\n' : '') + jsonLine(entry);
       fs.appendFileSync(file, line);
       data += line;
-      rows.push(entry);
       addition = null;
+      if (compact) data = rotate(file, Buffer.from(data), MEMORY_ACTIVE_BYTES).toString('utf8');
     }
-    const text = rows.map(renderMemoryEntry).join('\n\n');
-    const rendered = text && text + '\n';
+    const { entries: rows, skipped } = readRows(data.split(/\r?\n/), 'memory.jsonl', validMemory);
+    const heading = '<!-- Generated project memory. Record findings through Agentrix. Older entries may be in memory.jsonl.*.archive. -->\n';
+    const notice = skipped ? `\n[Skipped ${skipped} unreadable memory rows.]\n` : '';
+    const rendered = heading + notice + rows.map(row => '\n' + renderMemoryEntry(row) + '\n').join('');
     if (read(markdownFile, null) !== rendered) writeMemoryFile(markdownFile, rendered);
     const current = read(file);
-    if (current === data) return rows;
+    if (current === data) return { rows, skipped };
     // A worktree can append while a synchronous brief is refreshing the human view.
     data = current;
   }
@@ -186,13 +216,13 @@ function legacyFindings(answer) {
   return at < 0 ? '' : answer.slice(at + FINDINGS.length).split(/\n#{1,2} /)[0].trim();
 }
 
-function recordFindings({ memory, ledger }, findings, header, runId) {
+function recordFindings({ memory, ledger }, findings, header, runId, compact = false) {
   const structured = Array.isArray(findings);
   const text = structured ? findings.filter(item => typeof item === 'string' && item.trim()).map(item => '- ' + item.trim()).join('\n')
     : typeof findings === 'string' ? legacyFindings(findings) : '';
   if (!text || !(memory || ledger)) return false;
   const entry = { title: String(header).replace(/[\r\n]/g, ' '), text, runId, source: structured ? 'findings' : 'legacy-findings' };
-  if (memory) syncMemory(memory, memoryPath(memory), entry);
+  if (memory) syncMemory(memory, memoryPath(memory), entry, compact);
   if (ledger && (!memory || path.resolve(ledger) !== path.resolve(memory))) fs.appendFileSync(ledger, '\n\n' + renderMemoryEntry(entry) + '\n');
   return true;
 }
@@ -205,14 +235,13 @@ class Team {
     this.journal = path.join(directory, 'journal.jsonl');
     this.board = path.join(directory, 'board');
   }
-  entries() {
-    return read(this.journal).split(/\r?\n/).filter(Boolean).flatMap(line => {
-      try { return [readEnvelope(line, { channel: 'journal.jsonl' }).value]; }
-      catch (error) { if (error.code === 'wire.unsupported_version') throw error; return []; }
-    });
+  journalHistory() { return readRows(read(this.journal).split(/\r?\n/), 'journal.jsonl'); }
+  entries() { return this.journalHistory().entries; }
+  append(entry) {
+    fs.appendFileSync(this.journal, jsonLine({ ...entry, v: 1, time: Date.now() }));
+    if (fs.statSync(this.journal).size > JOURNAL_ACTIVE_BYTES) rotate(this.journal, read(this.journal, null, null), JOURNAL_ACTIVE_BYTES);
   }
-  append(entry) { fs.appendFileSync(this.journal, jsonLine({ ...entry, v: 1, time: Date.now() })); }
-  appendMemory(entry) { syncMemory(this.memory, this.memoryJsonl, entry); }
+  appendMemory(entry) { syncMemory(this.memory, this.memoryJsonl, entry, true); }
   appendReceipt(record) {
     const { id, at, messageId, status, reason } = record;
     this.append({ type: 'control-receipt', id, messageId, status, at, ...(reason !== undefined && { reason }) });
@@ -222,45 +251,34 @@ class Team {
   queueControl(id, control, notify) { return queueControl(this, id, control, notify); }
   recordControl(id, title, control, notify) { return this.locked(() => recordControl(this, id, title, controlOf(control), notify)); }
   async locked(action) {
-    const file = path.join(this.directory, 'lock'), token = randomUUID(), deadline = Date.now() + 15000;
-    let stale;
-    for (;;) {
-      if (stale) {
-        try {
-          fs.unlinkSync(stale); stale = null;
-        } catch (failure) {
-          if (failure.code === 'ENOENT') stale = null;
-          else if (failure.code !== 'EPERM' && failure.code !== 'EBUSY') throw failure;
+    const file = path.join(this.directory, 'lock'), owner = `${process.pid}-${randomUUID()}`;
+    const temporary = file + '.' + owner, deadline = Date.now() + 15_000;
+    fs.mkdirSync(temporary);
+    try {
+      fs.closeSync(fs.openSync(path.join(temporary, owner), 'wx'));
+      for (;;) {
+        // A populated lock directory cannot be replaced. Keep old-style files on the legacy expiry path.
+        if (fs.lstatSync(file, { throwIfNoEntry: false })) clearDeadLock(file);
+        else {
+          try { fs.renameSync(temporary, file); break; }
+          catch (error) { if (!LOCK_RETRY.has(error.code)) throw error; }
         }
+        if (Date.now() > deadline) throw new Error('Team lock is busy');
+        await delay(25);
+        if (Date.now() > deadline) throw new Error('Team lock is busy');
       }
-      if (!stale) {
-        let fd;
-        try {
-          fd = fs.openSync(file, 'wx');
-        } catch (error) {
-          // Windows can deny an exclusive open while the previous lock is pending deletion. Wait without touching it.
-          if (error.code === 'EEXIST') {
-            let expired = false;
-            try { expired = Date.now() - fs.statSync(file).mtimeMs > 10000; }
-            catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
-            if (expired) {
-              const candidate = file + '.' + randomUUID() + '.stale';
-              try { fs.renameSync(file, candidate); stale = candidate; continue; }
-              catch (failure) { if (!['ENOENT', 'EPERM', 'EBUSY'].includes(failure.code)) throw failure; }
-            }
-          } else if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
-            throw error;
-          }
-        }
-        if (fd !== undefined) {
-          try { fs.writeFileSync(fd, token); } finally { fs.closeSync(fd); }
-          break;
-        }
+    } finally {
+      if (fs.existsSync(temporary)) {
+        fs.rmSync(path.join(temporary, owner), { force: true });
+        fs.rmdirSync(temporary);
       }
-      if (Date.now() <= deadline) await delay(25);
-      if (Date.now() > deadline) throw new Error('Team lock is busy');
     }
-    try { return await action(); } finally { if (read(file) === token) fs.unlinkSync(file); }
+    try { return await action(); }
+    finally {
+      fs.unlinkSync(path.join(file, owner));
+      try { fs.rmdirSync(file); }
+      catch (error) { if (!LOCK_RETRY.has(error.code)) throw error; }
+    }
   }
   live() {
     const entries = [];
@@ -305,14 +323,19 @@ class Team {
     const outside = path.isAbsolute(relative) || relative.startsWith('..' + path.sep);
     const pointer = readOnly && outside
       ? 'The full project memory is outside the role folder and cannot be read from this role. The lead can supply an entry on request.'
-      : `Full project memory: ${this.memory}`;
-    const memory = small ? [] : [`# Project memory\n\n${pointer}\n\n${memoryExcerpt(syncMemory(this.memory, this.memoryJsonl), { allow, brief })}`.trimEnd()];
+      : `Project memory (generated view): ${this.memory}`;
+    const memory = [];
+    if (!small) {
+      const { rows, skipped } = syncMemory(this.memory, this.memoryJsonl);
+      const notice = skipped ? `\n\n[Skipped ${skipped} unreadable memory rows.]` : '';
+      memory.push(`# Project memory\n\n${pointer}${notice}\n\n${memoryExcerpt(rows, { allow, brief })}`.trimEnd());
+    }
     return [...memory, `# Working now\n\n${working || '- none'}`,
       `# Repository\n\n${lines.slice(0, 40).join('\n') || '(clean)'}${lines.length > 40 ? `\n… and ${lines.length - 40} more` : ''}\n\n${log || '(no commits)'}`];
   }
   finish(options, report) {
     return this.locked(() => {
-      recordFindings({ ...options, memory: this.memory }, report.findings ?? report.answer, report.header, report.id);
+      recordFindings({ ...options, memory: this.memory }, report.findings ?? report.answer, report.header, report.id, true);
       this.append({ type: 'end', id: report.id, agent: options.agent, title: String(options.title || '').slice(0, 240), session: report.session || options.resume || null,
         role: options.role, kind: report.kind ?? null, model: report.model || 'unreported',
         reason: report.reason, outputTokens: nonnegative(report.outputTokens) ? report.outputTokens : null,

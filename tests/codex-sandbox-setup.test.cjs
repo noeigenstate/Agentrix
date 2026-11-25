@@ -308,7 +308,8 @@ test('the readiness probe initializes and closes its own app-server', async () =
 });
 
 const decode = value => Buffer.from(value, 'base64').toString('utf16le');
-const encodedArguments = source => [...source.matchAll(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/g)].map(([, encoded]) => decode(encoded));
+const encodedArguments = source => [...source.matchAll(/::(Unicode|UTF8)\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)/g)]
+  .map(([, encoding, encoded]) => Buffer.from(encoded, 'base64').toString(encoding === 'UTF8' ? 'utf8' : 'utf16le'));
 const specialExecutable = "D:\\程序 Cli's &(%)!\\codex.exe", specialHome = "F:\\设置 Home's &(%)!";
 
 test('setup encodes its arguments and bounds the elevated CLI tree', async () => {
@@ -320,6 +321,7 @@ test('setup encodes its arguments and bounds the elevated CLI tree', async () =>
     assert.equal(powershell, 'R:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
     assert.deepEqual(options, { cwd: 'R:\\Windows\\System32', env, windowsHide: true, timeout: 360_000 });
     assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
+    assert.ok(powershell.length + args.join(' ').length + 4 < 32_767, 'the outer PowerShell command fits CreateProcess');
     const outer = decode(args[3]);
     assert.equal(outer.includes(executable), false);
     assert.equal(outer.includes(normalized), false);
@@ -330,13 +332,13 @@ test('setup encodes its arguments and bounds the elevated CLI tree', async () =>
     assert.deepEqual([homeCheck, cliArg], [normalized, executable]);
     assert.match(outer, /CODEX_HOME = \$homePath/);
     assert.match(elevated, /sandbox setup --elevated --user "\{0\}" --codex-home "\{1\}"/);
-    assert.match(elevated, /Get-AuthenticodeSignature -LiteralPath \$cli[\s\S]*'Valid'[\s\S]*OpenAI OpCo, LLC[\s\S]*exit 4[\s\S]*Start-Process/);
+    assert.match(elevated, /Get-AuthenticodeSignature -LiteralPath \$copy[\s\S]*'Valid'[\s\S]*OpenAI OpCo, LLC[\s\S]*return 4[\s\S]*Start-Process/);
     assert.match(elevated, /DirectoryInfo[\s\S]*\$folder\.Parent[\s\S]*'\.sandbox'[\s\S]*FileAttributes\]::ReparsePoint/);
     assert.doesNotMatch(elevated, /cmd\.exe/);
     assert.match(outer, /\$null = \$process\.Handle/);
     assert.match(elevated, /\$null = \$process\.Handle/);
     assert.match(elevated, /WaitForExit\(300000\)/);
-    assert.match(elevated, /taskkill\.exe" \/PID \$process\.Id \/T \/F/);
+    assert.match(elevated, /'taskkill\.exe'\)\) \/PID \$process\.Id \/T \/F/);
     assert.doesNotMatch(elevated, /-Verb RunAs/);
   }
 });
@@ -363,6 +365,64 @@ test('Windows PowerShell parses the generated setup scripts with special charact
   execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encode(parser)], {
     input: JSON.stringify([outer, elevated].map(encode)), windowsHide: true, timeout: 15_000,
   });
+});
+
+test('the setup work verifies and launches the same private copy or refuses it', { skip: process.platform !== 'win32' }, async t => {
+  const fs = require('node:fs'), os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-setup-copy-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = path.join(root, 'bin', "Owner's codex.exe"), stage = path.join(root, 'staging');
+  const resources = path.join(root, 'codex-resources'), companion = path.join(resources, 'codex-windows-sandbox-setup.exe');
+  fs.mkdirSync(path.dirname(original)); fs.mkdirSync(resources);
+  let elevated;
+  await runSetup(original, root, process.env, (_program, args, _options, done) => {
+    elevated = encodedArguments(decode(args.at(-1))).at(-1); done(null);
+  });
+  const script = String.raw`
+$ErrorActionPreference = 'Stop'
+$fixtures = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($fixtures.script))
+$ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$null, [ref]$null)
+foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+    . ([ScriptBlock]::Create($definition.Extent.Text))
+}
+$env:CODEX_HOME = $fixtures.root
+$env:AGENTRIX_SETUP_CLI = $fixtures.original
+$env:AGENTRIX_SETUP_USER = 'fixture'
+$events = @()
+function Get-AuthenticodeSignature($LiteralPath) {
+    $script:events += @{ action = 'verify'; path = $LiteralPath; contents = [IO.File]::ReadAllText($LiteralPath) }
+    [IO.File]::WriteAllText($fixtures.original, 'changed')
+    $status = if ([IO.Path]::GetFileName($LiteralPath) -eq 'codex.exe') { 'Valid' } else { $script:status }
+    return @{ Status = $status; SignerCertificate = @{ Subject = 'CN=OpenAI OpCo, LLC' } }
+}
+function Start-Process($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle, [switch]$PassThru) {
+    $script:events += @{ action = 'run'; path = $FilePath; contents = [IO.File]::ReadAllText($FilePath); cwd = $WorkingDirectory; localPath = (($env:PATH -split ';')[0]) }
+    $process = [pscustomobject]@{ Handle = 1; ExitCode = 0 }
+    $process | Add-Member ScriptMethod WaitForExit { param($milliseconds) return $true }
+    return $process
+}
+foreach ($status in 'Valid','NotSigned','Missing') {
+    [IO.File]::WriteAllText($fixtures.original, 'original')
+    if ($status -eq 'Missing') { [IO.File]::Delete($fixtures.companion) }
+    else { [IO.File]::WriteAllText($fixtures.companion, 'helper') }
+    $events = @()
+    $code = Invoke-CodexSetup { [IO.Directory]::CreateDirectory($fixtures.stage).FullName }
+    @{ code = $code; events = $events; stagingExists = [IO.Directory]::Exists($fixtures.stage) } | ConvertTo-Json -Compress -Depth 5
+}
+`;
+  const encode = source => Buffer.from(source, 'utf16le').toString('base64');
+  const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const result = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encode(script)], {
+    input: JSON.stringify({ root, original, stage, companion, script: encode(elevated) }), encoding: 'utf8', windowsHide: true, timeout: 15_000,
+  }).trim().split(/\r?\n/).map(JSON.parse);
+  const copy = path.join(stage, 'codex.exe'), verify = { action: 'verify', path: copy, contents: 'original' };
+  const verifyHelper = { action: 'verify', path: path.join(stage, 'codex-windows-sandbox-setup.exe'), contents: 'helper' };
+  assert.deepEqual(result, [
+    { code: 0, events: [verify, verifyHelper, { action: 'run', path: copy, contents: 'original', cwd: stage, localPath: stage }], stagingExists: false },
+    { code: 4, events: [verify, verifyHelper], stagingExists: false },
+    { code: 4, events: [verify], stagingExists: false },
+  ]);
 });
 
 test('setup refuses nonlocal homes and preserves Windows refusal and failure results', async () => {

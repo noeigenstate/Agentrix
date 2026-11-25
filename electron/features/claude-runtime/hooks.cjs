@@ -44,22 +44,25 @@ function proxyOf(env, port, platform = process.platform) {
 // The env of Claude Code's own settings files, lowest precedence first, the way the CLI lays them over its environment.
 function settingsEnvs({ env, cwd, platform, home, read }) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
-  const managed = platform === 'win32' ? 'C:\\Program Files\\ClaudeCode' : platform === 'darwin' ? '/Library/Application Support/ClaudeCode' : '/etc/claude-code';
+  const programFiles = valuesOf(env, 'PROGRAMFILES', platform)[0] || 'C:\\Program Files';
+  const managed = platform === 'win32' ? paths.join(programFiles, 'ClaudeCode') : platform === 'darwin' ? '/Library/Application Support/ClaudeCode' : '/etc/claude-code';
   const files = { user: paths.join(env.CLAUDE_CONFIG_DIR || paths.join(home, '.claude'), 'settings.json'), project: paths.join(cwd, '.claude', 'settings.json'),
     local: paths.join(cwd, '.claude', 'settings.local.json'), managed: paths.join(managed, 'managed-settings.json') };
   return Object.entries(files).map(([source, file]) => {
     let value;
-    try { value = JSON.parse(read(file))?.env; } catch { }
+    try { value = JSON.parse(read(file).replace(/^\uFEFF/, ''))?.env; } catch { }
     return { source, env: value && typeof value === 'object' && !Array.isArray(value) ? value : {} };
   });
 }
 
-// The hook command of a PowerShell terminal. PowerShell or Git Bash may run it, so the executable path has no spaces and
-// stays unquoted (a quoted first word is only a string in PowerShell), the script is quoted, and paths use forward slashes.
-const powershellHook = ({ powershellPath, script, pipeName, projectId, sessionKey, node }) => kind => [powershellPath.replace(/\\/g, '/'),
-  '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `"${script.replace(/\\/g, '/')}"`,
-  '-PipeName', pipeName, '-ProjectId', projectId, '-SessionKey', sessionKey, '-Kind', kind,
-  ...(['seat-routing', 'worker-permission'].includes(kind) ? ['-NodePath', `"${node.replace(/\\/g, '/')}"`] : [])].join(' ');
+const slashPath = value => value.replaceAll('\\', '/');
+function powershellHook({ powershellPath, script, pipeName, projectId, sessionKey, node }, commandShell) {
+  const quote = commandShell ? value => `'${slashPath(value).replaceAll("'", "''")}'` : value => `"${slashPath(value)}"`;
+  const executable = commandShell ? ['&', quote(powershellPath)] : [slashPath(powershellPath)];
+  return kind => [...executable, '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', quote(script),
+    '-PipeName', pipeName, '-ProjectId', projectId, '-SessionKey', sessionKey, '-Kind', kind,
+    ...(['seat-routing', 'worker-permission'].includes(kind) ? ['-NodePath', quote(node)] : [])].join(' ');
+}
 // The hook command of a zsh or Bash terminal, which Claude Code runs with sh: every word is quoted for it.
 const shQuote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const posixHook = ({ node, helper, socket, projectId, sessionKey, noteFile }) => kind => ['ELECTRON_RUN_AS_NODE=1',
@@ -67,18 +70,19 @@ const posixHook = ({ node, helper, socket, projectId, sessionKey, noteFile }) =>
 
 // The --settings a terminal's wrapper passes Claude Code, which merge with the user's own: HTTP hooks for every event but
 // SessionStart, or command hooks for all of them. Hidden roles use a synchronous permission decision on both channels.
-function settings(channel, { url, key, command, seatRouting, workerPermission }) {
+function settings(channel, { url, key, command, seatRouting, workerPermission, commandShell }) {
   const async = kind => kind === 'progress' || channel === 'command-async' && ASYNC_KINDS.includes(kind);
   const entry = hook => [{ hooks: [hook] }];
-  const commandHook = event => ({ type: 'command', command: command(COMMAND_KINDS[event]), timeout: 10,
+  const commandConfig = (kind, timeout) => ({ type: 'command', command: command(kind), timeout, ...(commandShell && { shell: commandShell }) });
+  const commandHook = event => ({ ...commandConfig(COMMAND_KINDS[event], 10),
     ...(async(COMMAND_KINDS[event]) ? { async: true } : {}) });
   const hooks = channel === 'http'
     ? Object.fromEntries([...HTTP_EVENTS.map(event => [event, entry({ type: 'http', url: `${url}/${event}`, headers: { 'X-Agentrix-Key': key },
       timeout: DIALOGS.includes(event) ? 600 : 10 })]), ['SessionStart', entry(commandHook('SessionStart'))]])
     : Object.fromEntries(Object.keys(COMMAND_KINDS).map(event => [event, entry(commandHook(event))]));
-  if (workerPermission) hooks.PermissionRequest = entry({ type: 'command', command: command('worker-permission'), timeout: 10 });
+  if (workerPermission) hooks.PermissionRequest = entry(commandConfig('worker-permission', 10));
   if (seatRouting) for (const event of ['PreToolUse', 'PostToolUse']) {
-    hooks[event].push({ matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('seat-routing'), timeout: 5 }] });
+    hooks[event].push({ matcher: 'Agent|Task', hooks: [commandConfig('seat-routing', 5)] });
   }
   return JSON.stringify({ hooks });
 }
@@ -97,11 +101,13 @@ function terminalHooks({ port, terminalId, sessionKey, eventServer, env, cwd, sh
   const layer = variable && layers.findLast(({ env: values }) => Object.keys(values).some(name => name.toUpperCase() === variable && values[name]));
   const channelReason = !port ? reason('term.hooks_down', { source: 'hook-channel' })
     : variable ? reason('term.hooks_command_proxy', { source: 'hook-channel', params: { variable, source: layer?.source || 'environment' } }) : null;
+  // Older terminal-only CLIs can still run the shell-neutral command for ordinary installation paths.
+  const commandShell = !shell.posix && [shell.powershellPath, shell.script, shell.node].some(value => /[$`'"]/.test(value)) ? 'powershell' : undefined;
   const command = shell.posix ? posixHook({ ...shell, socket: eventServer.address, projectId: terminalId, sessionKey })
-    : powershellHook({ ...shell, pipeName: eventServer.name, projectId: terminalId, sessionKey });
+    : powershellHook({ ...shell, pipeName: eventServer.name, projectId: terminalId, sessionKey }, commandShell);
   return { url, port: port || null, key, channel: channelReason ? fallback : 'http', fallback, channelReason, settings: {
-    http: url && settings('http', { url, key, command, seatRouting, workerPermission }),
-    fallback: settings(fallback, { command, seatRouting, workerPermission }),
+    http: url && settings('http', { url, key, command, commandShell, seatRouting, workerPermission }),
+    fallback: settings(fallback, { command, commandShell, seatRouting, workerPermission }),
   } };
 }
 

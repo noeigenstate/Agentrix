@@ -5,6 +5,7 @@ const { projectPaths } = require('../../project-paths.cjs');
 const { resolveTerminalLink, resolveRevealPath } = require('../../terminal-links.cjs');
 const { previewLocation, failure, SSH_OUTSIDE } = require('./preview-location.cjs');
 const { isPageFile } = require('./file-kind.cjs');
+const { editorPath } = require('./editor-guard.cjs');
 
 function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor, allowEditorClose, shell, getActiveFileTree, setActiveFileTree, setActiveTerminal, send }) {
   const fileSaves = new Set();
@@ -16,12 +17,14 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
   handle('project:findFiles', (projectId, query) => findFiles(findProject(projectId), query));
   handle('project:create-entry', (id, directory, name, kind) => fileOperations.create(findProject(id), directory, name, kind));
   handle('project:rename-entry', async (id, relative, name) => {
-    if (affectsEditor(id, [relative]) && !await allowEditorClose()) throw new Error('已取消重命名。');
-    return fileOperations.rename(findProject(id), relative, name);
+    const project = findProject(id);
+    if (affectsEditor(id, [relative], project.kind !== 'ssh') && !await allowEditorClose()) throw new Error('已取消重命名。');
+    return fileOperations.rename(project, relative, name);
   });
   handle('project:delete-entries', async (id, paths) => {
-    if (Array.isArray(paths) && affectsEditor(id, paths) && !await allowEditorClose()) return { deleted: [] };
-    return fileOperations.remove(findProject(id), paths);
+    const project = findProject(id);
+    if (Array.isArray(paths) && affectsEditor(id, paths, project.kind !== 'ssh') && !await allowEditorClose()) return { deleted: [] };
+    return fileOperations.remove(project, paths);
   });
   handle('project:copy-entries', (id, paths) => fileOperations.copy(findProject(id), paths));
   handle('project:copy-paths', async (id, paths, format) => {
@@ -54,7 +57,7 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
   handle('project:file', readFile);
   handle('project:preview-close', id => previewResources.close(id));
   async function saveFile(id, relativePath, pageIndex, revision, content) {
-    const project = findProject(id), key = `${project.id}:${relativePath}`;
+    const project = findProject(id), key = `${project.id}:${editorPath(relativePath, project.kind !== 'ssh')}`;
     if (fileSaves.has(key)) throw new Error('此文件正在保存，请稍候。');
     if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > 1024 * 1024) throw new Error('本次编辑内容超过 1 MB，请分段保存。');
     fileSaves.add(key);
