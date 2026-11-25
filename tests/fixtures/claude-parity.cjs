@@ -39,6 +39,8 @@ const leavesByVersion = {
     'Bash.description': ['a27ebec49d3b410bd9d2ba8ad0e27adba1fbf983fd046d3652747a33103032e0', '66645f851bf21a5016e661ea87c8d3ba545cd81339417a562c349b96714bc1c1'],
   },
 };
+// Reviewed 2026-11-25 with real paired requests: 2.1.332 differs from the GUI exactly as 2.1.330 does.
+leavesByVersion['2.1.332'] = leavesByVersion['2.1.330'];
 function billingVersion(blocks) {
   const match = /^x-anthropic-billing-header: cc_version=(\d+\.\d+\.\d+)\.[a-f\d]+; cc_entrypoint=(?:sdk-ts|cli);$/.exec(blocks[0]?.text);
   assert.ok(match, 'unexpected billing header structure');
