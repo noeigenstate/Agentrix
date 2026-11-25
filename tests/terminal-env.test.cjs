@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { applyFastHookSettings } = require('../electron/app/terminal-lifecycle.cjs');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 
 for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} preserves base hooks and writes the launch choice separately`, t => {
@@ -11,10 +12,7 @@ for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} 
     http: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['http'] } }),
     fallback: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['command'] } }) } };
   const before = JSON.stringify(hooks);
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const terminal = source.indexOf('function startTerminal(');
-  const start = source.indexOf('  if (hooks) {', terminal), end = source.indexOf('  if (bootstrapFile) writeBootstrap', start);
-  require('node:vm').runInNewContext(source.slice(start, end), { hooks, env: {} });
+  applyFastHookSettings(hooks, {});
   assert.equal(JSON.stringify({ settings: hooks.settings }), before);
   writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, hooks,
     lead: fast === undefined ? null : { model: 'opus', effort: 'high', fast } });

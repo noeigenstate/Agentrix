@@ -14,6 +14,9 @@ const { ConversationLog } = require('../electron/conversation.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
 const { timeoutScale } = require('../scripts/wait.mjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve)); };
 const draft = { version: 1, text: '', images: [], undelivered: [] };
@@ -40,11 +43,11 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'activateNative', 'writeBootstrap',
     'bindDispatchInbox', 'disposeDispatchInbox');
   vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), context);
-  const gateStart = main.indexOf('  s.gate = new InputGate('), gateEnd = main.indexOf('  const refreshCompletion', gateStart);
-  context.s = host; context.id = 't'; context.terminal = { write() {} };
-  vm.runInContext(main.slice(gateStart, gateEnd), context);
-  vm.runInContext(main.slice(main.indexOf('function disposeTerminal('), main.indexOf('function registerUnavailableNative(')), context);
-  vm.runInContext(main.slice(main.indexOf('function structuredEvent('), main.indexOf('async function initializeNativeSessions(')), context);
+  host.terminal = { write() {} };
+  const lifecycle = createTerminalLifecycle(context);
+  lifecycle.bindTerminalInput(host);
+  context.disposeTerminal = lifecycle.disposeTerminal;
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   const { activateNative } = context; assert.ok(activateNative);
   const provider = { resetAvailability() {}, credentials: { status: () => ({ saved }), clear() { saved = false; return { saved }; }, save() { saved = true; return { saved }; } },
     usage: { summary: () => ({}) }, facts: () => saved ? [] : [{ name: 'key', reason: { code: 'claude.no_key' } }], create(spec, emit) {
@@ -56,10 +59,8 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
         state(value) { state = value; stream.publish('session.state', { state }); } };
       created.push(runtime); return runtime;
     } };
-  const validation = /validateProject: projectId => \{([^\n]*?)\},\r?\n/.exec(main);
-  assert.ok(validation, 'use the actual main project validation');
   context.store.projects = [project];
-  const validateProject = vm.runInContext(`projectId => {${validation[1]}\n}`, context);
+  const { validateProject } = createNativeHost(context).nativeRouterOptions();
   facade = createNativeSessions({ directory, claude: provider, resolveSpec: id => ({ owner: 'gui', projectId: 'p', terminalId: id, agent: 'claude', cwd: directory }),
     terminalSessions: context.localSwitchSessions, observeTerminal: context.observeSwitchTerminal, validateProject,
     switchOptions: { handoffTimeoutMs: 20 }, connections: async () => ({}), emit: event => {

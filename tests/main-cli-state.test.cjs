@@ -1,14 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
-const ts = require('typescript');
 const { defineMain } = require('./helpers/main-modules.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const names = new Set(['onEvent']);
-const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text)).map(node => node.getText(ast)).join('\n');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 
 function fixture(agent = 'claude') {
   let now = 2000, armed = false, notifications = 0, beginnings = 0;
@@ -25,7 +19,8 @@ function fixture(agent = 'claude') {
     promptText: require('../electron/prompt-queue.cjs').promptText, followClaude() {}, memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [],
     remember: async () => {}, setTimeout: () => ({ unref() {} }), refreshClaudeAccounts() {}, scrubProjectSkills: async () => {},
     reportHookChannel: require('../electron/features/terminal-events/hook-channel.cjs').reportHookChannel });
-  vm.runInContext(functions, context);
+  context.now = () => now;
+  context.onEvent = createShellEvents(context).onEvent;
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'claudeHook', 'acceptDispatchEvent');
   let serial = 0;
   const hook = (state, extra = {}) => context.claudeActivity(project, s, { state, sessionId: 'provider', eventId: 'provider:hook-' + ++serial, sentAt: now, ...extra });

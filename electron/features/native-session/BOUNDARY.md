@@ -8,6 +8,7 @@ The authenticated read-only binding selects Claude worker permissions for both t
 - `electron/features/native-session/**`
 
 ## Interface
+- `createNativeHost` (`electron/features/native-session/host.cjs`) — assemble provider runtimes and router callbacks, register the worker broker and handle the unavailable runtime fallback
 - `createNativeSessions` (`electron/features/native-session/index.cjs`) — compose trusted provider runtimes and register the native IPC namespace
 - `choosePath` (`electron/features/native-session/routing.cjs`) — the path choice in the shape the dispatcher's worker reads, a wrapper of claude-runtime's `decide()` until R4; Codex always selects app-server, and legacy codexView preferences are ignored on read. Router start accepts host-mapped shell launch settings through resolveSpec; renderer start IPC still accepts only agent/resume.
 - `readJson` (`electron/features/native-session/storage.cjs`) — local metadata reads and atomic writeJson persistence
@@ -17,9 +18,8 @@ The authenticated read-only binding selects Claude worker permissions for both t
 - `subscriptionLimits` (`electron/features/native-session/usage.cjs`) — the subscription limits main already holds as a limits payload, with nextPath for what a new session takes
 - `createProjectAccounts` (`electron/features/native-session/project-accounts.cjs`) — focused pane account reads, cached by the existing account service; no session or background project launch
 - `createHostInputs` (`electron/features/native-session/host-inputs.cjs`) — what the router reads from the app shell over its deps: each agent's connection and subscription limits, the usage inputs, the connection test's spec, and a native session's environment and its spec (`nativeSpec`, the router's resolveSpec)
-- `history` (`electron/features/native-session/router.cjs`) — coalesced read-only folder history; forgetting a terminal or closing the router aborts its pending lookup, including an SSH connection still being established.
+- `history` (`electron/features/native-session/router.cjs`) — coalesced read-only folder history; forgetting a terminal or closing the router aborts its pending lookup, including an SSH connection still being established. The synchronous host-only `tokenRate` reads the bound runtime meter without adding IPC.
 - `native:commands` (`electron/features/native-session/ipc.cjs`) — sender-guarded `Result<AgentCommand[]>` bound to terminalId and runtimeSessionId; the router checks the host binding before and after asynchronous provider reads. `native:run-options` accepts a read or a Codex permissions patch. Model, effort and fast patches return `routing-owned`.
-- `tokenRate` (`electron/features/native-session/router.cjs`) — synchronous host-only read of the bound runtime's shared meter for the activity pane; no renderer IPC or provider event schema extension
 
 ## May import
 

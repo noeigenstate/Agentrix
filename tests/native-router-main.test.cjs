@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 test('callFile IPC requires the app sender and unwraps the bound local call result in preload', async () => {
@@ -40,7 +42,7 @@ function host() {
     store: { findTerminal: () => ({ project: { id: 'p' } }), expectCompletion: id => starts.push(id), setRestore: (id, patch) => restored.push({ id, patch }) },
     applyActivity: (_project, _session, snapshot) => activity.push(snapshot) };
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   return { ...context, starts, activity, restored, terminal, queued };
 }
 test('G2 real main structured events populate the same terminal agentUsage fields without a terminal meter', () => {
@@ -110,8 +112,7 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
     store: { findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: '11111111-1111-4111-8111-111111111111' } } }) },
     launchCommand: (agent, history) => ({ agent, history }), startTerminal: (...args) => starts.push(args), broadcast() {} };
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
-  context.registerUnavailableNative((name, handler) => handlers.set(name, handler));
+  createNativeHost(context).registerUnavailableNative((name, handler) => handlers.set(name, handler));
   assert.equal(handlers.get('native:settings-get')().claudePath, 'terminal-only');
   assert.equal((await handlers.get('native:usage')()).agents.codex.path, null);
   assert.throws(() => handlers.get('native:start')('t', { agent: 'codex' }), /^Error: Codex 原生模式连接失败，请重试。$/);
@@ -126,7 +127,7 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
 // The router's readHistory runs in main's module scope: here it sees only what that scope really declares (findProject, folderOf),
 // so a name that lives inside another function fails as it would in the app.
 function historyReader({ project, spec, restore = {} }) {
-  const start = source.indexOf('    readHistory: '), end = source.indexOf('    readCommands:', start), folders = [], lookups = [];
+  const folders = [], lookups = [];
   const context = { nativeSpecs: new Map(spec ? [['t', spec]] : []), randomUUID: () => 'fixture', t: text => text,
     ...require('../electron/features/cli-adapters/registry.cjs'),
     store: { findTerminal: id => id === 't' ? { project, record: { restore } } : null },
@@ -134,7 +135,8 @@ function historyReader({ project, spec, restore = {} }) {
     codexFactory: { history: async lookup => { lookups.push(lookup); return { id: 'codex-latest' }; } } };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function findProject('), source.indexOf('function publicState(')), context);
-  return { read: vm.runInContext(`(${source.slice(start, end).trim().replace(/^readHistory: /, '').replace(/,$/, '')})`, context), folders, lookups };
+  const { readHistory } = createNativeHost(context).nativeRouterOptions(null, null, context.codexFactory);
+  return { read: readHistory, folders, lookups };
 }
 test('a local Claude native session reads its folder history: the restored cwd, else the project folder', async () => {
   const project = { kind: 'local', id: 'p', path: '/project' };
@@ -169,7 +171,7 @@ test('the raw view a native session replaced reaches no PTY: its replies are dro
     ActionLog: require('../electron/agent-actions.cjs').ActionLog, ConversationLog: require('../electron/conversation.cjs').ConversationLog };
   for (const name of ['handle', 'listen', 'findProject', 'startTerminal', 'confirmTerminalClose', 'disposeTerminal', 'broadcast', 'applyActivity', 'pollAfterSubmission', 'send']) context[name] = () => assert.fail(name);
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   const registration = source.indexOf('terminalInput = registerTerminalIpc(');
   vm.runInContext(source.slice(registration, source.indexOf('registerClipboardIpc(', registration)), context);
   const reports = [], listeners = new Map(), webContents = { mainFrame: { url: 'agentrix://app/index.html' } };

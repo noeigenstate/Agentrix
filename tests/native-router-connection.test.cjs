@@ -3,10 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { accountConnection } = require('../electron/features/codex-app-server/account.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 
 for (const [mode, status, cli, expected] of [
   ['api-only', 'invalid', 'ok', null], ['api-then-terminal', 'invalid', 'ok', 'terminal'],
@@ -86,12 +86,11 @@ test('main connections use init and account evidence and discard a late result a
 });
 
 test('unavailable native usage still reports actual terminal connections', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = new Map();
+  const handlers = new Map();
   const context = { claudeRuntime: { usage: { summary: () => ({ apiRecords: true, todayUsdMicros: 123, monthUsdMicros: 456, estimated: true }) } },
     readNativeSubscriptionLimits: () => ({ claude: { source: 'fixture-subscription' } }),
     readNativeConnections: async () => ({ claude: { kind: 'subscription', source: 'terminal', observedAt: 1 }, codex: { kind: 'none', source: null, observedAt: null } }) };
-  vm.createContext(context); vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc()')), context);
-  context.registerUnavailableNative((name, handler) => handlers.set(name, handler));
+  createNativeHost(context).registerUnavailableNative((name, handler) => handlers.set(name, handler));
   const usage = await handlers.get('native:usage')();
   assert.equal(usage.agents.claude.connection.kind, 'subscription'); assert.equal(usage.agents.codex.connection.kind, 'none');
   assert.equal(usage.apiRecords, true); assert.equal(usage.monthUsdMicros, 456);

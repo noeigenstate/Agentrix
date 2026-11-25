@@ -1,3 +1,5 @@
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 // A planner in a terminal (no native Codex session) dispatches Codex workers on app-server: the pane's Codex section takes
 // their own app-server's account and quota, with the same rules as a native session. Synthetic app-server and events only.
 require('./fixtures/team-isolation.cjs');
@@ -93,44 +95,36 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
     netRequest: () => forbidden, electronNet: {},
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send: (channel, data) => { sent.push([channel, data]); }, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},
-    require: name => {
-      if (name === 'electron') return { safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden } };
-      if (name === './features/agents/dispatch-events.cjs') return require('../electron/features/agents/dispatch-events.cjs');
-      if (name === './features/team/team-locate.cjs') return { locateTeam: locate || forbidden };
-      if (name === './features/agents/dispatch-registration.cjs') return require('../electron/features/agents/dispatch-registration.cjs');
-      assert.fail(`unexpected require: ${name}`);
-    },
-    importFixture: async name => {
-      if (name === './features/agents/dispatch-control.cjs' && locate) return { createDispatchControl };
-      if (name === './features/agents/dispatch-control.cjs') return { createDispatchControl: () => ({ listen: async () => ({ address: 'fixture-control' }), onRequest() {} }) };
-      assert.fail(`unexpected import: ${name}`);
-    },
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden },
+    loadTeamLocator: () => ({ locateTeam: locate || forbidden }),
+    loadDispatchRegistration: () => require('../electron/features/agents/dispatch-registration.cjs'),
+    loadDispatchControl: async () => ({ createDispatchControl: locate ? createDispatchControl : () => ({
+      listen: async () => ({ address: 'fixture-control' }), onRequest() {},
+    }) }),
   };
   // Main's worker terminals: no terminal lead here starts one.
   context.workerTerminals = null;
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')), context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
+  context.onEvent = createShellEvents(context).onEvent;
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   defineMain(context, 'acceptDispatchEvent', 'bindDispatchInbox', 'disposeDispatchInbox', 'readNativeConnections', 'liveHost', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
     'readNativeUsageInputs', 'connectionSpec', 'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal',
     'retireTerminal', 'activateNative');
-  vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
-    .replaceAll('await import(', 'await importFixture('), context);
+  const nativeHost = createNativeHost(context);
   // The workspace's project removal, as main registers it.
   const removeProject = vm.runInContext(`(${/removeProject: (id => \{[^\n]*\}),/.exec(source)[1]})`, context);
-  await context.initializeNativeSessions();
-  t.after(() => { context.disposeDispatchInbox(); context.nativeSessions.close(); if (locate) vm.runInContext('dispatchControl', context).close(); });
+  await nativeHost.initializeNativeSessions();
+  t.after(() => { context.disposeDispatchInbox(); context.nativeSessions.close(); if (locate) context.dispatchControl.close(); });
   const handlers = new Map(); context.nativeSessions.register((name, handle) => handlers.set(name, handle));
   // The fallback main registers when native sessions failed to start: its usage still has to carry what dispatched workers report.
-  vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
-  const unavailable = new Map(); context.registerUnavailableNative((name, handle) => unavailable.set(name, handle));
+  const unavailable = new Map(); nativeHost.registerUnavailableNative((name, handle) => unavailable.set(name, handle));
   return { context, removeProject, sent, fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
     fallbackClaude: async () => (await unavailable.get('native:usage')('p')).agents.claude,
-    controlAddress: () => vm.runInContext('controlAddress', context), held: () => new Map(['p'].map(id => [id, context.dispatchReading(id, null, Infinity)]).filter(([, payload]) => payload)),
+    controlAddress: () => context.controlAddress, held: () => new Map(['p'].map(id => [id, context.dispatchReading(id, null, Infinity)]).filter(([, payload]) => payload)),
     usage: async () => { await context.bindDispatchInbox(planner, project).work; return (await handlers.get('native:usage')('p')).agents.codex; } };
 }
 

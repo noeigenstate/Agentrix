@@ -1,6 +1,7 @@
 {
   "electron/features/native-session/agent-usage.cjs": 2,
   "electron/features/native-session/events.cjs": 1,
+  "electron/features/native-session/host.cjs": 1,
   "electron/features/native-session/ipc.cjs": 2,
   "electron/features/native-session/routing.cjs": 1,
   "electron/features/native-session/switches.cjs": 1,

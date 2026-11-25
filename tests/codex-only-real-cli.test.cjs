@@ -1,3 +1,4 @@
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -99,7 +100,6 @@ test('real app-server starts and resumes the same thread despite legacy terminal
 
     // Owner intent is host policy: the CLI correctly reports both cases as unfinished.
     // Exercise the actual restoreTerminal entry with real persisted turn verification.
-    const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
     for (const cause of ['owner', 'crash']) {
       const saved = { agent: 'codex', codex: true, threadId }, id = 'policy-' + cause;
       const makeFacade = () => createNativeSessions({ directory: path.join(root, id), codex,
@@ -124,8 +124,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       const context = require('node:vm').createContext({ nativeSessions: policy, restorePlans: new Map(), startupErrors: new Map(), broadcast() {},
         ...require('../electron/features/cli-adapters/registry.cjs'),
         store: { findTerminal: () => ({ record: { restore: saved } }), setRestore(_id, patch) { Object.assign(saved, patch); } } });
-      require('node:vm').runInContext(main.slice(main.indexOf('function restoreTerminal('), main.indexOf('function startTerminal(')), context);
-      const beforeRestore = requests.length; await context.restoreTerminal(id);
+      const beforeRestore = requests.length; await createTerminalLifecycle(context).restoreTerminal(id);
       if (cause === 'crash') {
         for (let n = 0; n < 500 && (requests.length === beforeRestore || policy.snapshot(id).state !== 'idle'); n++) await new Promise(resolve => setTimeout(resolve, 20));
       }
@@ -133,7 +132,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       assert.equal(requests.length - beforeRestore, cause === 'owner' ? 0 : 1, 'restore sends only after a non-owner interruption');
       assert.equal(saved.interrupted, false); await policy.close();
       policy = makeFacade(); sessions.push(policy); context.nativeSessions = policy;
-      const beforeSecondOpen = requests.length; await context.restoreTerminal(id);
+      const beforeSecondOpen = requests.length; await createTerminalLifecycle(context).restoreTerminal(id);
       assert.equal(requests.length, beforeSecondOpen, 'reopening cannot submit another continuation'); await policy.close();
     }
 

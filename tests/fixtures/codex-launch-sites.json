@@ -24,6 +24,42 @@
     "id": "electron/app/terminal-lifecycle.cjs:28c8f91ea04265f555e74efd"
   },
   {
+    "text": "session.gate.input(command)",
+    "id": "electron/app/terminal-lifecycle.cjs:d9a1ddfa06be800854b7d0ec"
+  },
+  {
+    "text": "session.gate.afterPrompt(command)",
+    "id": "electron/app/terminal-lifecycle.cjs:9bfef8aa623497e7ed76da79"
+  },
+  {
+    "text": "deps.dashboard.run(project, call, event)",
+    "id": "electron/app/terminal-lifecycle.cjs:e797b76607d9991bb1ca1330"
+  },
+  {
+    "text": "deps.nativeSessions?.input?.(id, s.nativeRuntimeSessionId)",
+    "id": "electron/app/terminal-lifecycle.cjs:996a6c25a00014e62a5af9bb"
+  },
+  {
+    "text": "terminal.write(data)",
+    "id": "electron/app/terminal-lifecycle.cjs:05d4a2a0572a6c65bc4cf5df"
+  },
+  {
+    "text": "deps.pty.spawn(shell.file, ['-l', '-i'], terminalOptions)",
+    "id": "electron/app/terminal-lifecycle.cjs:c7b9867a524f943bb9cf2476"
+  },
+  {
+    "text": "deps.pty.spawn(shell.file, deps.bashArguments(deps.integrationDir), terminalOptions)",
+    "id": "electron/app/terminal-lifecycle.cjs:553550f8da10f91799ff81b9"
+  },
+  {
+    "text": "deps.pty.spawn(deps.cmdPath, ['/D', '/Q', '/K', deps.path.join(deps.integrationDir, 'bootstrap.cmd')], terminalOptions)",
+    "id": "electron/app/terminal-lifecycle.cjs:4dc22fbb5f16698e07885285"
+  },
+  {
+    "text": "deps.pty.spawn(deps.powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', deps.path.join(deps.integrationDir, 'bootstrap.ps1')], terminalOptions)",
+    "id": "electron/app/terminal-lifecycle.cjs:adc482b81eae8cfd5a3a6043"
+  },
+  {
     "text": "execFileSync('git', args, { cwd, encoding: 'buffer', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, windowsHide: true })",
     "id": "electron/boundaries.cjs:2b6717ccfd671609ac733286"
   },
@@ -232,6 +268,10 @@
     "id": "electron/features/lab-aa/container.cjs:26ab6bd89a8b508b03ea74de"
   },
   {
+    "text": "deps.dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },\n        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,\n          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 })",
+    "id": "electron/features/native-session/host.cjs:c7e13917011d4ea031c4ad7b"
+  },
+  {
     "text": "switches.input(id, spec.runtimeSessionId)",
     "id": "electron/features/native-session/router.cjs:572a53d7d245cf850a9981a4"
   },
@@ -266,6 +306,10 @@
   {
     "text": "s.gate.input(data)",
     "id": "electron/features/terminal/ipc.cjs:6f6cb011c8493d7a7e324bee"
+  },
+  {
+    "text": "deps.dashboard.run(project, call, value)",
+    "id": "electron/features/terminal-events/shell-events.cjs:4312823368fee1bd4aba8d2c"
   },
   {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'],\n        { windowsHide: true, timeout: EXIT_WAIT_MS }, () => { end(); resolve(); })",
@@ -318,50 +362,6 @@
   {
     "text": "pty.spawn(file, args, options)",
     "id": "electron/main.cjs:46faab512efeac4c01131a13"
-  },
-  {
-    "text": "session.gate.input(command)",
-    "id": "electron/main.cjs:d9a1ddfa06be800854b7d0ec"
-  },
-  {
-    "text": "session.gate.afterPrompt(command)",
-    "id": "electron/main.cjs:9bfef8aa623497e7ed76da79"
-  },
-  {
-    "text": "dashboard.run(project, call, value)",
-    "id": "electron/main.cjs:2cbf10f21f096f5b8a7cbb9d"
-  },
-  {
-    "text": "dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },\n        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,\n          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 })",
-    "id": "electron/main.cjs:02134a465c95da7fd0bff75e"
-  },
-  {
-    "text": "pty.spawn(shell.file, ['-l', '-i'], terminalOptions)",
-    "id": "electron/main.cjs:b2ef7735f6dbc5dc15dd1972"
-  },
-  {
-    "text": "pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)",
-    "id": "electron/main.cjs:8428bfd7d1e1861aaa8fadf2"
-  },
-  {
-    "text": "pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)",
-    "id": "electron/main.cjs:71f6e26da6c492a1f0791119"
-  },
-  {
-    "text": "pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions)",
-    "id": "electron/main.cjs:108edd6512e3f1376c984485"
-  },
-  {
-    "text": "dashboard.run(project, call, event)",
-    "id": "electron/main.cjs:6d42791440486f3b169d64b6"
-  },
-  {
-    "text": "nativeSessions?.input?.(id, s.nativeRuntimeSessionId)",
-    "id": "electron/main.cjs:3f963bd8924025f45736c7f1"
-  },
-  {
-    "text": "terminal.write(data)",
-    "id": "electron/main.cjs:05d4a2a0572a6c65bc4cf5df"
   },
   {
     "text": "exec('git', ['rev-parse', '--is-inside-work-tree'], options)",

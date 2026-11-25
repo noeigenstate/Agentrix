@@ -5,6 +5,7 @@ const { createSettings, validSettings } = require('../electron/features/native-s
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { adapterOf, legacyRestoreAgent } = require('../electron/features/cli-adapters/registry.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 test('legacy codexView is ignored without rewriting preferences; later saves omit it and new patches reject it', t => {
@@ -27,8 +28,7 @@ test('startup restores a legacy local and SSH Codex using its thread while norma
     const context = { adapterOf, legacyRestoreAgent, store: { findTerminal: () => ({ project: { kind }, record: { restore: saved } }) },
       restorePlans: new Map([['t', {}]]), startupErrors: new Map(), broadcast() {}, startTerminal: id => calls.push(['terminal', id]),
       nativeSessions: { start: async (id, options) => calls.push(['app-server', id, options]) } };
-    vm.createContext(context); vm.runInContext(main.slice(main.indexOf('function restoreTerminal('), main.indexOf('function startTerminal(')), context);
-    context.restoreTerminal('t'); await new Promise(resolve => setImmediate(resolve));
+    await createTerminalLifecycle(context).restoreTerminal('t');
     if (agent === 'codex' && active) {
       assert.equal(calls[0][0], 'app-server'); assert.equal(calls[0][2].resume, true); assert.equal(context.restorePlans.size, 0);
     } else assert.equal(calls[0][0], 'terminal');
@@ -37,8 +37,7 @@ test('startup restores a legacy local and SSH Codex using its thread while norma
   const context = { adapterOf, legacyRestoreAgent,
     store: { findTerminal: () => ({ project: { kind: 'local' }, record: { restore: { agent: 'claude', nativeTransport: 'claude-sdk' } } }) },
     nativeSessions: null, startTerminal: () => { shell = true; }, restorePlans: new Map() };
-  vm.createContext(context); vm.runInContext(main.slice(main.indexOf('function restoreTerminal('), main.indexOf('function startTerminal(')), context);
-  context.restoreTerminal('claude'); assert.equal(shell, true, 'an unavailable native composition keeps Claude terminal recovery');
+  createTerminalLifecycle(context).restoreTerminal('claude'); assert.equal(shell, true, 'an unavailable native composition keeps Claude terminal recovery');
 });
 
 test('the launcher sends every local and SSH Codex mode to app-server', async () => {

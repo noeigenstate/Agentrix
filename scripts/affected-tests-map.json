@@ -370,6 +370,13 @@
     }
   },
   "dynamicLoads": {
+    "electron/features/terminal-events/shell-events.cjs": {
+      "targets": [
+        "electron/features/agents/agent-command.cjs"
+      ],
+      "reason": "The shell event handler loads the Codex argument mapper when admitting a native launch.",
+      "digest": "426406bb39d88d28ac56e07eb2c604fe19df25e995586440ecb1ee3bcf1ce768"
+    },
     "electron/features/agents/agent-command.cjs": {
       "targets": [
         "electron/features/cli-adapters/registry.cjs"

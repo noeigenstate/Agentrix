@@ -6,9 +6,10 @@ const vm = require('node:vm');
 const { spawn } = require('node:child_process');
 const { createEventServer } = require('../electron/events.cjs');
 const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
-const { launchAfterPrompt: launchAgentAfterPrompt } = require('../electron/app/terminal-lifecycle.cjs');
 
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 // Exercise the actual event handlers without opening Electron or the user's terminals.
 function handlers() {
@@ -17,7 +18,7 @@ function handlers() {
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
   const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, dispatchedOnly: () => null, readingHistory: { close() {} },
-    launchAgentAfterPrompt, followClaudeSession: () => assert.fail('no Claude launch was requested'),
+    followClaudeSession: () => assert.fail('no Claude launch was requested'),
     sessions: new Map([['t', session]]), store: { projects: [project], setRestore() { calls.restore++; },
       expectCompletion(id, expected = true) { assert.equal(id, project.id); calls.completion.push([id, expected]); project.completionArmed = expected; } }, quitting: false,
     broadcast() { calls.broadcast++; }, followClaude() { calls.follow++; }, applyActivity(_project, s, event) { calls.activity++; s.codexActivity = event.state; },
@@ -28,7 +29,9 @@ function handlers() {
   // legitimate dependency, with an observable subscription instead of a PTY.
   vm.runInContext(main.slice(main.indexOf('function stopUsageAccount('), main.indexOf('let claudeAccountTimer =')), context);
   defineMain(context, 'publishCliState', 'claudeActivity', 'acceptDispatchEvent');
-  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('async function resumeAfterPrompt(')), context);
+  Object.assign(context, createShellEvents(context));
+  context.launchPlans = new Map();
+  context.launchAfterPrompt = createTerminalLifecycle(context).launchAfterPrompt;
   let eventSequence = 0;
   return { context, project, session, calls, send: event => context.onEvent({ projectId: 't', sessionKey: 'key', type: 'agent-activity', sessionId: 'session', eventId: `session:${++eventSequence}`, ...event }) };
 }

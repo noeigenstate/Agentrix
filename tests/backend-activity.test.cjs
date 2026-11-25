@@ -1,4 +1,7 @@
 const { assertIdlePowerShellHook } = require('./helpers/powershell-hook.cjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -48,21 +51,24 @@ async function harness(t, kind = 'local', agent = 'codex') {
     startSkillSession() {}, endSkillSession() {},
     restorePlans: new Map(), Date: class extends Date { static now() { return now; } },
   });
-  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), context);
+  context.openCodexFromShell = createShellEvents(context).openCodexFromShell;
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity');
   Object.assign(context, { findProject: () => project, scheduleState() {}, randomUUID: require('node:crypto').randomUUID,
     s, project, id: s.terminalId, PromptQueue, CompletionWork, queueMicrotask });
-  vm.runInContext(main.slice(main.indexOf('function roleEnded('), main.indexOf('function startTerminal(')), context);
+  Object.assign(context, createNativeHost(context));
+  context.now = context.Date.now;
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   defineMain(context, 'writeBootstrap', 'nativeEnvironment', 'nativeSpec');
-  const setup = main.indexOf('  const refreshCompletion = () => {');
-  vm.runInContext(main.slice(setup, main.indexOf('  // A prompt the agent', setup)), context);
+  const lifecycle = createTerminalLifecycle(context);
+  // Bind the production observers to the fixture's terminal without replacing its input gate.
+  const gate = s.gate;
+  context.InputGate = require('../electron/terminal-input.cjs').InputGate;
+  context.ConversationLog = ConversationLog;
+  lifecycle.registerTerminalSession(s, project);
+  s.gate = gate;
   s.completionWork.now = s.promptQueue.now = () => now;
   t.after(() => { s.cliActive = false; s.promptQueue.reset(); s.completionWork.reset(); });
-  vm.runInContext(main.slice(main.indexOf('async function resumeAfterPrompt('), main.indexOf('function remoteFor(')), context);
-  // Use the actual terminal's conversation callback, including its input/history filter.
-  context.ConversationLog = ConversationLog;
-  const start = main.indexOf('  s.conversation = new ConversationLog(');
-  vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
+  Object.assign(context, { resumeAfterPrompt: lifecycle.resumeAfterPrompt, restoreTerminal: lifecycle.restoreTerminal });
   const listeners = {};
   registerTerminalIpc({ handle() {}, listen: (name, fn) => { listeners[name] = fn; },
     getSession: id => sessions.get(id), getProjectById: () => project,
@@ -165,8 +171,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     title: 'Synthetic retained worker', startedAt: Date.now(), helperPid: process.pid });
   s.sessionKey = 'old-cap'; s.gate.dispose = () => {};
   s.terminal = { kill() {} };
-  const dispose = main.indexOf('function disposeTerminal(');
-  vm.runInContext(main.slice(dispose, main.indexOf('\nfunction registerUnavailableNative(', dispose)), context);
+  context.disposeTerminal = createTerminalLifecycle(context).disposeTerminal;
   const publish = (type, payload, at, extra = {}) => context.structuredEvent(s.terminalId, {
     runtimeSessionId: 'new-runtime', providerSessionId: 'new-provider', transport: 'codex-app-server', type, payload, receivedAtMs: at, ...extra,
   });
@@ -180,7 +185,8 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
       return { runtimeSessionId: 'new-runtime' };
     },
   } });
-  vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
+  context.now = context.Date?.now;
+  context.onEvent = createShellEvents(context).onEvent;
   defineMain(context, 'acceptDispatchEvent');
   const event = (type, sequence) => context.onEvent({ projectId: s.terminalId, sessionKey: 'old-cap', type, sequence, agent: 'codex', args: [], cwd: project.path, sentAt: 2300 });
   h.write('First task\r'); h.user('First task', 2000); h.apply('complete', 'first', 2100);
@@ -194,7 +200,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   assert.equal(launches.length, 1); assert.deepEqual(errors, []);
   if (kind === 'local') {
     const snapshot = syncFs.readFileSync(launches[0].bootstrapFile + '.seats', 'utf8');
-    assert.deepEqual(JSON.parse(snapshot), agentSeats);
+    assert.deepEqual(JSON.parse(snapshot), { format: 'agentrix.seat-map', version: 1, seats: agentSeats });
     assert.equal(launches[0].env.AGENTRIX_SEATS, snapshot);
     const { argumentsOf } = require('../integration/dispatch.cjs');
     const { updateDispatchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
@@ -333,15 +339,14 @@ test('a late Codex read cannot alter the next launch of the same terminal or bin
     prepareReading: (...args) => bindings.push(args),
   });
   h.s.actions.reset = () => {};
-  const start = main.indexOf('    const remoteSince =');
-  const launch = vm.runInContext('(event => {' + main.slice(start, main.indexOf('    // Unread completion', start))
-    + '\nreturn { monitor: s.activityMonitor, onRecord }; })', h.context);
-  const old = launch({ cwd: h.project.path, sentAt: 1000 }), pending = old.monitor.poll();
-  launch({ cwd: h.project.path, sentAt: 2000 });
+  const { watchCodexActivity } = createShellEvents(h.context);
+  watchCodexActivity(h.project, h.s, { cwd: h.project.path, sentAt: 1000 });
+  const pending = h.s.activityMonitor.poll();
+  watchCodexActivity(h.project, h.s, { cwd: h.project.path, sentAt: 2000 });
   readers[1].options.onHistory(false); h.s.completionWork.start('new-worker', 2000);
   const version = h.s.completionWork.version;
   readers[0].options.onHistory(true);
-  old.onRecord({ type: 'event_msg', timestamp: stamp(2100), payload: { type: 'user_message', message: 'stale prompt' } });
+  readers[0].options.onRecord({ type: 'event_msg', timestamp: stamp(2100), payload: { type: 'user_message', message: 'stale prompt' } });
   readers[0].options.onWorkRecord({ type: 'event_msg', timestamp: stamp(2200), payload: { type: 'task_complete' } });
   readers[0].resolve({ threadId: 'old-thread', state: 'complete', turnId: 'old-turn', updatedAt: 2200 });
   assert.equal(await pending, null);
@@ -391,9 +396,7 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
   } else {
     await append({ type: 'session_meta', timestamp: timestamp(1000), payload: { id: thread, cwd: project.path, source: 'cli' } });
     if (initialTurn) await append({ type: 'event_msg', timestamp: timestamp(1900), payload: { type: 'task_started', turn_id: 'parent' } });
-    context.event = { cwd: project.path, codexHome: home, sentAt: 1000 - s.activityClockOffset };
-    const start = main.indexOf('    const remoteSince =');
-    vm.runInContext(main.slice(start, main.indexOf('    // Unread completion', start)), context);
+    createShellEvents(context).watchCodexActivity(project, s, { cwd: project.path, codexHome: home, sentAt: 1000 - s.activityClockOffset });
   }
   t.after(() => s.activityMonitor.stop());
   await s.activityMonitor.poll();
@@ -1062,11 +1065,10 @@ test('native process exit cancels its pending work and alert without waiting for
   s.native = { registry: { close() {} } };
   h.write('background work\r'); h.user('background work');
   s.completionWork.start('pending-native-task', 2000); h.apply('complete', 'parent', 2100);
-  Object.assign(context, { id: s.terminalId, s, nativeSessions: null, project: h.project, terminal: { onExit: callback => { exited = callback; } }, flush() {},
-    stopUsageAccount() {}, restorePlans: new Map(), quitting: false, bootstrapFile: null, skillNoteFile: null, sessionId: 'generation',
-    endSkillSession() {}, skills: { endSession() {} } });
-  const start = main.indexOf('  terminal.onExit(({ exitCode }) => {');
-  vm.runInContext(main.slice(start, main.indexOf('  captureBranch(project);', start)), context);
+  s.terminal = { onData() {}, onExit: callback => { exited = callback; } };
+  Object.assign(context, { nativeSessions: null, stopUsageAccount() {}, restorePlans: new Map(), quitting: false,
+    startupErrors: new Map(), bindDispatchInbox() {}, captureBranch() {}, endSkillSession() {}, skills: { endSession() {} } });
+  createTerminalLifecycle(context).bindTerminalEvents(s, h.project, {});
   exited({ exitCode: 0 });
   assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.completionWork.timer, null); assert.equal(s.activitySnapshot, null);
   assert.equal(s.cliActive, false); assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 function fixture({ wrongIdentity = false } = {}) {
@@ -129,7 +130,7 @@ test('after a failed switch the late exit and prompt reports of the staged termi
   await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /terminal_start_failed/);
   const main = { sessions: f.sessions, store: { projects: [{ id: 'p' }] }, acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent };
   vm.createContext(main);
-  vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('const launchPlans = new Map();')), main);
+  main.onEvent = createShellEvents(main).onEvent;
   defineMain(main, 'acceptDispatchEvent');
   f.old.status = 'codex';
   // The staged shell reports under the key the host keeps: its CLI's exit, then its next prompt.

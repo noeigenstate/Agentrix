@@ -8,6 +8,7 @@ const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { quotaScope } = require('../electron/features/dashboard/records.cjs');
 const { remoteClaudeResult, watchRemoteClaudeAccount } = require('../electron/features/ssh/claude-account.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 
 const ready = (percent = 42, at = 100000) => ({ state: 'ready', account: { at, source: 'remote-private-diagnostic', token: 'secret',
   limits: [{ minutes: 300, percent, resetsAt: at + 300000, private: 'secret' }, { minutes: 10080, percent: 9, resetsAt: null }] } });
@@ -135,7 +136,6 @@ test('SSH Claude attention events show the waiting notice without rearming compl
 });
 
 test('resuming SSH Claude rebinds its quota poller while preserving the existing conversation meter', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const project = { id: 'p', kind: 'ssh', path: '/srv/project' }, usage = new UsageMeter('claude');
   usage.round = { input: 15, cached: 3, output: 9 };
   const session = { terminalId: 't', projectId: project.id, sessionKey: 'fixture', agent: 'claude', usage,
@@ -147,7 +147,7 @@ test('resuming SSH Claude rebinds its quota poller while preserving the existing
     startUsage() { assert.fail('resume must retain its conversation totals'); }, followClaudeSession: async () => {},
     bindRemoteClaudeAccount(value) { assert.equal(value, session); rebound++; } });
   // Extract the real event handler, ending before unrelated launcher declarations.
-  vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('// The agent chosen on a new project')), context);
+  context.onEvent = createShellEvents(context).onEvent;
   defineMain(context, 'acceptDispatchEvent');
   context.onEvent({ type: 'agent-started', projectId: project.id, sessionKey: 'fixture', agent: 'claude', cwd: project.path, sequence: 2 });
   assert.equal(rebound, 1); assert.equal(session.usage, usage);

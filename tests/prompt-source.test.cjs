@@ -12,6 +12,9 @@ const { WorkspaceStore } = require('../electron/state.cjs');
 const { SubmissionTracker } = require('../electron/terminal-input.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 function activityHarness(mode = 'codex') {
@@ -31,12 +34,18 @@ function activityHarness(mode = 'codex') {
     setTimeout: () => ({ unref() {} }), Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },
     findProject: () => project, randomUUID: require('node:crypto').randomUUID,
   });
-  const start = main.indexOf('  s.conversation = new ConversationLog(');
-  vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
+  Object.assign(context, { InputGate: require('../electron/terminal-input.cjs').InputGate, PromptQueue,
+    CompletionWork: require('../electron/completion-work.cjs').CompletionWork, queueMicrotask });
+  const gate = s.gate;
+  createTerminalLifecycle(context).registerTerminalSession(s, project);
+  s.gate = gate;
+  s.promptQueue.now = () => now;
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'acceptDispatchEvent', 'writeBootstrap', 'nativeEnvironment', 'nativeSpec', 'retainAgentState');
-  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), context);
-  vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
-  vm.runInContext(main.slice(main.indexOf('function roleEnded('), main.indexOf('function startTerminal(')), context);
+  context.now = context.Date?.now;
+  context.onEvent = createShellEvents(context).onEvent;
+  Object.assign(context, createNativeHost(context));
+  context.now = context.Date.now;
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   const listeners = {};
   registerTerminalIpc({ handle() {}, listen: (name, fn) => { listeners[name] = fn; }, getSession: id => sessions.get(id), getProjectById: () => project,
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState() {}, pollAfterSubmission() {},
@@ -382,17 +391,21 @@ test('completion-smoke records defer the alert across queued work, batched reads
   const { monitorActivity } = require('../electron/codex-activity.cjs');
   for (const order of ['incremental', 'batched', 'late-prompt']) for (const notifyFirst of [false, true]) {
     const h = activityHarness(), { s, project, store, context } = h;
-    Object.assign(context, { codexConversation, codexRecord, event: { cwd: project.path }, describeActions() {}, noteSettings() {} });
-    const start = main.indexOf('    const readCurrent =', main.indexOf('function onEvent('));
-    const onRecord = vm.runInContext(main.slice(start, main.indexOf('    const remoteStatus =', start)) + '\nonRecord;', context);
-    const reader = new CodexActivityReader(project.path, undefined, s.activitySince, { onRecord });
-    reader.snapshot = { threadId: 'parent', turnId: null, state: 'unknown', updatedAt: 0 };
     const pending = [], errors = [];
+    class BufferedReader extends CodexActivityReader {
+      constructor(...args) {
+        super(...args);
+        this.snapshot = { threadId: 'parent', turnId: null, state: 'unknown', updatedAt: 0 };
+      }
+      async read() {
+        try { for (const record of pending.splice(0)) this.record(record); } catch (error) { errors.push(error); throw error; }
+        return { ...this.snapshot };
+      }
+    }
+    Object.assign(context, { codexConversation, codexRecord, describeActions() {}, noteSettings() {},
+      monitorActivity, CodexActivityReader: BufferedReader, readEvery: () => 1000, prepareReading() {} });
+    createShellEvents(context).watchCodexActivity(project, s, { cwd: project.path });
     const poll = async () => { await s.activityMonitor.poll(); assert.deepEqual(errors, []); };
-    s.activityMonitor = monitorActivity(async () => {
-      try { for (const record of pending.splice(0)) reader.record(record); } catch (error) { errors.push(error); throw error; }
-      return { ...reader.snapshot };
-    }, snapshot => context.applyActivity(project, s, snapshot));
     t.after(() => s.activityMonitor.stop());
     const event = (type, turn, at) => ({ type: 'event_msg', timestamp: stamp(at), payload: { type, turn_id: turn } });
     const notify = threadId => context.onEvent({ type: 'turn-complete', projectId: s.terminalId, sessionKey: s.sessionKey, threadId });

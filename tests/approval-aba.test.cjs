@@ -3,13 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
+const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
-const vm = require('node:vm');
 const { ApprovalGuard, approvalStamp } = require('../electron/features/terminal/approval-guard.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
 const fixture = (agent, kind = 'permission') => fs.readFileSync(path.join(__dirname, `fixtures/screens/${agent}-${kind === 'menu' ? 'model-menu' : 'permission'}.txt`), 'utf8').split(/\r?\n/);
 const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : React.isValidElement(node) ? [node, ...nodes(node.props.children)] : [];
@@ -19,17 +19,16 @@ function backend(agent) {
   let scheduled = 0, raw, current;
   const s = current = { sessionId: 'session', terminalId: 'aba', projectId: 'p', status: 'codex', cliActive: true, agent,
     approval: new ApprovalGuard('session'), gate: { open: 0, held: [], input: key => writes.push(key), output() {} },
-    terminal: { write: key => writes.push(key) }, submissions: { write: () => false, sent: [] },
+    terminal: { write: key => writes.push(key), onData: fn => { raw = fn; }, onExit() {} }, submissions: { write: () => false, sent: [] },
     titles: { write: () => [] }, chunks: [], bytes: 0, pending: '', seq: 0 };
   approvalStamp(s);
   registerTerminalIpc({ handle: (name, fn) => { handles[name] = fn; }, listen: (name, fn) => { listeners[name] = fn; },
     getSession: () => current, getProjectById: () => ({ id: 'p' }), scheduleState: () => scheduled++,
     applyActivity: () => assert.fail('approval must not interrupt the round'), getActiveTerminal: () => null });
   // Exercise the production raw-output callback, before its 16 ms flush. No Electron or PTY is loaded.
-  const context = vm.createContext({ terminal: { onData(fn) { raw = fn; } }, s, id: 'aba', sessions: new Map([['aba', s]]),
-    setTimeout: () => 1, flush() {}, onEvent() {}, store: {}, wholeThread: () => false });
-  const start = main.indexOf('  terminal.onData(data => {');
-  vm.runInContext(main.slice(start, main.indexOf('  terminal.onExit(', start)), context);
+  const lifecycle = createTerminalLifecycle({ sessions: new Map([['aba', s]]), restorePlans: new Map(), startupErrors: new Map(),
+    bindDispatchInbox() {}, store: { setRestore() {} }, captureBranch() {}, broadcast() {}, approvalStamp, send() {} });
+  lifecycle.bindTerminalEvents(s, { id: 'p' }, {});
   return { s, writes, raw: data => raw(data), handles, listeners, scheduled: () => scheduled,
     session(value) { current = value; },
     send(key, stamp = s.approval.stamp(), actionId = 'action') { return handles['terminal:approval']('aba', key, stamp, actionId); },
@@ -246,9 +245,7 @@ test('Decide Open terminal switches the source terminal after accepted navigatio
 test('queued ordinary input still invalidates observation epochs at InputGate release', () => {
   const { InputGate, isTerminalResponse } = require('../electron/terminal-input.cjs');
   const h = backend('codex'), s = h.s;
-  const context = vm.createContext({ s, id: 'aba', sessions: new Map([['aba', s]]), terminal: s.terminal, InputGate, isTerminalResponse, nativeSessions: null });
-  const start = main.indexOf('  s.gate = new InputGate(');
-  vm.runInContext(main.slice(start, main.indexOf('  const refreshCompletion =', start)), context);
+  createTerminalLifecycle({ sessions: new Map([['aba', s]]), InputGate, isTerminalResponse }).bindTerminalInput(s);
   s.gate.afterPrompt('queued-input'); const before = s.approval.stamp();
   assert.deepEqual(h.send('\r', before), terminalOnly);
   s.gate.release(); assert.equal(s.approval.matches(before), false);

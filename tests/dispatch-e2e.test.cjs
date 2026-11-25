@@ -1,3 +1,6 @@
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
@@ -140,10 +143,6 @@ test('roles from a Windows terminal bootstrap appear under the lead project and 
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const functions = names => ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map(node => node.getText(ast)).join('\n');
-function findNode(predicate, node = ast) {
-  if (predicate(node)) return node;
-  return ts.forEachChild(node, child => findNode(predicate, child));
-}
 
 function mainFixture(t, { native = true, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-e2e-'));
@@ -151,7 +150,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
   let binds = 0;
   const context = vm.createContext({ path, fs, os, process, randomUUID, sameDirectory, sessions, nativeSpecs, quitting: false, errors,
     adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf,
-    Date: class extends Date { static now() { return now(); } },
+    now, Date: class extends Date { static now() { return now(); } },
     AgentCalls: class extends AgentCalls { constructor(options) { super({ ...options, now }); } },
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), setRestore() {} },
     findProject: () => project, runtimeDir: root, integrationDir: path.join(__dirname, '../integration'), eventServer: null, controlAddress: null,
@@ -168,8 +167,8 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
       if (name === './features/team/team-locate.cjs') return { locateTeam };
       throw new Error(`Unexpected main dependency: ${name}`);
     } });
-  vm.runInContext(functions(['callsOf', 'structuredEvent', 'onEvent', 'disposeTerminal', 'cleanupTerminalFiles', 'dispatchedOnly']), context);
-  Object.assign(context, createDispatchIntake(context), { nativeSpec: createHostInputs(context).nativeSpec });
+  vm.runInContext(functions(['callsOf', 'dispatchedOnly']), context);
+  Object.assign(context, createTerminalLifecycle(context), createShellEvents(context), createDispatchIntake(context), { nativeSpec: createHostInputs(context).nativeSpec });
   const bind = context.bindDispatchInbox;
   context.bindDispatchInbox = (...args) => { binds++; return bind(...args); };
   const host = ast.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(value => value.name.getText(ast) === 'host'));
@@ -265,8 +264,11 @@ async function endedSession(t, ending) {
     f.session.nativeStructured = false;
     f.context.onEvent({ type: 'agent-exited', agent: 'claude', projectId: 'terminal', sessionKey: f.session.sessionKey, exitCode: 0 });
   } else {
-    const callback = findNode(node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'onExit');
-    vm.runInContext(`(${callback.arguments[0].getText(ast)})`, f.context)({ exitCode: 0 });
+    let onExit;
+    f.session.terminal = { onData() {}, onExit: callback => { onExit = callback; } };
+    Object.assign(f.context, { captureBranch() {}, restorePlans: new Map() });
+    f.context.bindTerminalEvents(f.session, f.project, {});
+    onExit({ exitCode: 0 });
   }
   assert.deepEqual([...calls.calls.keys()], [id]);
   assert.deepEqual(calls.usage(null)?.background || [], []);
@@ -284,9 +286,8 @@ test('the native-to-terminal fallback preserves the admitted worker and its inbo
   const inbox = f.context.bindDispatchInbox(f.session, f.project), id = randomUUID();
   calls.local = false; calls.dispatch(declaration(id, f.root));
   Object.assign(f.context, { launchPlans: new Map(), launchCommand: () => '', startTerminal: () => f.start('fallback-key') });
-  const options = findNode(node => ts.isCallExpression(node) && node.expression.getText(ast) === 'createNativeSessions').arguments[0];
-  const fallback = options.properties.find(node => node.name?.getText(ast) === 'terminal').initializer;
-  await vm.runInContext(`(${fallback.getText(ast)})`, f.context)(f.session.nativeSpec, 'synthetic fallback');
+  const { terminal } = createNativeHost(f.context).nativeRouterOptions();
+  await terminal(f.session.nativeSpec, 'synthetic fallback');
   const next = f.sessions.get('terminal');
   assert.equal(next.calls, calls);
   assert.equal(next.calls.byId(`dispatch:${id}`).done, false);

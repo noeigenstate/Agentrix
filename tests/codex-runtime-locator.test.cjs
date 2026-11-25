@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { execFile } = require('node:child_process'), { promisify } = require('node:util');
 const { createCodexLocator } = require('../electron/features/codex-runtime/locator.cjs');
 const { scanDrives, LIMITS } = require('../electron/features/codex-runtime/drive-scan.cjs');
@@ -10,6 +10,8 @@ const { fakeFiles, fakeProbe } = require('./helpers/claude-files.cjs');
 const { isolatedEnvironment } = require('../scripts/native-approval-probe.cjs');
 const { timeoutScale } = require('../scripts/wait.mjs');
 const layouts = require('./fixtures/real-cli/codex-layouts.json');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
 // Every Windows case is a layout K0b captured from real npm installs (tests/fixtures/real-cli/codex-layouts.json), or a
 // shape it marks synthetic, laid out on a fake file system with a fake probe and a fake stored PATH: no real Codex,
@@ -622,26 +624,25 @@ test('the terminal, the helper and native mode get the same file', async () => {
   // Native mode, the account reads and the usage inputs resolve through main's one locator, to its file.
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   assert.match(source, /const codexExecutable = \(\) => codexLocator\.locate\(\)\.then\(found => found\.file\);/);
-  assert.match(source, /createCodexRuntime\(\{ resolveExecutable: codexExecutable,/);
+  const codexExecutable = () => main.locate({ env: windowsEnv({ PATH: prefix }), platform: 'win32', arch: 'x64' }).then(found => found.file);
+  const host = createNativeHost({ codexExecutable, generatedImages: {} });
+  const { resolveExecutable } = host.createCodexProvider(options => options);
+  assert.equal(resolveExecutable, codexExecutable);
+  assert.equal(await resolveExecutable(), found.file);
   assert.match(source, /adapterOf\('codex'\)\.usage\.accountReader\(\{ \.\.\.options, resolveExecutable: codexExecutable \}\)/);
   assert.match(source, /resetClient: \{ rpcFactory: createResetRpc, resolveExecutable: codexExecutable \}/);
   assert.match(source, /checkClaude, codexExecutable,/, 'host-inputs reads the usage inputs through it');
   assert.equal((source.match(/createCodexLocator\(/g) ?? []).length, 1, 'main keeps one Codex locator');
 });
 
-// What main's startTerminal tells a terminal of `project` about Codex, by running main.cjs's own lines.
-function told(project, locator) {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = source.indexOf('const codexPath ='), end = source.indexOf('env.AGENTRIX_CODEX_EXECUTABLE = codexPath;');
-  assert.ok(start > 0 && end > start, 'the injection in startTerminal is found');
+// What the terminal launch tells a project about Codex.
+function told(project, codexLocator) {
   const env = {};
-  vm.runInContext(source.slice(start, source.indexOf('\n', end)), vm.createContext({ project, env, codexLocator: locator }));
+  createTerminalLifecycle({ codexLocator, claudeLocator: { peek: () => null } }).setTerminalExecutables(project, env);
   return env;
 }
 
 test("an SSH terminal is never told this machine's Codex", async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.equal((source.match(/AGENTRIX_CODEX_EXECUTABLE\s*=/g) ?? []).length, 1, 'one place sets it');
   const locator = { peek: () => ({ file: 'D:\\npm\\node_modules\\x\\codex.exe', path: 'D:\\npm\\codex.ps1' }) };
   assert.equal(told({ kind: 'ssh' }, locator).AGENTRIX_CODEX_EXECUTABLE, undefined, 'an SSH project runs the server’s own');
   assert.equal(told({ kind: 'local' }, locator).AGENTRIX_CODEX_EXECUTABLE, 'D:\\npm\\codex.ps1', 'a local one is told where it was found');
@@ -665,9 +666,10 @@ for (const kind of ['bash', 'zsh']) {
     const source = fs.readFileSync(path.join(integration, `${kind}-integration.${kind}`), 'utf8').replace(/\r\n/g, '\n');
     const begin = source.indexOf('__pg_program() {'), program = source.slice(begin, source.indexOf('\n}\n', begin) + 3);
     const probe = path.join(root, 'probe.sh'), words = kind === 'bash' ? '"${__pg_words[@]}"' : '"${reply[@]}"';
-    fs.writeFileSync(probe, `${kind === 'zsh' ? 'typeset -gA __pg_aliases\n' : ''}${program}for name in codex claude; do __pg_program $name && printf 'WORDS=%s\\n' "$(printf '%s|' ${words})" || printf 'WORDS=none\\n'; done\n`);
+    // Set PATH in the shell so Git Bash cannot translate or inherit the Windows PATH entry.
+    fs.writeFileSync(probe, `PATH="$PWD/bin:/usr/bin:/bin"\n${kind === 'zsh' ? 'typeset -gA __pg_aliases\n' : ''}${program}for name in codex claude; do __pg_program $name && printf 'WORDS=%s\\n' "$(printf '%s|' ${words})" || printf 'WORDS=none\\n'; done\n`);
     const run = async hint => {
-      const env = { ...process.env, PATH: `${slashes(bin)}:/usr/bin:/bin`, AGENTRIX_CODEX_EXECUTABLE: hint, AGENTRIX_CLAUDE_EXECUTABLE: '' };
+      const env = { ...process.env, AGENTRIX_CODEX_EXECUTABLE: hint, AGENTRIX_CLAUDE_EXECUTABLE: '' };
       const { stdout } = await exec(shell, [...(kind === 'bash' ? ['--noprofile', '--norc'] : ['-f']), slashes(probe)], { cwd: root, env, windowsHide: true, timeout: 10000 * timeoutScale });
       return [...stdout.matchAll(/WORDS=(.*)/g)].map(match => match[1]);
     };

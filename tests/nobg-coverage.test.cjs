@@ -9,6 +9,7 @@ const { claudeBackgroundEnvironment } = require('../electron/shared/claude-backg
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
 const { writeBootstrap, updateBootstrapBackground, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 const { shimWords } = require('../integration/shims/intercept.cjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const root = path.join(__dirname, '..'), variable = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS';
 const main = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8');
 function temporary(t) {
@@ -33,10 +34,9 @@ test('main registration applies the current background choice to each SDK worker
   } };
   const context = { registerClaudeWorker, claudeBackgroundEnvironment, withoutAppImage: env => env, process: { env: source },
     store: { settings }, dispatchControl: { onRequest: (name, value) => { handler = value; } }, workerTerminals: null,
-    nativeSessions: { getSettings: () => ({ claudePath: 'api-only' }) },
+    createNativeSessions: () => ({ getSettings: () => ({ claudePath: 'api-only' }) }),
     claudeRuntime: { apiState: () => ({ status: 'ready' }), create: (spec, onEvent) => { captured = spec; callback = onEvent; return runtime; } } };
-  const registration = main.match(/registerClaudeWorker\(\{ control:[\s\S]*?\}\);/)[0];
-  vm.runInNewContext(registration, context);
+  createNativeHost(context).wireNativeSessions();
   for (const allow of [false, true, false, undefined]) {
     context.store.settings = allow === undefined ? undefined : { claudeBackgroundTasks: allow };
     await handler({ runId: 'fixture', cwd: root, projectId: 'fixture', leadMode: 'native' }, { prompt: 'fixture' },

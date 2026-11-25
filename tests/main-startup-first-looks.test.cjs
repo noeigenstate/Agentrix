@@ -2,38 +2,31 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const ts = require('typescript');
 const { createCodexLocator } = require('../electron/features/codex-runtime/locator.cjs');
 const { fakeFiles } = require('./helpers/claude-files.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
-// Runs main.cjs's own firstLooksSettled and the lines that tell a terminal where Codex is, against fake first looks.
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const gate = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'firstLooksSettled').getText(ast);
-const start = source.indexOf('const codexPath ='), end = source.indexOf('env.AGENTRIX_CODEX_EXECUTABLE = codexPath;');
-assert.ok(start > 0 && end > start, 'the injection in startTerminal is found');
-const injection = source.slice(start, source.indexOf('\n', end));
 
 function fixture() {
   let found = null;
-  // The promises belong to the context's realm, as main's own do, so Promise.all asks them directly.
-  const context = vm.createContext({ project: { kind: 'local' }, codexLocator: { peek: () => found } });
-  const defer = vm.runInContext('() => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }', context);
+  const defer = Promise.withResolvers.bind(Promise);
   const claude = defer(), codex = defer(), timeout = defer(), subscribed = new Set();
   // Promise.all asks each first look, synchronously, to say when it is done: the spy records who was asked.
   for (const [name, look] of [['claude', claude], ['codex', codex]]) {
     const then = look.promise.then;
     look.promise.then = function (...handlers) { subscribed.add(name); return then.apply(this, handlers); };
   }
-  Object.assign(context, { claudeFirst: claude.promise, codexFirst: codex.promise });
-  vm.runInContext(gate, context);
+  const lifecycle = createTerminalLifecycle({ claudeFirst: claude.promise, codexFirst: codex.promise,
+    claudeLocator: { peek: () => null }, codexLocator: { peek: () => found } });
   return {
     claude, codex, timeout, subscribed,
     // The Codex search ends: the locator then answers peek().
     codexFound: file => { found = { file, path: file }; codex.resolve(); },
     // What a terminal restored once the gate opens is told.
-    restored: async () => { await context.firstLooksSettled(() => timeout.promise); const env = {}; context.env = env; vm.runInContext(injection, context); return env; },
+    restored: async () => { await lifecycle.firstLooksSettled(() => timeout.promise); const env = {}; lifecycle.setTerminalExecutables({ kind: 'local' }, env); return env; },
   };
 }
 
@@ -58,19 +51,24 @@ test("a restored terminal is told the Codex found when its --version check outla
   const checking = new Promise(resolve => { started = resolve; });
   const codexLocator = createCodexLocator({ files: fakeFiles({ [exe]: { size: 1000 } }), probe: (_file, _args, _options, done) => started(done), storedPath: async () => null });
   const codexFirst = codexLocator.refresh({ env: { PATH: 'D:\\Tools' }, platform: 'win32', arch: 'x64' });
-  const context = vm.createContext({ project: { kind: 'local' }, codexLocator, claudeFirst: Promise.resolve(), codexFirst });
-  vm.runInContext(gate, context);
+  const lifecycle = createTerminalLifecycle({ claudeFirst: Promise.resolve(), codexFirst, codexLocator, claudeLocator: { peek: () => null } });
   const answer = await checking;
-  await context.firstLooksSettled(() => Promise.resolve());
-  context.env = {};
-  vm.runInContext(injection, context);
-  assert.equal(context.env.AGENTRIX_CODEX_EXECUTABLE, exe);
+  await lifecycle.firstLooksSettled(() => Promise.resolve());
+  const env = {};
+  lifecycle.setTerminalExecutables({ kind: 'local' }, env);
+  assert.equal(env.AGENTRIX_CODEX_EXECUTABLE, exe);
   answer(null, 'codex-cli 0.170.0');
   assert.equal((await codexFirst).version, '0.170.0');
 });
 
 test('main starts both first looks and the restore waits through firstLooksSettled', () => {
-  assert.match(source, /codexFirst = checkCodex\('refresh'\)/);
-  assert.match(source, /Promise\.all\(\[claudeFirst, codexFirst\]\)/);
-  assert.match(source, /await firstLooksSettled\(\);\s*restoreTerminals\(/);
+  const calls = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) calls.push(node.expression.text);
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  const restoreAt = calls.indexOf('restoreTerminals');
+  assert.ok(calls.includes('checkCodex') && calls.indexOf('checkCodex') < restoreAt);
+  assert.equal(calls[restoreAt - 1], 'firstLooksSettled');
 });

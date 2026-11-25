@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const { createRemoteCodexProcess } = require('../electron/features/ssh/codex-process.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
-const vm = require('node:vm');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 
 function transport(t, root, mode = 'normal') {
   const events = new EventEmitter(), calls = [], processes = new Map();
@@ -166,28 +166,24 @@ test('N10 SSH thread history uses its remote byte channel and closes the lookup 
 
 
 test('N10 history lookup preserves the actionable missing-remote-Codex reason', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = source.indexOf('    readHistory: '), end = source.indexOf('    readCommands:', start);
-  const expression = source.slice(start, end).trim().replace(/^readHistory: /, '').replace(/,$/, '');
   const project = { kind: 'ssh', id: 'remote', path: '/srv' };
-  const lookup = vm.runInNewContext('(' + expression + ')', { findProject: () => project, nativeSpecs: new Map(),
+  const deps = { findProject: () => project, nativeSpecs: new Map(),
     ...require('../electron/features/cli-adapters/registry.cjs'),
     store: { findTerminal: () => ({ record: { restore: {} } }) }, randomUUID: () => 'fixture', t: value => value,
-    codexFactory: { history: async () => { throw Object.assign(new Error('codex_cli_required'), { code: 'codex_cli_required' }); } } });
+    codexFactory: { history: async () => { throw Object.assign(new Error('codex_cli_required'), { code: 'codex_cli_required' }); } } };
+  const { readHistory: lookup } = createNativeHost(deps).nativeRouterOptions(null, null, deps.codexFactory);
   await assert.rejects(lookup('terminal'), error => error.code === 'codex_cli_required' && /远端未找到 Codex/.test(error.message));
 });
 
 for (const kind of ['local', 'ssh']) test(`${kind} shell native history uses the mapped cwd and runtime environment through app-server`, async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = source.indexOf('    readHistory: '), end = source.indexOf('    readCommands:', start);
-  const expression = source.slice(start, end).trim().replace(/^readHistory: /, '').replace(/,$/, '');
   const project = { kind, id: 'p', path: '/project' }, env = { CODEX_HOME: '/private/codex' }, signal = new AbortController().signal;
   let observed;
-  const lookup = vm.runInNewContext('(' + expression + ')', { findProject: () => project,
+  const deps = { findProject: () => project,
     ...require('../electron/features/cli-adapters/registry.cjs'),
     nativeSpecs: new Map([['t', { agent: 'codex', cwd: '/project/sub', env }]]),
     store: { findTerminal: () => ({ record: { restore: { threadId: 'stale', cwd: '/previous' } } }) }, randomUUID: () => 'fixture', t: value => value,
-    codexFactory: { history: async (spec, options) => { observed = { spec, options }; return { id: 'latest' }; } } });
+    codexFactory: { history: async (spec, options) => { observed = { spec, options }; return { id: 'latest' }; } } };
+  const { readHistory: lookup } = createNativeHost(deps).nativeRouterOptions(null, null, deps.codexFactory);
   assert.equal((await lookup('t', { signal })).codex.id, 'latest');
   assert.equal(observed.spec.cwd, '/project/sub'); assert.equal(observed.spec.env, env); assert.equal(observed.spec.kind, kind);
   assert.equal(observed.spec.providerSessionId, null); assert.equal(observed.options.signal, signal);

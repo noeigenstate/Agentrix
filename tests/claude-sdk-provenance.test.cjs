@@ -5,10 +5,10 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const vm = require('node:vm');
 const { promptText, rememberClaudeSource } = require('../electron/prompt-queue.cjs');
 const { listClaudeSessions, encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 
 test('host identities distinguish default SDK owner messages from workers and unknown old records', () => {
   const owner = randomUUID(), worker = randomUUID();
@@ -65,8 +65,8 @@ test('only an authenticated confirmed dispatch start registers a live worker ide
   const context = { sessions: new Map([['t', session]]), store: { projects: [{ id: 'p' }] },
     callsOf: () => ({ dispatch: () => true }), broadcast() {}, rememberClaudeSource,
     require: () => require('../electron/features/agents/dispatch-events.cjs') };
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'); vm.createContext(context);
-  vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
+
+  context.onEvent = createShellEvents(context).onEvent;
   defineMain(context, 'acceptDispatchEvent');
   const event = { type: 'dispatch-start', id, sessionId, projectId: 't', sessionKey: 'fake-session-key', agent: 'claude', role: '执行',
     model: 'claude-sonnet', effort: 'high', fast: false, title: 'Offline task', cwd: '/offline', brief: '/offline/brief', out: '/offline/out', startedAt: 1 };

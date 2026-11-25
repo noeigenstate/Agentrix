@@ -5,7 +5,7 @@ const { createNativeUsage } = require('../electron/features/native-session/agent
 const { validEvent } = require('../electron/features/native-session/validate.cjs');
 const { createEvents } = require('../electron/features/codex-app-server/events.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
-const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 
 const start = (id, model = 'claude-opus-5-5') => ({ type: 'stream_event', event: { type: 'message_start', message: { id, model, usage: { output_tokens: 0 } } } });
 const delta = output => ({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: output } } });
@@ -123,9 +123,7 @@ test('the actual main structured-event bridge supplies the provider rate to agen
     store: { findTerminal: () => ({ project: { id: 'p' } }) }, scheduleState() {}, bindDispatchInbox() {}, createNativeUsage,
     PromptQueue: Queue, CompletionWork: Queue, ActionLog: Queue, ConversationLog: Queue,
     nativeSessions: { tokenRate(id, runtime) { reads++; assert.equal(id, 't'); assert.equal(runtime, 'r'); return sample; } } };
-  vm.createContext(context);
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   context.structuredEvent('t', { runtimeSessionId: 'r', type: 'session.state', payload: { state: 'starting' } });
   context.structuredEvent('t', { runtimeSessionId: 'r', type: 'usage.updated', payload: { input: 2, output: 20, cachedInput: 0, cacheWrite: 0 } });
   const snapshot = context.sessions.get('t').nativeUsage.snapshot();

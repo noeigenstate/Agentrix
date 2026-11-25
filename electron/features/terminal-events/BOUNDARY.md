@@ -13,6 +13,7 @@ The cross-language file format and the reader baseline are checked by `tests/wir
 - `electron/features/terminal-events/**`
 
 ## Interface
+- `createShellEvents` (`electron/features/terminal-events/shell-events.cjs`) — authenticate and route shell events and apply structured session events to terminal records
 - `createClaudeActivity` (`electron/features/terminal-events/claude-activity.cjs`) — followClaude, followClaudeSession, publishCliState, applyActivity, replayCompletion, claudeActivity and claudeHook over the app shell's deps, read on every call; main hands it every agent-activity event and every turn snapshot, and the hook server's ingest hands claudeHook every HTTP hook event
 - `createSessionMachine` (`electron/features/terminal-events/session-machine.cjs`) — a Claude terminal's session machine (C-4): `reduce(state, signal) → { state, effects }`, pure, over hooks, transcript records, screen facts and the settled read after a Stop; phases starting, ready, working, stopping, exited; effects `subagent` (C-15, handed to the run board as hook-only: lifecycle hooks also come from Claude Code's internal helpers, and the board holds a call no tool call names) and `completion`; `cliFields` is its part of the published CliState (phase, turn, queue, background, open)
 - `writeBootstrap` (`electron/features/terminal-events/bootstrap-file.cjs`) — writes the private session bootstrap and returns the optional bounded seat JSON when written, otherwise undefined
@@ -25,6 +26,7 @@ The cross-language file format and the reader baseline are checked by `tests/wir
 - `terminalHooks` (`electron/features/terminal-events/hook-channel.cjs`) - builds a local terminal's hook channel and settings via the hook facet. `downgradeHooks` applies launch reports.
 
 ## May import
+- `electron/features/agents/agent-command.cjs` (map shell Codex arguments into a native launch)
 - `electron/features/cli-adapters/registry.cjs`
 - `electron/features/skills/seat-rules.mjs` (validate the lead seat)
 - `electron/shared/reason.cjs` (the term.* Reasons of a hook channel)

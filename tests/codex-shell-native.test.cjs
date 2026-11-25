@@ -1,10 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const path = require('node:path'), vm = require('node:vm');
 const { codexLaunch, agentCommand } = require('../electron/features/agents/agent-command.cjs');
 const { shellEvent } = require('../integration/agent-event.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 const thread = '11111111-1111-4111-8111-111111111111';
 
 test('manual Codex argv maps only supported native semantics, including exact resume and initial prompt', () => {
@@ -43,14 +43,12 @@ function host(kind = 'local') {
   const starts = [], sent = [], launches = [], warnings = [], project = { id: 'p', kind, path: kind === 'ssh' ? '/remote/project' : path.resolve('project') };
   const session = { terminalId: 't', projectId: 'p', sessionKey: 'key', chunks: [], bytes: 0, pending: '', flush() { warnings.push(this.pending); this.pending = ''; } };
   const sessions = new Map([['t', session]]);
-  const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, path, require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return { codexLaunch }; }, randomUUID: () => 'message-id', codexLaunch, sessions,
+  const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, path, randomUUID: () => 'message-id', sessions,
     nativeSessions: { start: async (...args) => { starts.push(args); return { runtimeSessionId: 'runtime' }; }, send: async (...args) => { sent.push(args); } },
     launchPlans: { delete: id => launches.push(id) }, restorePlans: { delete() {} }, broadcast() {},
     quitting: false, store: { projects: [project], findTerminal: () => ({ record: {} }) }, startupErrors: new Map(), acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent,
   });
-  const begin = main.indexOf('async function openCodexFromShell(');
-  assert.ok(begin >= 0, 'manual Codex has an explicit native launch boundary');
-  vm.runInContext(main.slice(begin, main.indexOf('\nfunction onEvent(', begin)), context);
+  Object.assign(context, createShellEvents(context));
   return { context, project, session, sessions, starts, sent, warnings };
 }
 
@@ -82,16 +80,15 @@ test('a failed app-server start after retiring the shell stays visible without a
 });
 
 test('authenticated manual Codex events leave before any terminal agent tracking', () => {
-  const f = host(); let accepted = 0;
-  f.context.openCodexFromShell = () => { accepted++; };
-  vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('\n// The agent chosen', main.indexOf('function onEvent('))), f.context);
+  const f = host();
+  const accepted = () => f.starts.length;
   defineMain(f.context, 'acceptDispatchEvent');
-  const event = { type: 'agent-started', projectId: 't', sessionKey: 'key', sequence: 2, agent: 'codex', args: [] };
-  f.context.onEvent({ ...event, sessionKey: 'wrong' }); assert.equal(accepted, 0);
-  f.context.onEvent(event); assert.equal(accepted, 1);
-  f.context.onEvent(event); assert.equal(accepted, 1, 'delayed duplicates cannot open another native session');
-  f.context.onEvent({ ...event, type: 'codex-started', sequence: 3 }); assert.equal(accepted, 2);
-  f.context.onEvent({ ...event, sequence: 3 }); assert.equal(accepted, 2, 'old and new names share one sequence guard');
+  const event = { type: 'agent-started', projectId: 't', sessionKey: 'key', sequence: 2, agent: 'codex', args: [], cwd: f.project.path };
+  f.context.onEvent({ ...event, sessionKey: 'wrong' }); assert.equal(accepted(), 0);
+  f.context.onEvent(event); assert.equal(accepted(), 1);
+  f.context.onEvent(event); assert.equal(accepted(), 1, 'delayed duplicates cannot open another native session');
+  f.context.onEvent({ ...event, type: 'codex-started', sequence: 3 }); assert.equal(accepted(), 2);
+  f.context.onEvent({ ...event, sequence: 3 }); assert.equal(accepted(), 2, 'old and new names share one sequence guard');
   assert.equal(f.session.cliActive, undefined);
 });
 

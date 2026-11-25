@@ -14,6 +14,8 @@ const { HISTORY_WINDOW } = require('../electron/transcript-window.cjs');
 const { agentCommand } = require('../electron/features/agents/agent-command.cjs');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
 const user = content => ({ type: 'user', uuid: 'prompt', message: { content } });
 async function fixture(t, cwd = 'E:\\不负芳华\\project') {
@@ -124,9 +126,11 @@ function mainHarness(t, f) {
     // The handoff of earlier work is written on start (handoff.cjs, tested on its own).
     writeHandoff: async () => false, handoffFile: id => path.join(f.home, 'handoff', `${id}.md`), memoryDir: () => path.join(f.home, 'memory'), scrubProjectSkills: async () => [],
   });
-  vm.runInContext(main.slice(main.indexOf('// Workspace broadcasts'), main.indexOf('async function openCodexFromShell(')), context);
+  vm.runInContext(main.slice(main.indexOf('// Workspace broadcasts'), main.indexOf('// The agent chosen on a new project')), context);
   defineMain(context, 'followClaude', 'followClaudeSession', 'publishCliState', 'acceptDispatchEvent');
-  vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('function remoteFor(')), context);
+  context.now = context.Date?.now;
+  Object.assign(context, createShellEvents(context));
+  Object.assign(context, createTerminalLifecycle(context));
   t.after(() => s.activityMonitor?.stop());
   return { project, s, store, sessions, context, restore, resets: () => resets };
 }
@@ -143,7 +147,7 @@ function activityHarness(t, f) {
     setTimeout: () => ({ unref() {} }),
   });
   defineMain(h.context, 'applyActivity', 'claudeActivity');
-  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), h.context);
+  h.context.openCodexFromShell = createShellEvents(h.context).openCodexFromShell;
   return h;
 }
 

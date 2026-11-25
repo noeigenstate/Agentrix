@@ -1,3 +1,5 @@
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -121,33 +123,26 @@ test('real main assembly reports terminal-only Claude subscription usage without
     inspectClaude: () => context.inspectClaudeExecutable(),
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
-    require: name => {
-      if (name === 'electron') return { safeStorage };
-      if (name === './features/team/team-locate.cjs') return { locateTeam: forbidden };
-      if (name === './features/agents/dispatch-registration.cjs') return require('../electron/features/agents/dispatch-registration.cjs');
-      assert.fail(`unexpected require: ${name}`);
-    },
-    importFixture: async name => {
-      if (name === './features/agents/dispatch-control.cjs') return { createDispatchControl: () => ({
-        listen: async () => ({ address: 'fixture-control' }), onRequest() {},
-      }) };
-      assert.fail(`unexpected import: ${name}`);
-    },
+    safeStorage,
+    loadTeamLocator: () => ({ locateTeam: forbidden }),
+    loadDispatchRegistration: () => require('../electron/features/agents/dispatch-registration.cjs'),
+    loadDispatchControl: async () => ({ createDispatchControl: () => ({
+      listen: async () => ({ address: 'fixture-control' }), onRequest() {},
+    }) }),
   };
   // Main's worker terminals: no terminal lead here starts one.
   context.workerTerminals = null;
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
+  context.structuredEvent = createShellEvents(context).structuredEvent;
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
   defineMain(context, 'readNativeConnections', 'liveHost', 'dispatchReading', 'readNativeSubscriptionLimits', 'readNativeUsageInputs', 'connectionSpec',
     'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'retireTerminal', 'activateNative');
-  vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
-    .replaceAll('await import(', 'await importFixture('), context);
-  await context.initializeNativeSessions();
+  const nativeHost = createNativeHost(context);
+  await nativeHost.initializeNativeSessions();
   t.after(() => context.nativeSessions.close());
   const handlers = new Map(); context.nativeSessions.register((name, handle) => handlers.set(name, handle));
   const usage = id => handlers.get('native:usage')(id);

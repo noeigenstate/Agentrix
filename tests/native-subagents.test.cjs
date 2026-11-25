@@ -14,6 +14,8 @@ const { DashboardRecords } = require('../electron/features/dashboard/records.cjs
 const { sameDirectory } = require('../electron/session-files.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 
 const at = seconds => Date.UTC(2026, 0, 1) + seconds * 1000;
 // A retired or closed run judges a late callback with no I/O, so its report chain settles within microtasks; there is no event to await.
@@ -49,8 +51,7 @@ function nativeHost(f, calls) {
     startupNote: () => '', handoffFile: () => '', READING_NOTE: '', integrationDir: f.directory,
     skills: { delivery: () => ({}) }, callsOf: current => { assert.equal(current, s); return calls; },
     scheduleState: () => { scheduled++; }, process });
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('function roleEnded('), source.indexOf('function structuredEvent(')), context);
+  context.nativeSubagent = createNativeHost(context).nativeSubagent;
   const spec = defineMain(context, 'nativeSpec').nativeSpec('terminal', 'claude', false);
   s.nativeSpec = spec; sessions.set('terminal', s);
   return { spec, s, context, sessions, nativeSpecs, scheduled: () => scheduled };
@@ -414,7 +415,7 @@ test('native retirement clears its child rows and keeps dispatched workers', t =
   host.context.createNativeUsage = () => ({ apply() {} });
   host.context.store.setRestore = () => {};
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), host.context);
+  host.context.structuredEvent = createShellEvents(host.context).structuredEvent;
   host.context.structuredEvent('terminal', { type: 'session.state', runtimeSessionId: 'native-run', providerSessionId: f.parentId, payload: { state: 'stopped' } });
   assert.deepEqual([...calls.calls.keys()], ['dispatched-worker']);
   assert.equal(calls.folder, null); assert.equal(host.s.cliActive, false);
