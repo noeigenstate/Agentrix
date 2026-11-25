@@ -3900,5 +3900,17 @@
   "大白话回复": "Plain replies",
   "每个会话的每个任务开始前生效。": "Applies before every task in every session.",
   "用用户的语言和日常的话回复，先说结论和需要用户做什么，再说细节。": "Reply in the user's language and use everyday words. Start with the outcome and any action the user needs to take, then give the details.",
-  "系统强制，对所有项目生效": "Required by the system for all projects"
+  "系统强制，对所有项目生效": "Required by the system for all projects",
+  "大白话": "Plain words",
+  "新增一个系统技能，所有项目的会话和角色都用日常的话回复，先说结论和需要你做的事，再说细节。": "A new system skill makes every session and role in every project reply in everyday words, starting with the outcome and anything you need to do, then the details.",
+  "切换提示": "Switch notice",
+  "会话正忙时改了模型或思考深度，会显示“这一轮结束后切换到 …”，切换完成后这句话消失。": "If you change the model or effort while a session is busy, it shows \"Switches to … after this turn\", and the line goes away once the switch is done.",
+  "数据保护": "Data safety",
+  "设置、项目列表、密钥这类文件一时读不出来（比如被杀毒软件锁住）时会重试；文件真的损坏时先备份再提醒，不会用空数据覆盖。": "When a file such as settings, the project list or saved keys cannot be read for a moment (for example while antivirus holds it), Agentrix retries; a truly damaged file is backed up and reported, never overwritten with empty data.",
+  "失败说明": "Clear failures",
+  "终端里启动 claude 或 codex 失败时，会说清楚是哪一步出了问题、该怎么办，不再什么都不说就返回。": "When starting claude or codex in a terminal fails, it now says which step went wrong and what to do, instead of returning silently.",
+  "记忆容错": "Memory tolerance",
+  "团队记忆里有一行坏数据时只跳过那一行，角色的任务说明照常生成。": "A damaged line in team memory is skipped on its own, and role briefs are still created as usual.",
+  "稳定性": "Stability",
+  "修复了一百多处可能出错的地方，包括复制粘贴、输入法回车、慢电脑上的事件提醒和远端连接。": "Over a hundred places that could go wrong are fixed, including copy and paste, Enter in input methods, event notices on slow computers and remote connections."
 }

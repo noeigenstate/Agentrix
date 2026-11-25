@@ -4,10 +4,10 @@
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new"; highlight?: true }[] = [
   { title: "请更新", text: "请把 Claude Code 更新到最新版本。版本太旧时，开发角色可能停在一个看不见的确认框上，一直等着。", highlight: true },
-  { title: "角色对话框", text: "右侧窗口里不再显示“简报”和“日志”两个展开项，更紧凑。" },
-  { title: "角色交结果", text: "角色完成时用一个工具交回答案、待你决定的事、待批准的操作和发现，总指挥按字段读取，不再靠识别回复里的标题。" },
-  { title: "结构化通道", text: "Agentrix 各部分之间传递的座位、模式、启动参数、派发状态和事件都改成带版本的字段格式，换写法或升级时不会再悄悄失效。" },
-  { title: "角色卡", text: "活动栏的角色卡把模型标识放在座位名后面，去掉工作目录路径，任务标题改为灰色小字。" },
-  { title: "锤子动画", text: "路由栏的小锤子按 Agentrix 的界面动画设置敲打，Windows 关闭动画效果时不再停住不动。" },
-  { title: "团队记录", text: "团队的记忆改由结构化记录保存并渲染成文档，原有内容首次读取时自动导入，原文件留作备份。" },
+  { title: "大白话", text: "新增一个系统技能，所有项目的会话和角色都用日常的话回复，先说结论和需要你做的事，再说细节。" },
+  { title: "切换提示", text: "会话正忙时改了模型或思考深度，会显示“这一轮结束后切换到 …”，切换完成后这句话消失。" },
+  { title: "数据保护", text: "设置、项目列表、密钥这类文件一时读不出来（比如被杀毒软件锁住）时会重试；文件真的损坏时先备份再提醒，不会用空数据覆盖。" },
+  { title: "失败说明", text: "终端里启动 claude 或 codex 失败时，会说清楚是哪一步出了问题、该怎么办，不再什么都不说就返回。" },
+  { title: "记忆容错", text: "团队记忆里有一行坏数据时只跳过那一行，角色的任务说明照常生成。" },
+  { title: "稳定性", text: "修复了一百多处可能出错的地方，包括复制粘贴、输入法回车、慢电脑上的事件提醒和远端连接。" },
 ];
