@@ -431,7 +431,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "6bb2e930db25841cb726eb9ed7b260c44029394f3dd8bdbae999761c87565847",
+      "digest": "b0f75c2a520cea3e326ab410070b4b0c5e74aa5cbfa7970bc50c691b8f9fa4ba",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -455,7 +455,7 @@
         "integration/shims/intercept.cjs",
         "electron/features/cli-adapters/workers.cjs"
       ],
-      "reason": "Loads the same carried electron modules, outbox and intercept implementation beside the source or packaged helper."
+      "reason": "Loads the same carried electron modules, outbox and intercept implementation beside the source or packaged helper. The static result companion is used only by an on-disk helper."
     },
     "electron/updates.cjs": {
       "digest": "06cf6481c911ae83aa814e3a80a2e3a572c59e6dfac0de86d47c24926438251d",

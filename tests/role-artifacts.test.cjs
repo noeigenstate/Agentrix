@@ -13,6 +13,7 @@ const { createRoleTools, serve } = require('../integration/role-tools.cjs');
 const { startDetached } = require('../integration/dispatch.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { workerOf } = require('../electron/features/cli-adapters/workers.cjs');
+const { started, ended } = require('./helpers/dispatch-events.cjs');
 
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agx-artifacts-test-'));
@@ -47,13 +48,15 @@ test('the role result MCP exposes one tool and stores a single versioned JSON li
     needsDecision: [{ question: 'Proceed?', options: [{ label: 'Yes', effect: 'Publish' }], recommendation: 'Yes' }],
     needsApproval: [{ action: 'Publish', reason: 'Needs approval' }],
     skillProposals: ['Clarify examples'], verification: { ran: [{ command: 'node --test', result: 'pass', note: 'offline' }], unverified: ['production'] } };
-  const requests = [{ id: 1, method: 'tools/list' }, { id: 2, method: 'tools/call', params: { name: 'finish_role', arguments: args } }];
+  const requests = [{ id: 0, method: 'initialize' },
+    { id: 1, method: 'tools/list' }, { id: 2, method: 'tools/call', params: { name: 'finish_role', arguments: args } }];
   const input = Readable.from(requests.map(request => JSON.stringify({ jsonrpc: '2.0', ...request }) + '\n'));
   const responses = [];
   const output = new Writable({ write(chunk, _encoding, done) { responses.push(JSON.parse(chunk)); done(); } });
   await serve({ roles, input, output, name: ROLE_RESULT_SERVER });
-  assert.deepEqual(responses[0].result.tools.map(tool => tool.name), ['finish_role']);
-  assert.deepEqual(JSON.parse(responses[1].result.content[0].text), { saved: true, calls: 1 });
+  assert.equal(responses[0].result.serverInfo.name, ROLE_RESULT_SERVER);
+  assert.deepEqual(responses[1].result.tools.map(tool => tool.name), ['finish_role']);
+  assert.deepEqual(JSON.parse(responses[2].result.content[0].text), { saved: true, calls: 1 });
   const text = await fs.readFile(path.join(folder, 'result.json'), 'utf8');
   assert.equal(text.match(/\n/g).length, 1);
   const expected = { format: 'agentrix.role-result', version: 1, runId, source: 'finish-role', ...args, calls: 1, at: 123 };
@@ -200,18 +203,22 @@ for (const expired of [false, true]) test(`role_result explains removal by ${exp
   await fs.writeFile(bootstrap + '.mode', 'conductor');
   await fs.writeFile(bootstrap + '.seats', JSON.stringify({ developer: { model: 'opus', effort: 'high' } }));
   let now = Date.now();
+  const runId = randomUUID();
   const { tools } = createRoleTools({ env: { AGENTRIX_BOOTSTRAP: bootstrap }, cwd: directory, tempRoot: root, now: () => now,
-    engine: async (args, { stdout, roleArtifacts }) => {
+    engine: async (args, { onEvent, roleArtifacts }) => {
       if (args.includes('--detach')) {
-        await fs.writeFile(path.join(roleArtifacts.folder, 'answer.md'), 'result');
+        await fs.writeFile(path.join(roleArtifacts.folder, 'answer.md'), expired ? 'result' : 'fallback');
+        if (!expired) await createRoleResultTools({ folder: roleArtifacts.folder, runId }).tools.finish_role({ answer: 'result', findings: ['checked'] });
         await stampRoleArtifacts(roleArtifacts, 'ended', now - 1);
-        stdout.write('[dispatch] started synthetic claude\n');
-      } else stdout.write('[dispatch] ended synthetic exit 0\n');
+        onEvent(started(runId, 'claude'));
+      } else onEvent(ended(runId, 'exit', { agent: 'claude', result: { source: expired ? 'final-text' : 'finish-role', out: 'answer.md' } }));
     } });
   const { id } = await tools.start_role({ seat: 'developer', title: 'Read files', brief: 'Read the docs', readOnly: true });
   await sweepRoleArtifacts(root, { now, maxFolders: 0 });
   assert.equal((await fs.readdir(root)).length, 1);
-  assert.equal((await tools.role_result({ id })).answer, 'result');
+  const result = await tools.role_result({ id });
+  assert.equal(result.answer, 'result');
+  if (!expired) assert.deepEqual([result.source, result.calls, result.findings], ['finish-role', 1, ['checked']]);
   if (expired) now += RETENTION + 1000;
   await sweepRoleArtifacts(root, { now, maxFolders: expired ? 256 : 0 });
   assert.deepEqual(await fs.readdir(root), []);

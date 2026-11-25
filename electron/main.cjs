@@ -639,8 +639,9 @@ function callsOf(s, project) {
             if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
             const file = path.join(team.board, call.key + '.json');
             if (fs.statSync(file).size > 65536) return null;
-            const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
-            if (entry.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd) || !Number.isSafeInteger(entry.pid) || entry.pid <= 0) return null;
+            const { readBoard } = require('./features/team/inbox.cjs');
+            const entry = readBoard(fs.readFileSync(file, 'utf8'));
+            if (entry?.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd)) return null;
             pid = entry.pid; helperPids.set(call, pid);
           } catch (error) { return call.done && error.code === 'ENOENT' ? false : null; }
         }
@@ -1409,6 +1410,7 @@ function wireNativeSessions(directory, codex, codexFactory) {
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
   registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals,
+    roleResultServer: (runId, folder) => require(path.join(integrationDir, 'role-artifacts.cjs')).roleResultServer(path.join(integrationDir, 'dispatch.cjs'), runId, folder),
     env: () => claudeBackgroundEnvironment(withoutAppImage(process.env), store.settings?.claudeBackgroundTasks) });
 }
 

@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+const { roleResultServer } = require('../integration/role-artifacts.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 function setup(t, { auto = true, cli = true, key = true, claudePath = 'api-then-terminal' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-worker-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -15,6 +16,7 @@ function setup(t, { auto = true, cli = true, key = true, claudePath = 'api-then-
   if (key) claude.credentials.save('sk-ant-api03-fake-worker-only-credential');
   t.after(() => claude.close());
   registerClaudeWorker({ control: { onRequest(name, fn) { assert.equal(name, 'claude-sdk.run'); handler = fn; } }, claude,
+    roleResultServer: (id, folder) => roleResultServer(path.resolve('integration/dispatch.cjs'), id, folder),
     settings: () => ({ claudePath, monthlyBudgetUsd: 10 }), env: () => ({ PATH: '' }) });
   const run = { runId: randomUUID(), projectId: 'project', cwd: dir, worktree: dir, allow: ['src/**'], readOnly: false };
   const stream = { emit: event => events.push(event), onControl(fn) { onControl = fn; return () => { onControl = null; }; } };
@@ -22,11 +24,13 @@ function setup(t, { auto = true, cli = true, key = true, claudePath = 'api-then-
 }
 async function until(fn) { for (let i = 0; i < 500; i++) { if (fn()) return; await new Promise(resolve => setTimeout(resolve, 2)); } assert.fail('worker fake did not settle'); }
 test('SDK worker broker applies trusted run scopes and streams events without credentials', async t => {
-  const { start, events, fake, run, dir } = setup(t, { auto: false }); const task = start();
+  const { start, events, fake, run, dir } = setup(t, { auto: false });
+  const folder = path.join(dir, 'agentrix-role-result'), task = start({ roleResultFolder: folder });
   await until(() => fake.inputs.length === 1);
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'python -m pytest' }, {})).behavior, 'allow');
   fake.emit({ type: 'result', uuid: 'r', user_message_uuid: fake.inputs[0].uuid, total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 }); await task;
   assert.equal(fake.calls[0].options.cwd, run.cwd); assert.deepEqual(fake.calls[0].options.settingSources, ['user', 'project', 'local']);
+  assert.deepEqual(fake.calls[0].options.mcpServers.agentrix_role.args.slice(1), ['mcp-role', run.runId, folder]);
   assert.ok(events.some(event => event.type === 'turn.completed')); assert.ok(events.every(event => event.runId === run.runId));
   assert.ok(!JSON.stringify(events).includes('fake-worker-only-credential'));
   const audit = JSON.parse(fs.readFileSync(path.join(dir, 'policy-audit.json'), 'utf8'));
@@ -45,7 +49,11 @@ test('SDK worker broker signals terminal fallback for a missing native CLI befor
   assert.equal(fake.calls.length, 0); assert.ok(events.some(event => event.type === 'path.changed' && /未找到原生 Claude Code/.test(event.payload.reason)));
 });
 test('SDK worker broker cannot accept renderer paths or SDK options', async t => {
-  const { start, fake } = setup(t); await assert.rejects(start({ cwd: '/untrusted', env: {} })); assert.equal(fake.calls.length, 0);
+  const { start, fake } = setup(t);
+  await assert.rejects(start({ cwd: '/untrusted', env: {} }));
+  await assert.rejects(start({ roleResultFolder: '../untrusted' }));
+  await assert.rejects(start({ roleResultFolder: { command: process.execPath } }));
+  assert.equal(fake.calls.length, 0);
 });
 test('SDK worker controls append during a live turn and drain queued work before closing', async t => {
   const { start, fake, control, events } = setup(t, { auto: false });

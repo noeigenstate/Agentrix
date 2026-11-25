@@ -221,7 +221,7 @@ const WIRE_FIELDS = Object.freeze({
     'agentrix.background-policy': fileFields('claudeBackgroundTasks'),
     'agentrix.seat-map': fileFields('seats'),
     'agentrix.terminal-wire': fileFields('words claude'),
-    'agentrix.board-entry': fileFields('id pid title role agent model cwd allow startedAt', 'session'),
+    'agentrix.board': fileFields('id pid title role agent model cwd allow startedAt', 'session controls closing'),
     'agentrix.role-result': fileFields('runId source answer needsDecision needsApproval findings calls at', 'skillProposals verification'),
     'agentrix.lead-seat': fileFields('model effort fast ultracode seats'),
     'agentrix.session-mode': fileFields('mode'),

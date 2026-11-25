@@ -21,6 +21,7 @@ const scale = Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1);
 const staleTime = new Date('2000-01-01T00:00:00Z');
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
 const json = async file => JSON.parse(await fs.readFile(file, 'utf8'));
+const memoryRows = async team => (await fs.readFile(team.memoryJsonl, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
 const exists = file => sync.existsSync(file);
 const output = async running => { const result = await running.finished; await delay(30); return result; };
 async function until(predicate) {
@@ -160,7 +161,7 @@ test('worktrees share team state and outside git the helper behaves as before', 
   assert.equal(result.code, 0); assert.match(result.stdout, /scope unchecked/); assert.doesNotMatch(result.stdout, / · roundtable /);
   assert.equal(captured.brief, briefOf({ cwd: f.runtime, allow: ['src/a.js'] }, Buffer.from('Whole plan.\n')).toString());
   assert.doesNotMatch(captured.brief, /# Project memory|# Working now|# Roundtable before work/);
-  assert.match(briefOf({ cwd: f.runtime, allow: [] }, Buffer.from('plain')).toString(), /## Skill proposals[\s\S]*plain$/);
+  assert.match(briefOf({ cwd: f.runtime, allow: [] }, Buffer.from('plain')).toString(), /finish_role\.skillProposals[\s\S]*plain$/);
 });
 
 test('a scoped build starts while a worker with overlapping scope is still running', async t => {
@@ -227,8 +228,9 @@ test('board entries leave on failed spawn and interruption', async t => {
 test('briefs inject the ledger first, then selected memory, live peers and bounded repository context', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), id = randomUUID();
   const ledger = path.join(f.runtime, 'ledger.md'); await fs.writeFile(ledger, 'The owner chose cents.\n');
-  await fs.writeFile(team.memory, 'Old preface.\n## Round 1 · old\nobsolete\n## Round 2 · Storage\n- Update src/a.js.\n'
-    + '### 2026-01-01 12:00 · Dispatch timing · worker\n- Latest finding.\n');
+  team.appendMemory({ title: 'Round 1 · old', text: 'obsolete' });
+  team.appendMemory({ title: 'Round 2 · Storage', text: '- Update src/a.js.' });
+  team.appendMemory({ title: '2026-01-01 12:00 · Dispatch timing · worker', text: '- Latest finding.' });
   team.register(options(f.repo, ['--allow', 'src/b.js']), id);
   for (let n = 0; n < 45; n++) await fs.writeFile(path.join(f.repo, `dirty-${String(n).padStart(2, '0')}.txt`), 'dirty');
   const text = briefOf({ cwd: f.repo, allow: ['src/a.js'], ledger }, Buffer.from('Actual dispatch task.'), team).toString();
@@ -236,27 +238,27 @@ test('briefs inject the ledger first, then selected memory, live peers and bound
   assert.ok(text.indexOf('# Project memory') < text.indexOf('# Working now'));
   assert.ok(text.indexOf('# Working now') < text.indexOf('# Repository'));
   assert.ok(text.indexOf('# Repository') < text.indexOf('# Files you may change'));
-  assert.match(text, /Dispatch timing[\s\S]*Latest finding\.[\s\S]*## Round 2 · Storage[\s\S]*src\/a\.js/);
+  assert.match(text, /Dispatch timing[\s\S]*Latest finding\.[\s\S]*### Round 2 · Storage[\s\S]*src\/a\.js/);
   assert.doesNotMatch(text, /Old preface|Round 1|obsolete/);
   assert.ok(text.includes(team.memory)); assert.match(text, /Owner of A \(codex gpt-6.1-sol, 执行\): src\/b.js/);
   assert.match(text, /… and 5 more/); assert.match(text, /[a-f0-9]+ base/);
-  assert.match(text, /## Findings for the ledger/); assert.match(text, /# Task\n\nActual dispatch task\.$/);
+  assert.match(text, /finish_role\.findings/); assert.match(text, /# Task\n\nActual dispatch task\.$/);
   const noLedger = briefOf({ cwd: f.repo, allow: [] }, Buffer.from('Read.'), team).toString();
   assert.match(noLedger, /# Handing back/);
   team.release(id);
 });
 
 test('memory includes the newest two entries and matches older bodies within its byte budget', () => {
-  const entry = (day, title, body) => `### 2026-01-${day} 12:00 · ${title} · worker\n\n${body}\n`;
+  const entry = (day, title, body) => ({ title: `2026-01-${day} 12:00 · ${title} · worker`, text: body });
   const older = entry('01', 'Storage', 'src/a.js and the complete old finding.');
   const cjk = entry('02', 'Routing', '审核读取权限。');
   const body = entry('03', 'Transport', 'Uses sharedBinder. Blue packets.\n\n' + '汉字'.repeat(1200));
   const unrelated = entry('04', 'Database', 'Other notes.');
   const first = entry('05', 'Quota', 'Other findings.');
   const second = entry('06', 'Progress', 'Other facts.');
-  const all = older + cjk + body + unrelated + first + second;
+  const all = [older, cjk, body, unrelated, first, second];
   const excerpt = memoryExcerpt(all, { brief: 'Review sharedBinder and src/a.js for 权限规则' });
-  assert.ok(excerpt.startsWith([second.trimEnd(), first.trimEnd()].join('\n\n')));
+  assert.ok(excerpt.startsWith([second, first].map(row => `### ${row.title}\n\n${row.text}`).join('\n\n')));
   assert.match(excerpt, /Blue packets\.\n\n\[Entry truncated\]/);
   assert.match(excerpt, /审核读取权限/);
   assert.match(excerpt, /complete old finding/);
@@ -264,7 +266,7 @@ test('memory includes the newest two entries and matches older bodies within its
   assert.ok(Buffer.byteLength(excerpt) <= 6 * 1024);
   const largeFirst = entry('07', 'Very recent', 'a'.repeat(9000));
   const largeSecond = entry('08', 'Latest', 'b'.repeat(9000));
-  const large = memoryExcerpt(all + largeFirst + largeSecond);
+  const large = memoryExcerpt([...all, largeFirst, largeSecond]);
   assert.match(large, /Latest[\s\S]*Entry truncated[\s\S]*Very recent[\s\S]*Entry truncated/);
 });
 
@@ -332,7 +334,8 @@ test('bookkeeping failures preserve worker results and never retry findings', as
   const prepared = await start(f, { ledger, answer: 'Done.\n\n## Findings for the ledger\n\n- Once per result.\n' });
   await output(prepared);
   const team = projectTeam(f.repo), proto = Object.getPrototypeOf(team), append = proto.append, finish = proto.finish;
-  await fs.writeFile(team.memory, ''); await fs.writeFile(ledger, '# Ledger\n');
+  await fs.writeFile(ledger, '# Ledger\n');
+  const before = await memoryRows(team);
   let calls = 0;
   const failure = t.mock.method(proto, 'append', function (entry) {
     if (entry.type === 'end') throw new Error('journal append failed');
@@ -343,7 +346,9 @@ test('bookkeeping failures preserve worker results and never retry findings', as
     const result = await invoke(prepared);
     assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason exit.*WARNING: team bookkeeping failed: journal append failed/);
     assert.equal(calls, 1);
-    for (const file of [team.memory, ledger]) assert.equal((await fs.readFile(file, 'utf8')).split('Once per result.').length, 2);
+    const added = (await memoryRows(team)).slice(before.length);
+    assert.deepEqual(added.map(row => row.text), ['- Once per result.']);
+    assert.equal((await fs.readFile(ledger, 'utf8')).split('Once per result.').length, 2);
   } finally { attempted.mock.restore(); failure.mock.restore(); }
   const busy = t.mock.method(proto, 'finish', async () => { throw new Error('Team lock is busy'); });
   try {
@@ -471,7 +476,7 @@ test('scoped dispatch lists repository files once and snapshots status before an
   const boundaries = load(boundaryFile, { 'node:child_process': children });
   const teamModule = load(teamFile, { 'node:child_process': children });
   const dispatched = load(helper, { [boundaryFile]: boundaries, [teamFile]: teamModule });
-  assert.match(dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString(), /## Skill proposals[\s\S]*plain$/);
+  assert.match(dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString(), /finish_role\.skillProposals[\s\S]*plain$/);
   assert.equal(calls.length, 0, 'briefOf has no hidden team discovery');
   for (const withPeer of [false, true]) {
     const team = projectTeam(f.repo), peer = randomUUID();

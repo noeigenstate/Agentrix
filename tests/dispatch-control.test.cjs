@@ -273,5 +273,6 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
   assert.equal(await result, action === 'intervene' ? 0 : 1);
   if (action === 'intervene') assert.equal(fs.readFileSync(out, 'utf8'), 'Owner correction');
   assert.match(stdout, /intervention .* (?:delivered|consumed)/); assert.doesNotMatch(stdout, /fallback|resume failed/);
-  assert.match(fs.readFileSync(team.memory, 'utf8'), /\[dispatch\] intervention .* (?:delivered|consumed)/);
+  const replies = fs.readFileSync(team.memoryJsonl, 'utf8').trimEnd().split('\n').map(JSON.parse);
+  assert.ok(replies.some(row => row.source === 'control-receipt' && row.runId === id && ['delivered', 'consumed'].includes(row.text.status)));
 });

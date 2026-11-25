@@ -9,7 +9,8 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { validateSmallScope, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole,
   renderDispatchLine, renderDispatchStart } = require('./dispatch.cjs');
-const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
+const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, readRoleResultFile, roleResultFields,
+  RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -396,6 +397,12 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     async role_result({ id }) {
       const run = own(id);
       await refresh([run], 1);
+      const result = run.end && !run.lost ? await readRoleResultFile(run.artifacts.folder, id) : null;
+      if (result) {
+        run.answerRead = true;
+        await stampRoleArtifacts(run.artifacts, 'read');
+        return { ...describe(run), ...roleResultFields(result) };
+      }
       const answer = run.end && !run.lost ? await fs.promises.readFile(run.out, 'utf8').catch(error => {
         if (error.code !== 'ENOENT') throw error;
         return null;
@@ -444,7 +451,7 @@ function toolResultText(name, result) {
 }
 
 // MCP over stdio: one JSON-RPC message per line.
-async function serve({ roles, input = process.stdin, output = process.stdout }) {
+async function serve({ roles, name = 'agentrix', input = process.stdin, output = process.stdout }) {
   const reply = (id, result) => {
     try { output.write(JSON.stringify({ jsonrpc: '2.0', id, ...result }) + '\n'); } catch {}
   };
@@ -467,7 +474,7 @@ async function serve({ roles, input = process.stdin, output = process.stdout }) 
       if (id === undefined) continue;
       if (method === 'initialize') {
         reply(id, { result: { protocolVersion: params?.protocolVersion || PROTOCOL, capabilities: { tools: {} },
-          serverInfo: { name: 'agentrix', version: '1.0.0' } } });
+          serverInfo: { name, version: '1.0.0' } } });
       } else if (method === 'ping') reply(id, { result: {} });
       else if (method === 'tools/list') reply(id, { result: { tools: roles.list() } });
       else if (method === 'tools/call') {

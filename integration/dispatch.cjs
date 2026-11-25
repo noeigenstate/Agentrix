@@ -16,8 +16,8 @@ const { rolloutFiles, sessionMeta, isOwnedDirectory } = require(path.join(runtim
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
 const { imageMetadata } = require(path.join(runtime, 'oversized-record.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
-const { projectTeam, recordFindings, FINDINGS } = require(path.join(runtime, 'features/team/team.cjs'));
-const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team/inbox.cjs'));
+const { projectTeam, recordFindings } = require(path.join(runtime, 'features/team/team.cjs'));
+const { RunInbox, runId, validText, readBoard } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment, elevatedSetupMessage, readiness } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
@@ -297,9 +297,10 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
   }
   parts.push(standingRules(options));
   parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
-    + 'Put suggested skill changes under ## Skill proposals in your answer. Unapproved changes are preserved beside your answer; only an isolated worker worktree is restored. Shared or managed files are report-only because their author is unknown.');
-  if (options.ledger || team || options.small) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
-    + 'and pitfalls the next worker on this task must know (file:line where it helps). They are added to the shared context.');
+    + 'Record suggested skill changes in finish_role.skillProposals. Unapproved changes are preserved beside your answer; only an isolated worker worktree is restored. '
+    + 'Shared or managed files are report-only because their author is unknown.');
+  if (options.ledger || team || options.small) parts.push('# Handing back\n\nRecord the facts, decisions and pitfalls the next worker must know in finish_role.findings '
+    + '(file:line where it helps). They are added to the shared context.');
   return Buffer.concat([Buffer.from(parts.join('\n\n') + '\n\n# Task\n\n'), brief]);
 }
 
@@ -899,9 +900,10 @@ async function runDetached(file, deps = {}) {
   const env = { ...(deps.env || process.env) };
   if (deps.pinnedSeats) Object.defineProperty(env, PINNED_SEATS, { value: parseSeatMap(env.AGENTRIX_DISPATCH_PINNED_SEATS) });
   delete env.AGENTRIX_DISPATCH_PINNED_SEATS;
-  const artifacts = entry.roleArtifacts && require('./role-artifacts.cjs');
+  const { roleArtifacts } = entry;
+  const artifacts = roleArtifacts && require('./role-artifacts.cjs');
   let processExitUnconfirmed = false;
-  if (artifacts) artifacts.trackRoleProcess(entry.roleArtifacts, process.pid);
+  if (artifacts) artifacts.trackRoleProcess(roleArtifacts, process.pid);
   // A per-run socket answers with a nonce: PID existence alone cannot distinguish a reused PID.
   const token = randomUUID(), server = net.createServer(socket => {
     socket.on('error', () => {}); socket.setTimeout(1000, () => socket.destroy()); socket.end(token);
@@ -944,16 +946,17 @@ async function runDetached(file, deps = {}) {
     refusals: refused => receipt({ refused: [...refused] }),
     routing: routing => receipt({ routing }),
     needsDecision: () => { needsDecision = true; },
-    trackProcess: pid => artifacts?.trackRoleProcess(entry.roleArtifacts, pid),
+    trackProcess: pid => artifacts?.trackRoleProcess(roleArtifacts, pid),
     deferArtifactSettlement: () => { processExitUnconfirmed = true; },
     confirmed: (startedAt, confirmedAt, routing) => { startTiming = { startedAt, confirmedAt, ...(routing && { routing }) }; } };
   let code = 1;
   try {
-    code = await run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback });
+    code = await run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached,
+      startTimeout: 60000, roleFallback: entry.roleFallback, roleArtifacts });
     return code;
   } finally {
     const endedAt = Date.now();
-    if (artifacts && !processExitUnconfirmed) await artifacts.stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
+    if (artifacts && !processExitUnconfirmed) await artifacts.stampRoleArtifacts(roleArtifacts, 'ended', endedAt);
     await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, ...receiptEvent('waiting', null), ownerWait: null, menu: null,
       ...(needsDecision && { needsDecision }) }); await pending;
     await new Promise(resolve => server.close(resolve));
@@ -1027,6 +1030,12 @@ async function run(argv, deps = {}) {
     const leadSeat = model && seatExpectation({ model, effort });
     return serve({ roles: createRoleTools({ env, engine: run, leadAgent, leadSeat, cleanup: true }) }).then(() => 0);
   }
+  if (argv[0] === 'mcp-role') {
+    const [, runId, folder] = argv;
+    const { createRoleResultTools, ROLE_RESULT_SERVER } = require('./role-artifacts.cjs');
+    const { serve } = require('./role-tools.cjs');
+    return serve({ name: ROLE_RESULT_SERVER, roles: createRoleResultTools({ runId, folder }) }).then(() => 0);
+  }
   const { args, jsonl, error } = dispatchArguments(argv);
   const roundtable = usesRoundtable(args);
   const emit = dispatchOutput({ ...deps, jsonl, compactFailure: !error && (roundtable || args[0] === 'stop') });
@@ -1051,7 +1060,7 @@ async function run(argv, deps = {}) {
 
 async function runWorker(argv, { env = process.env, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, roleFallback, launchTreeStop }, emit) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, roleFallback, roleArtifacts, launchTreeStop }, emit) {
   const id = detached?.id || randomUUID();
   const signal = (type, fields) => emit(dispatchEvent(type, id, fields));
   const notice = (code, detail) => signal('notice', { code, ...(detail !== undefined && { detail }) });
@@ -1066,12 +1075,16 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
   let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
   let treeStop = Promise.resolve(), stoppingChild, stoppingRuntime, treeStopError, workerProcess, nativeStopUnconfirmed;
+  let artifacts, localArtifacts, roleFolder, roleServer, roleConfig;
   const stoppedOnRequest = () => killed || segmentStopped || noResume;
   const recordTreeStopFailure = error => { treeStopError ||= error; spawnError ||= error; };
   const stopFailureFor = reason => reason === 'killed' && treeStopError ? diagnosticLine(treeStopError.message) || 'Unknown error' : null;
   function trackWorker(process) {
     workerProcess = process;
-    try { detached?.trackProcess?.(process.pid); }
+    try {
+      detached?.trackProcess?.(process.pid);
+      if (localArtifacts) artifacts.trackRoleProcess(localArtifacts, process.pid);
+    }
     catch (error) { spawnError ||= error; }
     return process;
   }
@@ -1114,10 +1127,8 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     if (['consumed', 'rejected'].includes(status)) unreadControls.delete(messageId);
     const event = dispatchEvent('intervention', id, { messageId, status, ...(reason && { reason }) });
     emit(event);
-    receiptTail = receiptTail.catch(() => {}).then(() => team?.locked(() => {
-      team.append({ type: 'control-receipt', id, messageId, status, ...(reason ? { reason } : {}), at: Date.now() });
-      fs.appendFileSync(team.memory, '\n\n' + renderDispatchLine(event) + '\n');
-    })).then(() => { send({ type: 'dispatch-receipt', id, messageId, status }); });
+    receiptTail = receiptTail.catch(() => {}).then(() => team?.locked(() => team.appendReceipt(event)))
+      .then(() => { send({ type: 'dispatch-receipt', id, messageId, status }); });
     return receiptTail;
   }
   async function rejectDeferredControls() {
@@ -1184,10 +1195,11 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     endSent = true;
   };
   const reported = () => ({ agent: options.agent, ...(unconfirmed ? declared() : output.routing()) });
-  const ended = ({ exitCode, reason, rate = null, scope = scopeReport(false), bookkeeping, restore, needsDecision = null, routing = null, treeStopFailure }) => {
+  const ended = ({ exitCode, reason, rate = null, scope = scopeReport(false), bookkeeping, restore,
+    resultSource = 'final-text', needsDecision = null, routing = null, treeStopFailure }) => {
     const warnings = [restore, bookkeeping, ...Array.from(skillGuard?.notes ?? [], detail => ({ code: 'skill_proposal', detail }))].filter(Boolean);
     const routeFallback = fallback();
-    const result = { source: needsDecision ? 'legacy-heading' : 'final-text', out: options.out };
+    const result = { source: resultSource, out: options.out };
     signal('ended', { ...reported(), exitCode, reason, rate, scope, needsDecision, routing, result,
       refused: { count: refused.length, ...(refused.length && { first: refused[0] }) }, skillProposals, skillChangesLeftLive, interventions, stops,
       ...(treeStopFailure && { treeStopFailure }), ...(warnings.length && { warnings }), ...(routeFallback && { fallback: routeFallback }) });
@@ -1380,8 +1392,8 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     const checkPeer = name => {
       if (name === id + '.json' || name === id + '.tmp') return;
       try {
-        const entry = JSON.parse(fs.readFileSync(path.join(team.board, name), 'utf8'));
-        if (!Number.isSafeInteger(entry.pid) || entry.pid <= 0 || typeof entry.cwd !== 'string') throw new Error('invalid_board');
+        const entry = readBoard(fs.readFileSync(path.join(team.board, name), 'utf8'));
+        if (typeof entry?.cwd !== 'string') throw new Error('invalid_board');
         try { process.kill(entry.pid, 0); } catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error; }
         // Native canonicalization expands Windows 8.3 names as well as junctions.
         const relative = path.relative(scopeRoot, fs.realpathSync.native(entry.cwd));
@@ -1542,6 +1554,13 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }
     await openControl();
     if (worker.brokerMethod && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
+    // Lab's private helper is loaded from memory and has no script for a child MCP server to execute.
+    if (fs.existsSync(__filename)) {
+      artifacts = require('./role-artifacts.cjs');
+      if (!roleArtifacts) localArtifacts = await artifacts.createRoleArtifacts();
+      roleFolder = (roleArtifacts ?? localArtifacts).folder;
+      roleServer = artifacts.roleResultServer(__filename, id, roleFolder);
+    }
     function requestOpened({ itemId, payload: { requestId, kind, blocking, preview, questions } }) {
       const text = detached ? '' : (preview || questions?.[0]?.question || '').slice(0, 160);
       signal('request', { requestId, resolution: { state: 'opened', kind, preview: text } });
@@ -1650,12 +1669,22 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       else if (refused.length) reason = 'permission';
       let answer = '';
       try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
-      const needsDecision = hasDecisionHeading(answer);
+      let roleResult;
+      try {
+        roleResult = await artifacts?.settleRoleResult({ folder: roleFolder, runId: id, answer, legacyDecision: hasDecisionHeading });
+        if (roleResult?.source === 'finish-role') fs.writeFileSync(options.out, roleResult.answer);
+      } catch (error) {
+        notice('role_result_unavailable', oneLine(error.code || 'write_error'));
+      }
+      const legacyDecision = !roleResult && hasDecisionHeading(answer);
+      const needsDecision = roleResult ? artifacts.roleNeedsDecision(roleResult) : legacyDecision || null;
+      const resultSource = roleResult?.source ?? (legacyDecision ? 'legacy-heading' : 'final-text');
       if (needsDecision) detached?.needsDecision?.();
+      const findings = resultSource === 'finish-role' ? roleResult.findings : undefined;
       const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
-      const bookkeeping = await recordTeam({ answer, header, reason });
+      const bookkeeping = await recordTeam({ answer, findings, header, reason });
       await inputTail.catch(() => {});
-      if (!team) { try { recordFindings(options, answer, header); } catch {} }
+      if (!team) { try { recordFindings(options, findings ?? answer, header, id); } catch {} }
       const filesChanged = options.readOnly ? changed : null;
       const scope = scopeReport(checking, changed, outOfScope, options.readOnly, team);
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
@@ -1669,7 +1698,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() },
       filesChanged));
       endSent = true;
-      ended({ exitCode, reason, rate, scope, bookkeeping, restore: scopeRestoreReport, needsDecision,
+      ended({ exitCode, reason, rate, scope, bookkeeping, restore: scopeRestoreReport, needsDecision, resultSource,
         routing: worker.brokerMethod && !unconfirmed ? routeVerdict() : null, treeStopFailure: stopFailure });
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
@@ -1699,7 +1728,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         const readOnly = options.readOnly || ['审查', '调查'].includes(options.role);
         const spec = { owner: 'dispatch', projectId: bootstrap?.projectId || id, terminalId: bootstrap?.projectId || id, runtimeSessionId: id, runId: id,
           cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
-          readOnly, allow: options.allow, env: workerEnv,
+          readOnly, allow: options.allow, env: workerEnv, roleServer,
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (usesAppServer) {
@@ -1758,7 +1787,8 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
           child = { pid: 'broker', exitCode: null };
           if (!started) workerStartedAt = Date.now();
           const remote = controlClient.request(worker.brokerMethod, { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
-            fast: options.fast, resume: effective.resume || null, out: options.out, permission: options.permission }).then(value => {
+            fast: options.fast, resume: effective.resume || null, out: options.out, permission: options.permission,
+            ...(roleFolder && { roleResultFolder: roleFolder }) }).then(value => {
             nativeRunning = false;
             const result = value?.status ? { code: value.status === 'completed' ? 0 : 1, killedBy: value.status === 'interrupted' ? 'SIGTERM' : null } : undefined;
             if (result) settleNative?.(result);
@@ -1811,7 +1841,11 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       if (!resumeSession && !transportFallback) signal('transport', { path: 'claude-cli', reason: `Agentrix control unavailable (${controlFailure || 'control/disconnected'})` });
       const claudeFile = resolveExecutable === executable ? await findClaude(env) : null;
       if (resolveExecutable === executable && !claudeFile) throw Object.assign(new Error('Claude Code was not found outside the Agentrix shim folder'), { code: 'ENOENT' });
-      const command = resolveExecutable(options.agent, commandOf(effective), env, claudeFile);
+      if (roleServer && !roleConfig) {
+        roleConfig = path.join(roleFolder, 'role-mcp.json');
+        await fs.promises.writeFile(roleConfig, JSON.stringify(worker.resultServer(roleServer)), { flag: 'wx', mode: 0o600 });
+      }
+      const command = resolveExecutable(options.agent, commandOf({ ...effective, roleConfig }), env, claudeFile);
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       if (!started) workerStartedAt = Date.now();
@@ -1906,8 +1940,10 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     await rollout?.pending;
     try { await activeRuntime?.close(); }
     finally {
-      if ((workerProcess?.pid && workerProcess.exitCode == null && workerProcess.signalCode == null && !exited)
-        || (!workerProcess && treeStopError)) detached?.deferArtifactSettlement?.();
+      const exitUnconfirmed = (workerProcess?.pid && workerProcess.exitCode == null && workerProcess.signalCode == null && !exited)
+        || (!workerProcess && treeStopError);
+      if (exitUnconfirmed) detached?.deferArtifactSettlement?.();
+      else if (localArtifacts) await fs.promises.rm(localArtifacts.folder, { recursive: true, force: true }).catch(() => {});
       controlClient?.close();
     }
     team?.release(id);

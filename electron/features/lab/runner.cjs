@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
+const { readEnvelope } = require('../agents/dispatch-events.cjs');
 const { LabUsage, phaseEvidence } = require('./usage.cjs');
 const { LabSession, recoverRuns } = require('./session.cjs');
 const { dispatch, taskBrief } = require('./dispatch.cjs');
@@ -219,7 +220,8 @@ async function runTask(options) {
           throw error;
         });
         const entries = text.split('\n').filter(Boolean).flatMap(line => {
-          try { return [JSON.parse(line)]; } catch { return []; }
+          try { return [readEnvelope(line, { channel: 'journal.jsonl' }).value]; }
+          catch (error) { if (error.code === 'wire.unsupported_version') throw error; return []; }
         });
         Object.assign(result, phaseEvidence(entries, measured.calls));
         await fs.writeFile(path.join(artifacts, 'journal.jsonl'), text, { mode: 0o600 });

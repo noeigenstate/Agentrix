@@ -12,6 +12,8 @@ const { execFileSync } = require('node:child_process');
 const { createHmac, randomUUID } = require('node:crypto');
 const { run, runDetached, detachedRuns } = require('../integration/dispatch.cjs');
 const { createRoleTools } = require('../integration/role-tools.cjs');
+const { roleResultServer } = require('../integration/role-artifacts.cjs');
+const { started: dispatchStarted } = require('./helpers/dispatch-events.cjs');
 const { workerPermission } = require('../integration/agent-event.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
@@ -112,7 +114,8 @@ async function fixture(t, { detached = false, screenMonitoring = false, now, per
   terminals.register({ handle: registerChannel, listen: registerChannel });
   if (screenMonitoring) observeWorkerMenus({ onWorkerScreen: listener => { screenListener = listener; },
     reportWorkerMenu: channels['worker-terminal:menu'] }, (cols, rows) => new Terminal({ cols, rows, scrollback: 0 }));
-  registerClaudeWorker({ control, claude: {}, settings: () => assert.fail('a terminal worker reads no Claude path setting'), terminals });
+  registerClaudeWorker({ control, claude: {}, settings: () => assert.fail('a terminal worker reads no Claude path setting'), terminals,
+    roleResultServer: (id, folder) => roleResultServer(path.resolve('integration/dispatch.cjs'), id, folder) });
   const brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic terminal task');
   let stdout = '', finished = false;
@@ -150,7 +153,7 @@ test('a hidden terminal owner prompt reaches the real detached receipt and wakes
   fs.writeFileSync(f.parent.bootstrap + '.seats', JSON.stringify({ reviewer: { model: 'sonnet', effort: 'high' } }));
   const { tools } = createRoleTools({ env: f.parent.env, cwd: f.repo, engine: (args, deps) => {
     if (args[0] === 'wait') return run(args, deps);
-    deps.stdout.write('[dispatch] started ' + f.id + ' claude\n');
+    deps.onEvent(dispatchStarted(f.id, 'claude'));
     return 0;
   } });
   await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Inspect', readOnly: true });
@@ -200,7 +203,7 @@ async function menuFixture(t, permissionClock) {
   fs.writeFileSync(f.parent.bootstrap + '.seats', JSON.stringify({ developer: { model: 'sonnet', effort: 'high' } }));
   const { tools } = createRoleTools({ env: f.parent.env, cwd: f.repo, engine: (args, deps) => {
     if (args[0] === 'wait') return run(args, deps);
-    deps.stdout.write('[dispatch] started ' + f.id + ' claude\n');
+    deps.onEvent(dispatchStarted(f.id, 'claude'));
     return 0;
   } });
   await tools.start_role({ seat: 'developer', title: 'Build', brief: 'Inspect', allow: ['src/**'] });
@@ -278,7 +281,7 @@ test('a worker permission hook denies without interrupting the turn and reports 
   assert.equal(hook.hookEventName, 'PermissionRequest');
   assert.equal(hook.decision.behavior, 'deny');
   assert.equal(hook.decision.interrupt, false);
-  assert.match(hook.decision.message, /Continue without it.*## Needs approval/);
+  assert.match(hook.decision.message, /Continue without it.*finish_role\.needsApproval/);
   const expected = [{ reason: 'needs approval', action: 'Write: private-notes.txt' }];
   const refused = receipt(entry => entry?.refused?.length ? entry.refused : undefined);
   assert.equal(f.terminals.event(event), true);
@@ -409,7 +412,11 @@ test("billing follows the lead's mode and no client identity is set", async t =>
   for (const flag of ['-p', '--print', '--output-format', '--input-format']) assert.ok(!args.includes(flag), `no ${flag}`);
   assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), ['--permission-mode', 'acceptEdits']);
   const shells = process.platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
-  assert.equal(args[args.indexOf('--allowedTools') + 1], shells.join(','));
+  assert.equal(args[args.indexOf('--allowedTools') + 1], [...shells, 'mcp__agentrix_role__finish_role'].join(','));
+  assert.ok(args.includes('--strict-mcp-config'));
+  const config = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'));
+  assert.deepEqual(Object.keys(config.mcpServers), ['agentrix_role']);
+  assert.deepEqual(config.mcpServers.agentrix_role.args.slice(1, 3), ['mcp-role', f.id]);
   assert.equal(args[args.indexOf('--disallowedTools') + 1], ['EnterPlanMode',
     ...shells.flatMap(shell => [`${shell}(git commit *)`, `${shell}(git push *)`, `${shell}(git reset *--hard*)`])].join(','));
   assert.ok(!args.includes('--tools'));

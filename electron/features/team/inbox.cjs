@@ -4,7 +4,7 @@ const { readEnvelope, WIRE_FIELDS } = require('../agents/dispatch-events.cjs');
 
 const MAX_INBOX = 4 * 1024 * 1024;
 const BOARD_FORMAT = 'agentrix.board';
-const boardFields = WIRE_FIELDS.files[BOARD_FORMAT] ?? WIRE_FIELDS.files['agentrix.board-entry'];
+const boardFields = WIRE_FIELDS.files[BOARD_FORMAT];
 const runId = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
 const validText = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 4000 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 const withdrawalOf = control => ({ id: control.id, type: 'withdrawn', at: control.at });

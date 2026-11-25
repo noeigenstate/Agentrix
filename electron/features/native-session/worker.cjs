@@ -1,4 +1,5 @@
 const { randomUUID } = require('node:crypto');
+const path = require('node:path');
 const { exact, text, assert } = require('./validate.cjs');
 const { choosePath } = require('./routing.cjs');
 const { createEventStream } = require('./events.cjs');
@@ -6,11 +7,12 @@ const { validModel, EFFORT } = require('../skills/seat-rules.mjs');
 const { READ_ONLY_MODE } = require('../claude-runtime/decide.cjs');
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // terminals: main's worker terminals (worker-terminals/BOUNDARY.md); a local terminal lead's worker runs in one of them.
-function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env }) {
+function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env, roleResultServer }) {
   return control.onRequest('claude-sdk.run', async (run, payload, stream) => {
-    assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission']) && text(payload.prompt) &&
+    assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission', 'roleResultFolder']) && text(payload.prompt) &&
       (payload.model === undefined || validModel(payload.model)) && (payload.effort === undefined || typeof payload.effort === 'string' && EFFORT.test(payload.effort))
       && (payload.fast === undefined || typeof payload.fast === 'boolean')
+      && (payload.roleResultFolder === undefined || text(payload.roleResultFolder, 4096) && path.isAbsolute(payload.roleResultFolder))
       && (payload.permission == null || ['plan', READ_ONLY_MODE, 'acceptEdits'].includes(payload.permission)) && (payload.resume == null || SESSION_ID.test(payload.resume)));
     const runtimeSessionId = randomUUID();
     const runtimeEnv = { ...env(run) };
@@ -23,6 +25,7 @@ function registerClaudeWorker({ control, claude, settings, terminals = null, con
     // Only a local terminal lead's worker is billed like its terminal; an SSH one keeps the CLI path.
     const terminal = run.leadMode === 'terminal' && run.local === true && terminals;
     if (run.leadMode === 'terminal' && !terminal) { pathEvent('terminal lead (subscription)'); return; }
+    if (payload.roleResultFolder) spec.roleServer = roleResultServer?.(run.runId, payload.roleResultFolder);
     let claudePath = null;
     if (!terminal) {
       await claude.refreshAvailability?.();

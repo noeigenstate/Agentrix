@@ -165,7 +165,7 @@ function workerPermission(input, projectId, sessionKey) {
   const command = typeof tool?.command === 'string' && ['Bash', 'PowerShell'].includes(hook.tool_name) ? tool.command : null;
   const paths = [tool?.file_path, tool?.path, tool?.notebook_path].filter(value => typeof value === 'string');
   const action = deniedAction({ toolName: hook.tool_name, command, paths });
-  const message = 'This action is not allowed in this role. Continue without it and list it under ## Needs approval.';
+  const message = 'This action is not allowed in this role. Continue without it and record it in finish_role.needsApproval.';
   return { output: { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message, interrupt: false } } },
     event: { ...event, workerRefused: action } };
 }

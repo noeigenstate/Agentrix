@@ -64,7 +64,8 @@ class RemoteFilesTest(unittest.TestCase):
     def test_codex_resolution_uses_login_shell_and_preserves_missing_reason(self):
         executable = str(Path(sys.executable).resolve())
         found = lambda stdout, stderr=b"", code=0: mock.Mock(stdout=stdout, stderr=stderr, returncode=code)
-        output = b"startup noise\nAGENTRIX_PATH=/not/this\n" + os.fsencode(executable) + b"\nAGENTRIX_CODEX=" + os.fsencode(executable) + b"\nAGENTRIX_PATH=/home/u/.nvm/bin:/usr/bin\nbye\n"
+        output = b"startup noise\nAGENTRIX_PATH=/not/this\n" + os.fsencode(executable) + b"\nAGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=" \
+            + os.fsencode(executable) + b"\nAGENTRIX_PATH=/home/u/.nvm/bin:/usr/bin\nbye\n"
         with mock.patch.object(remote.subprocess, "run", return_value=found(output)) as run:
             self.assertEqual(remote.resolve_codex(dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)), (executable, {"PATH": "/home/u/.nvm/bin:/usr/bin"}))
             self.assertEqual(run.call_args.args[0][:2], ["/bin/bash", "-lic"])
@@ -73,7 +74,7 @@ class RemoteFilesTest(unittest.TestCase):
             self.assertTrue(run.call_args.kwargs["start_new_session"])
             self.assertNotIn("universal_newlines", run.call_args.kwargs, "bytes: a session without LANG decodes text as ASCII on 3.6")
         # A bare path printed by a startup file is not the lookup's answer.
-        with mock.patch.object(remote.subprocess, "run", return_value=found(os.fsencode(executable) + b"\nAGENTRIX_CODEX=\nAGENTRIX_PATH=/usr/bin\n")):
+        with mock.patch.object(remote.subprocess, "run", return_value=found(os.fsencode(executable) + b"\nAGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=\nAGENTRIX_PATH=/usr/bin\n")):
             with self.assertRaisesRegex(ValueError, "type -P codex") as failure: remote.resolve_codex({})
             self.assertEqual(failure.exception.code, "codex_cli_required")
         # A startup file that runs exec or exit ends the shell before the lookup: its exit and last words, not "install Codex".
@@ -84,7 +85,8 @@ class RemoteFilesTest(unittest.TestCase):
     def test_codex_resolution_keeps_a_chinese_startup_output_and_a_non_ascii_path_byte_for_byte(self):
         executable = str(Path(sys.executable).resolve())
         login_path = "/home/用户/工具/bin:/usr/bin".encode("utf-8")
-        output = "欢迎回来，今天是星期三\n".encode("utf-8") + b"AGENTRIX_CODEX=" + os.fsencode(executable) + b"\nAGENTRIX_PATH=" + login_path + b"\n"
+        output = "欢迎回来，今天是星期三\n".encode("utf-8") + b"AGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=" \
+            + os.fsencode(executable) + b"\nAGENTRIX_PATH=" + login_path + b"\n"
         with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout=output, stderr="提示\n".encode("utf-8"), returncode=0)):
             file, login = remote.resolve_codex({})
         self.assertEqual(file, executable)
@@ -195,7 +197,7 @@ class RemoteFilesTest(unittest.TestCase):
         node = Path(self.temp.name) / "node"
         node.touch()
         node.chmod(0o700)
-        lookup = "AGENTRIX_CODEX=\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n" % (node, node.parent)
+        lookup = "AGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n" % (node, node.parent)
         results = [subprocess.CompletedProcess([], 0, lookup.encode(), b""), subprocess.CompletedProcess([], 0)]
         with mock.patch.object(remote.subprocess, "run", side_effect=results) as run, mock.patch.object(remote.shutil, "which", return_value=None):
             with mock.patch.object(self.worker, "git_version", return_value=(2, 43, 0)) as git:
@@ -472,8 +474,8 @@ class RemoteFilesTest(unittest.TestCase):
     def test_notify_shell_events_name_claude_and_default_to_codex(self):
         for args, expected in ((["agent-started", "--version", "claude"], {"agent": "claude", "command": "--version"}),
                                (["agent-exited", "7", "claude"], {"agent": "claude", "exitCode": 7}),
-                               (["codex-started", "--version", "claude"], {"type": "agent-started", "agent": "claude", "command": "--version"}),
-                               (["codex-exited", "7", "claude"], {"type": "agent-exited", "agent": "claude", "exitCode": 7}),
+                               (["codex-started", "--version", "claude"], {"type": "codex-started", "agent": "claude", "command": "--version"}),
+                               (["codex-exited", "7", "claude"], {"type": "codex-exited", "agent": "claude", "exitCode": 7}),
                                (["agent-started", ""], {"agent": "codex"}), (["agent-exited", "0"], {"agent": "codex", "exitCode": 0}),
                                (["shell-prompt", "0", "1"], {"codexAvailable": False, "claudeAvailable": True})):
             client = mock.MagicMock(); client.__enter__.return_value = client
