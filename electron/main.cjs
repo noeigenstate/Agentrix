@@ -50,7 +50,8 @@ const { SkillsStore, probeCodex, probeClaude } = require('./features/skills/stor
 const { writeFileAtomic } = require('./atomic-write.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
-const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
+const { writeHandoff, startupNote, startupNoteFields } = require('./features/agents/handoff.cjs');
+const { writeSeatMap } = require('./features/agents/call-seat.cjs');
 const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { createDispatchIntake } = require('./features/agents/dispatch-intake.cjs');
@@ -542,14 +543,16 @@ function startSkillSession(project, s, sequence, started = true) {
   s.skillSessionId = randomUUID();
   const remote = project.kind === 'ssh';
   const delivery = skills.delivery(project, remote, s.skillSessionId, { agent: s.agent, started });
-  const note = startupNote(READING_NOTE, remote ? '{AGENTRIX_HANDOFF}' : handoffFile(s.terminalId),
-    (remote ? path.posix : path).join(project.path, 'skills'), delivery, remote ? '{AGENTRIX_DISPATCH}' : null);
   if (remote) {
+    const note = startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}');
     void s.terminal.request('skill-note', { sequence, note, skills: delivery.bundle }).then(paths => {
       if (s.terminal.info) s.terminal.info.skills = paths;
     }).catch(report);
   } else {
-    writeFileAtomic(s.skillNoteFile, note); s.skillNote = note;
+    const note = startupNoteFields(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), delivery);
+    writeFileAtomic(s.skillNoteFile, note.full);
+    if (s.bootstrapFile) writeFileAtomic(s.bootstrapFile + '.launch-note', note.launch);
+    s.skillNote = note.full;
   }
 }
 
@@ -597,9 +600,13 @@ function refreshSkillNotes() {
       }
     }
     if (!s.skillNoteFile || s.cliActive) continue;
-    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
+    const note = startupNoteFields(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
       skills.delivery(project, false, s.sessionId, { agent: 'claude' }));
-    if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
+    if (note.full !== s.skillNote) {
+      writeFileAtomic(s.skillNoteFile, note.full);
+      if (s.bootstrapFile) writeFileAtomic(s.bootstrapFile + '.launch-note', note.launch);
+      s.skillNote = note.full;
+    }
   }
   return remoteWrites.length ? Promise.allSettled(remoteWrites) : null;
 }
@@ -1341,7 +1348,7 @@ function wireNativeSessions(directory, codex, codexFactory) {
       const delivery = skills.delivery(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
       Object.assign(spec, { skillSessionId, model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
         seatsMap: delivery?.agentSeats,
-        env: { ...spec.env, AGENTRIX_SEATS: JSON.stringify(delivery?.agentSeats ?? null) } });
+        env: { ...spec.env, AGENTRIX_SEATS: project.kind === 'ssh' ? JSON.stringify(delivery?.agentSeats ?? null) : writeSeatMap(delivery?.agentSeats) } });
       nativePolicy.observeSubagents?.(spec, nativeSubagent);
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
         delivery);
@@ -1468,9 +1475,11 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
-    env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
+    const note = startupNoteFields(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
       skills.delivery(project, false, sessionId, { agent: 'claude' }));
-    writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
+    env.AGENTRIX_READING_NOTE = note.full;
+    writeFileAtomic(skillNoteFile, note.full);
+    writeFileAtomic(bootstrapFile + '.launch-note', note.launch);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
   }

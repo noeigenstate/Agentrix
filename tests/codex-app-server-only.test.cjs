@@ -32,15 +32,17 @@ test('product Codex command builders cannot restore exec or terminal input', () 
 test('Agentrix injected shells never start a Codex TUI: a typed codex runs the CLI only for its management commands', () => {
   const { TERMINAL_COMMANDS } = require('./fixtures/codex-terminal-commands.cjs');
   const { terminalLaunch } = require('../integration/shims/intercept.cjs');
+  const { readKeyValue } = require('../electron/features/agents/dispatch-events.cjs');
   const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
   // Whatever starts or continues a conversation, as `codex --help` of 0.167.0 lists it, with the options that take a prompt.
   const conversational = ['exec', 'e', 'review', 'resume', 'fork', 'agents', 'queue', 'cloud', 'mcp-server',
     '-m', '--model', '-c', '--config', '-p', '--profile', '-i', '--image'];
   assert.deepEqual(TERMINAL_COMMANDS.filter(word => conversational.includes(word)), []);
   assert.deepEqual(adapterOf('codex').manifest.words.utilities, TERMINAL_COMMANDS);
-  for (const word of TERMINAL_COMMANDS) assert.equal(terminalLaunch({}, 'codex', 'classify', '', [word]), 'passthrough', word);
-  for (const word of conversational) assert.equal(terminalLaunch({}, 'codex', 'classify', '', [word]), 'native', word);
-  assert.equal(terminalLaunch({}, 'codex', 'classify', '', []), 'native');
+  const classify = args => readKeyValue(terminalLaunch({}, 'codex', 'classify', '', args), { format: 'agentrix.launch-route' }).route;
+  for (const word of TERMINAL_COMMANDS) assert.equal(classify([word]), 'passthrough', word);
+  for (const word of conversational) assert.equal(classify([word]), 'native', word);
+  assert.equal(classify([]), 'native');
   for (const file of ['bootstrap.ps1', 'bash-integration.bash', 'zsh-integration.zsh', 'remote-worker.py']) {
     const source = fs.readFileSync(path.join(__dirname, '../integration', file), 'utf8');
     assert.match(source, /agentrix_agent codex/, file + ' uses the classifier');

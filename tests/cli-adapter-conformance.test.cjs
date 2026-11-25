@@ -10,6 +10,7 @@ const { terminalLine } = require('../electron/features/cli-adapters/terminal.cjs
 const { translate } = require('../electron/i18n.cjs');
 const { createScreenSelectors } = require('../src/features/cli-screens/index.ts');
 const { terminalLaunch } = require('../integration/shims/intercept.cjs');
+const { readEnvelope, readKeyValue } = require('../electron/features/agents/dispatch-events.cjs');
 const { screen } = require('./fixtures/terminal-example-screen.ts');
 
 const fixture = path.join(__dirname, 'fixtures/terminal-example.cjs');
@@ -40,10 +41,12 @@ test('a terminal-only adapter is found on PATH and launches without a resume fac
   assert.equal(terminalLine(adapter), command + '\r');
   assert.equal(terminalLine(adapter, { id: 'old' }), command + '\r');
   const lookup = id => id === command ? adapter : undefined;
-  assert.equal(terminalLaunch({}, command, 'classify', 'terminal', [], lookup), 'conversation');
-  assert.equal(terminalLaunch({}, command, 'classify', 'terminal', ['--version'], lookup), 'passthrough');
-  const [separator, ...argv] = JSON.parse(terminalLaunch({}, command, 'json', 'terminal', [], lookup));
-  assert.deepEqual([separator, ...argv], ['--', '--interactive']);
+  const classify = args => readKeyValue(terminalLaunch({}, command, 'classify', 'terminal', args, lookup), { format: 'agentrix.launch-route' }).route;
+  assert.equal(classify([]), 'conversation');
+  assert.equal(classify(['--version']), 'passthrough');
+  const { value: plan } = readEnvelope(terminalLaunch({}, command, 'json', 'terminal', [], lookup), { legacy: false });
+  assert.deepEqual(plan, { v: 1, type: 'launch.words', unset: [], env: {}, argv: ['--interactive'] });
+  const { argv } = plan;
   const rows = execFileSync(process.execPath, [fixture, ...argv], { encoding: 'utf8' }).split(/\r?\n/);
   const selectors = createScreenSelectors(id => id === manifest.id ? screen : undefined, () => false);
   assert.equal(selectors.cliInputAvailable(command, rows), true);

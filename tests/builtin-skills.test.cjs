@@ -9,7 +9,7 @@ const { renderRoutingSkill } = require('../electron/features/skills/skill-render
 const modelSeats = require('../electron/features/skills/model-seats.cjs');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { MAX_BYTES } = require('../electron/features/skills/files.cjs');
-const { startupNote } = require('../electron/features/agents/handoff.cjs');
+const { startupNote, startupNoteFields } = require('../electron/features/agents/handoff.cjs');
 
 const resources = path.join(__dirname, '../resources/skills');
 const body = '# Example skill\n\n## When this applies\n\nUse when the task fits.\n\n## What to do\n\n1. Read the task and follow the procedure.\n\n## Rules\n\n- Preserve existing behavior.\n\n## Done when\n\n- The checks pass and the result is reported.\n';
@@ -412,7 +412,8 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} first run is cl
     ['idle', { projectId: projects[1].id, terminalId: 'idle', sessionId: 'idle', skillNoteFile: 'idle.txt' }]]), written = new Map();
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const refresh = vm.runInNewContext('(' + main.slice(main.indexOf('function refreshSkillNotes()'), main.indexOf('// Workspace broadcasts')) + ')', {
-    sessions, store: { projects }, skills: store, startupNote, path, integrationDir: '/synthetic/integration', handoffFile: () => null, READING_NOTE: 'Read.', writeFileAtomic: (file, text) => written.set(file, text),
+    sessions, store: { projects }, skills: store, startupNoteFields, path, integrationDir: '/synthetic/integration',
+    handoffFile: () => null, READING_NOTE: 'Read.', writeFileAtomic: (file, text) => written.set(file, text),
   });
   refresh();
   assert.equal(written.has('one.txt'), false); assert.equal(written.has('two.txt'), false);
@@ -463,7 +464,7 @@ for (const trigger of ['always', 'first-open']) test(`simultaneous launches clai
   const project = projects[0], id = 'builtin:code-standard';
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let serial = 0;
-  const context = vm.createContext({ skills: store, randomUUID: () => `agent-${++serial}`, path, integrationDir: '/synthetic/integration', startupNote, READING_NOTE: 'Read.',
+  const context = vm.createContext({ skills: store, randomUUID: () => `agent-${++serial}`, path, startupNoteFields, READING_NOTE: 'Read.',
     handoffFile: () => null, writeFileAtomic: put, report: error => { throw error; } });
   vm.runInContext(main.slice(main.indexOf('function startSkillSession('), main.indexOf('// Wrappers reread idle')), context);
   const shell = terminalId => ({ projectId: project.id, terminalId, sessionId: terminalId, agent: 'codex', skillNoteFile: path.join(root, `${terminalId}.txt`) });

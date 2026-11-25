@@ -39,21 +39,38 @@ test('missing Claude at the first prompt points to the machine that runs it', ()
   }
 });
 
-test('bootstrap writes and refreshes four lead lines for fresh and resumed terminal launches', t => {
-  const { writeBootstrap, updateBootstrapLead, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+test('bootstrap writes and refreshes versioned lead and mode sidecars alongside the legacy files', t => {
+  const { writeBootstrap, updateBootstrapLead, updateBootstrapMode, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+  const { readEnvelope, readLeadSeat, readSessionMode } = require('../electron/features/agents/dispatch-events.cjs');
+  const { claudeLeadSeat } = require('../electron/features/agents/call-seat.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-lead-')), file = path.join(root, 'bootstrap.json');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const lead = { model: 'claude-opus-5[1m]', effort: 'adaptive', fast: true };
   writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead });
   assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-5[1m]\nadaptive\n1\nnull\n');
   const bytes = fs.readFileSync(file, 'utf8');
+  assert.equal(readEnvelope(bytes, { format: 'agentrix.bootstrap' }).version, 1);
+  assert.equal(readSessionMode(fs.readFileSync(file + '.mode.env', 'utf8')), 'native');
+  fs.rmSync(file + '.mode.env');
+  assert.equal(updateBootstrapMode(file, false), false, 'backfills a sidecar without reporting a mode switch');
+  assert.equal(updateBootstrapMode(file, true), true);
+  assert.equal(readSessionMode(fs.readFileSync(file + '.mode.env', 'utf8')), 'conductor');
+  assert.equal(fs.readFileSync(file + '.mode', 'utf8'), 'conductor\n');
+  assert.deepEqual(readLeadSeat(fs.readFileSync(file + '.lead.env', 'utf8')), { ...lead, ultracode: false, seatsMap: null });
   updateBootstrapLead(file, { model: 'sonnet', effort: 'high', fast: false, seatsMap: { researcher: { model: 'sonnet', effort: 'high' } } });
   assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'sonnet\nhigh\n0\n{"researcher":{"model":"sonnet","effort":"high"}}\n');
+  fs.writeFileSync(file + '.lead', 'opus\nlow\n0\nnull\n');
+  assert.equal(claudeLeadSeat(file).model, 'sonnet');
+  fs.writeFileSync(file + '.lead.env', 'format=agentrix.lead-seat\nversion=2\n');
+  assert.equal(claudeLeadSeat(file), null);
+  fs.rmSync(file + '.lead.env');
+  assert.equal(claudeLeadSeat(file).model, 'opus');
   assert.throws(() => updateBootstrapLead(file, { ...lead, model: 'invalid\nline' }), /Invalid lead seat/);
   updateBootstrapLead(file, null);
   assert.equal(fs.readFileSync(file + '.lead', 'utf8'), '');
   assert.equal(fs.readFileSync(file, 'utf8'), bytes);
-  removeBootstrap(file); assert.equal(fs.existsSync(file + '.lead'), false);
+  removeBootstrap(file);
+  assert.deepEqual(fs.readdirSync(root), []);
 });
 
 function nativeSeatStart(skills) {

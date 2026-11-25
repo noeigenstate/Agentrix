@@ -238,7 +238,8 @@ test('Codex dispatch resolves its seat before admission through the private boot
   }
   updateDispatchSeats(file, { developer });
   assert.throws(() => argumentsOf(oldFlags, env), /uses claude/);
-  assert.equal(updateDispatchSeats(file, { ...seats, padding: '\u754c'.repeat(3000) }), 'null');
+  assert.deepEqual(JSON.parse(updateDispatchSeats(file, { ...seats, padding: '\u754c'.repeat(3000) })),
+    { format: 'agentrix.seat-map', version: 1, seats: null });
   assert.equal(argumentsOf(argv, env).model, launch.model);
   assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, launch.model);
   removeBootstrap(file);
@@ -258,7 +259,7 @@ test('a Windows sharing violation retries the atomic seat write', { skip: proces
   });
   updateDispatchSeats(file, { developer });
   assert.equal(attempts, 3);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file + '.seats', 'utf8')), { developer });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file + '.seats', 'utf8')), { format: 'agentrix.seat-map', version: 1, seats: { developer } });
   assert.deepEqual(fs.readdirSync(directory), ['dispatch.json.seats']);
 });
 

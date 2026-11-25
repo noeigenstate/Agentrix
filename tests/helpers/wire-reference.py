@@ -52,6 +52,29 @@ def key_values(text, case, versions):
     return values
 
 
+def launch_words(text, case, versions):
+    rows = text.split("\0")
+    if rows.pop() != "":
+        raise ValueError("wire.invalid", "expected NUL-terminated words")
+    header = []
+    plan = {"v": 1, "type": "launch.words", "unset": [], "env": {}, "argv": []}
+    for row in rows:
+        key, equals, value = row.partition("=")
+        if not equals:
+            raise ValueError("wire.invalid", "invalid launch word")
+        if key in ("format", "version"):
+            header.append(row)
+        elif key == "unset":
+            plan["unset"].append(value)
+        elif key == "env":
+            name, _, content = value.partition("=")
+            plan["env"][name] = content
+        elif key == "arg":
+            plan["argv"].append(value)
+    key_values("\n".join(header), case, versions)
+    return plan
+
+
 def fixture_text(case):
     text = case["input"]
     if "repeat" in case:
@@ -64,7 +87,7 @@ def run_case(case):
     channel = case.get("channel") or case.get("format") or ("JSONL" if case["kind"] == "envelope" else "key=value")
     versions = case.get("versions", [1])
     try:
-        reader = envelope if case["kind"] == "envelope" else key_values
+        reader = {"envelope": envelope, "kv": key_values, "words": launch_words}[case["kind"]]
         return {"value": reader(text, case, versions)}
     except ValueError as error:
         if len(error.args) not in (2, 3):

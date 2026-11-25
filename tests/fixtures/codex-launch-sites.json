@@ -552,8 +552,8 @@
     "id": "integration/shims/intercept.cjs:95cbe4e67d000ee4c67a4da6"
   },
   {
-    "text": "terminal.launch({ ...plan, seat: { model, effort }, note, roleError: remote ? roleError : undefined, hooks: { file }, remote })",
-    "id": "integration/shims/intercept.cjs:8e11bb0abfd74ba577917389"
+    "text": "terminal.launch({ roleTools, seat: { model, effort }, note, roleError: remote ? roleError : undefined, hooks: { file }, remote })",
+    "id": "integration/shims/intercept.cjs:815704b287265715005184f7"
   },
   {
     "text": "run()",

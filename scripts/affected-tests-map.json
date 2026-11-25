@@ -388,7 +388,7 @@
     "electron/events.cjs": {
       "targets": [],
       "reason": "Socket address helper loads only Node path and os builtins.",
-      "digest": "1a4555cdf3f8fb50686e165eefa5c82b4d915603e8e319c613d2e725d0e5d0a5"
+      "digest": "d2ecb9a463fd55b521033953afa201fde17f4553194849a7c9948bd43d6ddb66"
     },
     "electron/features/lab/process.cjs": {
       "targets": [
@@ -420,11 +420,12 @@
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "7b134d3aaa884ca83a8259c0ff1217b0a4be4811598698eb4093be37a00bc4f3",
+      "digest": "14363f265c76aea6037685cb36e879556e220a60d588bac2359aaef61205039c",
       "targets": [
         "electron/features/skills/session.cjs",
         "electron/features/skills/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
+        "electron/features/agents/dispatch-events.cjs",
         "electron/features/agents/start-failure.cjs"
       ],
       "reason": "The packaged runtime root is electron."
@@ -462,7 +463,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "e1667bcd471e889ef10242d90cbfc62567f970517af610d93e6865302e8d9af1",
+      "digest": "b3ea4fb2cb66d055adc682b8b0a3be98a582127cdb20f4b0a8b7a4c67b66085a",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
@@ -484,10 +485,11 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "575ad8a362b9ebb18007e449c671fdaf0df160e98a4b5bb18507312a0be92520",
+      "digest": "8007884d24316140de5aaffea61295d598cbc663ce6fb8fea3601e68495df387",
       "targets": [
         "integration/dispatch.cjs",
         "electron/features/agents/call-seat.cjs",
+        "electron/features/agents/dispatch-events.cjs",
         "electron/features/cli-adapters/registry.mjs",
         "electron/features/cli-adapters/terminal.cjs"
       ],

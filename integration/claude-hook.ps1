@@ -149,6 +149,7 @@ try {
         } catch { }
     }
     $eventData = @{
+        v = 1
         projectId = $ProjectId
         sessionKey = $SessionKey
         type = 'agent-activity'

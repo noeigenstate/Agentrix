@@ -4,6 +4,15 @@
 $OutputEncoding = [Console]::OutputEncoding
 . (Join-Path $PSScriptRoot 'refresh-path.ps1')
 $global:AgentrixSession = Get-Content -LiteralPath $env:AGENTRIX_BOOTSTRAP -Raw -Encoding UTF8 | ConvertFrom-Json
+$bootstrapVersion = $global:AgentrixSession.version
+if ($global:AgentrixSession.PSObject.Properties['version'] -and
+    (($bootstrapVersion -isnot [int] -and $bootstrapVersion -isnot [double]) -or $bootstrapVersion -ne 1 -or
+        $global:AgentrixSession.format -cne 'agentrix.bootstrap')) {
+    throw 'Unsupported Agentrix bootstrap format or version.'
+}
+if ($global:AgentrixSession.PSObject.Properties['format'] -and $global:AgentrixSession.format -cne 'agentrix.bootstrap') {
+    throw 'Unsupported Agentrix bootstrap format.'
+}
 # The shim folder goes only to the Claude Code the claude wrapper starts (Set-AgentrixPlanner): this terminal, its scripts and
 # whatever else it runs find the real CLIs, and Find-AgentrixProgram skips the folder too.
 Remove-Item Env:AGENTRIX_DISPATCH_DEPTH, Env:AGENTRIX_RUN_ID, Env:AGENTRIX_RUN_PROOF, Env:AGENTRIX_SHIM_NODE -ErrorAction SilentlyContinue
@@ -56,34 +65,69 @@ function global:Get-AgentrixHookProxy {
 }
 
 function global:Get-AgentrixReadingNote {
+    if ($env:AGENTRIX_BOOTSTRAP) {
+        try { return [IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.launch-note', [Text.Encoding]::UTF8) } catch { }
+    }
     if ($env:AGENTRIX_READING_NOTE_FILE) {
         try { return [IO.File]::ReadAllText($env:AGENTRIX_READING_NOTE_FILE, [Text.Encoding]::UTF8) } catch { }
     }
     return $env:AGENTRIX_READING_NOTE
 }
 
-# Native mode: the lead is the plain CLI, so its own --model and --effort are the owner's to give.
-function global:Test-AgentrixNativeMode {
-    if (-not $env:AGENTRIX_BOOTSTRAP) { return $false }
-    try { return ([IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.mode').Trim() -ceq 'native') } catch { return $false }
+function global:ConvertFrom-AgentrixWireFields([string]$Text, [string]$Format) {
+    if ([Text.Encoding]::UTF8.GetByteCount($Text) -gt 16384) { return }
+    $Text = $Text.TrimStart([char]0xFEFF)
+    if ($Text.EndsWith("`n")) { $Text = $Text.Substring(0, $Text.Length - 1) }
+    $fields = @{}
+    foreach ($line in $Text.Split([char]10)) {
+        $key, $value = $line -csplit '=', 2
+        if ($key -cnotmatch '\A[a-z][a-z0-9_]*\z' -or $null -eq $value -or $value -match '[\r\x00]' -or $fields.ContainsKey($key)) { return }
+        $fields[$key] = $value
+    }
+    if ($fields.format -ceq $Format -and $fields.ContainsKey('version')) { return $fields }
+}
+
+function global:Get-AgentrixSessionMode {
+    if (-not $env:AGENTRIX_BOOTSTRAP) { return }
+    try {
+        $text = [IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.mode.env', [Text.Encoding]::UTF8)
+        $fields = ConvertFrom-AgentrixWireFields $text 'agentrix.session-mode'
+        if ($fields.version -ceq '1' -and $fields.mode -cin @('native', 'conductor')) { return $fields.mode }
+    } catch [IO.FileNotFoundException] {
+        try { return [IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.mode').Trim() } catch { }
+    } catch { }
+}
+
+function global:Get-AgentrixLeadFields {
+    try {
+        $text = [IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.lead.env', [Text.Encoding]::UTF8)
+        $fields = ConvertFrom-AgentrixWireFields $text 'agentrix.lead-seat'
+        if ($fields -and $fields.version -cne '1') {
+            Write-Host '座位文件版本不受支持'
+            return
+        }
+        if ($fields.ultracode -cmatch '\A[01]\z' -and $fields.seats) { return $fields }
+    } catch [IO.FileNotFoundException] {
+        try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { return }
+        if ($lead.Length -lt 3) { return }
+        # Old files put the seat map on line 6, after two retired fields.
+        $seatIndex = if ($lead.Length -ge 6) { 5 } else { 3 }
+        return @{ model = $lead[0]; effort = $lead[1]; fast = $lead[2]; seats = $lead[$seatIndex]
+            ultracode = [int]($lead.Length -eq 5 -and $lead[4] -ceq 'ultracode') }
+    } catch { }
 }
 
 function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
     $launch = @{ Model = ''; Effort = ''; Env = @{}; HookSettings = $Hooks.settings; Ultracode = $false }
     if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
     $launch.Env.AGENTRIX_SEATS = 'null'
-    $lead = $null
-    try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
+    $lead = Get-AgentrixLeadFields
     $modelPattern = '\A[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}\z'
-    if ($lead.Length -lt 3 -or $lead[0] -cnotmatch $modelPattern -or
-        $lead[1] -cnotmatch '^[a-z][a-z0-9-]{0,31}$' -or $lead[2] -cnotmatch '^[01]$') { return $launch }
-    $launch.Model = $lead[0]; $launch.Effort = $lead[1]
-    if ($lead[2] -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
-    # Old files put the seat map on line 6, after two retired fields.
-    $seatIndex = if ($lead.Length -ge 6) { 5 } else { 3 }
-    if ($lead.Length -gt $seatIndex -and $lead[$seatIndex] -like '{*') { $launch.Env.AGENTRIX_SEATS = $lead[$seatIndex] }
-    $launch.Ultracode = $lead.Length -eq 5 -and $lead[4] -ceq 'ultracode' -and
-        (Get-Content -LiteralPath ($env:AGENTRIX_BOOTSTRAP + '.mode') -TotalCount 1 -ErrorAction SilentlyContinue) -ceq 'conductor'
+    if (-not $lead -or $lead.model -cnotmatch $modelPattern -or $lead.effort -cnotmatch '^[a-z][a-z0-9-]{0,31}$' -or $lead.fast -cnotmatch '^[01]$') { return $launch }
+    $launch.Model = $lead.model; $launch.Effort = $lead.effort
+    if ($lead.fast -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
+    if ($lead.seats -like '{*') { $launch.Env.AGENTRIX_SEATS = $lead.seats }
+    $launch.Ultracode = $lead.ultracode -eq '1' -and (Get-AgentrixSessionMode) -ceq 'conductor'
     return $launch
 }
 
@@ -91,6 +135,7 @@ function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
 function global:Invoke-AgentrixLaunchPlan([string[]]$Words, [hashtable]$Fields = @{}) {
     $previous = @{}
     $Fields.ELECTRON_RUN_AS_NODE = '1'
+    $Fields.AGENTRIX_LAUNCH_WIRE = '1'
     $Fields.AGENTRIX_INTERCEPT_ARGV = ConvertTo-Json -InputObject $Words -Compress
     try {
         foreach ($name in $Fields.Keys) {
@@ -111,19 +156,25 @@ function global:Set-AgentrixPlanner([string]$Agent, $Launch, [string]$SettingsFi
     }
     foreach ($name in $Launch.Env.Keys) { $fields[$name] = $Launch.Env[$name] }
     $words = Invoke-AgentrixLaunchPlan (@('--launch', $Agent, 'json', $target) + $Arguments) $fields | ConvertFrom-Json
-    $words = @($words)
-    $planner = @{ Previous = @{}; Arguments = @() }
-    for ($index = 0; $index -lt $words.Count; $index++) {
-        if ($words[$index] -ceq '--') { $planner.Arguments = @($words | Select-Object -Skip ($index + 1)); break }
-        if ($words[$index] -ceq '-u') { $name = $words[++$index]; $value = $null } else { $name, $value = $words[$index] -split '=', 2 }
-        $planner.Previous[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $value)
+    if ($words.v -isnot [int] -or $words.v -ne 1 -or $words.type -cne 'launch.words' -or
+        $words.unset -isnot [array] -or $words.env -isnot [pscustomobject] -or $words.argv -isnot [array]) {
+        throw 'Unsupported Agentrix terminal launch plan.'
     }
-    foreach ($name in $Launch.Env.Keys) {
-        $planner.Previous[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $Launch.Env[$name])
+    $changes = @{}
+    foreach ($name in $words.unset) { $changes[$name] = $null }
+    foreach ($entry in $words.env.PSObject.Properties) { $changes[$entry.Name] = $entry.Value }
+    foreach ($name in $Launch.Env.Keys) { $changes[$name] = $Launch.Env[$name] }
+    $previous = @{}
+    try {
+        foreach ($name in $changes.Keys) {
+            $previous[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $changes[$name])
+        }
+    } catch {
+        Restore-AgentrixEnvironment $previous
+        throw
     }
-    return $planner
+    return @{ Previous = $previous; Arguments = $words.argv }
 }
 
 function global:Restore-AgentrixEnvironment([hashtable]$Previous) {
@@ -212,6 +263,7 @@ function global:Send-AgentrixEvent {
     $global:AgentrixEventSequence++
     try {
         $eventData = @{
+            v = 1
             projectId = $global:AgentrixSession.projectId
             sessionKey = $global:AgentrixSession.sessionKey
             type = $Type
@@ -255,8 +307,13 @@ function global:Get-AgentrixCommand($arguments) {
 function global:agentrix_agent {
     $agent = [string]$args[0]
     $arguments = @($args | Select-Object -Skip 1)
-    $mode = if (Test-AgentrixNativeMode) { 'native' } else { 'conductor' }
-    $route = Invoke-AgentrixLaunchPlan (@('--launch', $agent, 'classify', $mode) + $arguments)
+    $mode = if ((Get-AgentrixSessionMode) -ceq 'native') { 'native' } else { 'conductor' }
+    $output = Invoke-AgentrixLaunchPlan (@('--launch', $agent, 'classify', $mode) + $arguments)
+    $classification = ConvertFrom-AgentrixWireFields $output 'agentrix.launch-route'
+    $route = $classification.route
+    if ($classification.version -cne '1' -or $route -cnotin @('passthrough', 'native', 'refused', 'conversation', 'utility', 'print')) {
+        throw 'Unsupported Agentrix terminal launch route.'
+    }
     if ($route -ceq 'passthrough') {
         if (-not $global:AgentrixCodexCommand) {
             Write-Host 'Codex CLI was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow

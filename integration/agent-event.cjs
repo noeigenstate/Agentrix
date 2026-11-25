@@ -3,8 +3,7 @@
 // and claude-hook.ps1. Bash cannot open a Unix socket, so it sends its own reports through this too.
 // Usage: agent-event.cjs codex-notify <socket> <projectId> <sessionKey> <payload>
 //        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> <kind>   (the hook's JSON on stdin)
-//        agent-event.cjs shell-event <socket> <projectId> <sessionKey> <type> <sequence> <exitCode> <agent>
-//                        <codexAvailable> <claudeAvailable> <codexHome> <cwd>
+//        agent-event.cjs shell-event v=1 type=<type> sequence=<sequence> socket=<socket> projectId=<id> sessionKey=<key> ...
 // SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
 const net = require('node:net');
 const fs = require('node:fs');
@@ -16,6 +15,7 @@ const { sessionContext } = require(path.join(runtime, 'features/skills/session.c
 const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/skills/agent-seat.cjs'));
 const { deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { readEnvelope, WIRE_FIELDS } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 
 function send(socket, event) {
   return new Promise(resolve => {
@@ -65,7 +65,7 @@ function codexEvent(payload, projectId, sessionKey) {
   if (notification?.type !== 'agent-turn-complete') return null;
   const threadId = String(notification['thread-id'] ?? ''), turnId = String(notification['turn-id'] ?? '');
   const eventId = threadId && turnId ? `${threadId}:${turnId}` : createHash('sha256').update(payload, 'utf8').digest('hex').toUpperCase();
-  return { projectId, sessionKey, type: 'turn-complete', eventId, threadId, turnId };
+  return { v: 1, projectId, sessionKey, type: 'turn-complete', eventId, threadId, turnId };
 }
 
 // Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, StopFailure one that ended in an
@@ -82,7 +82,7 @@ function claudeEvent(input, projectId, sessionKey, kind) {
   if (!sessionId) return null;
   const prompt = kind === 'start' && hook.prompt ? String(hook.prompt).slice(0, 2000) : null;
   return {
-    projectId, sessionKey, type: 'agent-activity', agent: 'claude', state: CLAUDE_STATES[kind], sessionId,
+    v: 1, projectId, sessionKey, type: 'agent-activity', agent: 'claude', state: CLAUDE_STATES[kind], sessionId,
     message: ['notify', 'permission'].includes(kind) ? String(hook.message ?? hook.tool_name ?? '').slice(0, 300) : null,
     sentAt, hookEvent: String(hook.hook_event_name ?? ''), sessionSource: String(hook.source ?? ''),
     ...(['AskUserQuestion', 'ExitPlanMode'].includes(hook.tool_name) ? { menuTool: hook.tool_name } : {}),
@@ -99,21 +99,44 @@ function claudeEvent(input, projectId, sessionKey, kind) {
 }
 
 // A shell's own report (shell-ready, shell-prompt, agent-started, agent-exited, hook-channel), as zsh-integration.zsh writes it.
-const shellEvents = ['shell-ready', 'shell-prompt', 'agent-started', 'agent-exited', 'hook-channel'];
+function shellEventFields(words) {
+  if (!words[0]?.includes('=')) {
+    // Existing terminal wrappers report up to eleven positional fields during the transition.
+    const [type, sequence, exitCode, agent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args] = words;
+    return { type, sequence, exitCode, agent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args };
+  }
+  const fields = Object.create(null);
+  for (const word of words) {
+    const equals = word.indexOf('='), key = word.slice(0, equals);
+    if (equals < 1 || Object.hasOwn(fields, key)) return null;
+    fields[key] = word.slice(equals + 1);
+  }
+  if (!Object.hasOwn(fields, 'v')) return null;
+  try { return readEnvelope({ ...fields, v: fields.v === '1' ? 1 : fields.v }, { channel: 'shell-event', legacy: false }).value; }
+  catch { return null; }
+}
+
 // command: the first word given to the CLI when it is a subcommand or an option (update, --version), else empty.
-function shellEvent([type, sequence, exitCode, agent, codex, claude, codexHome, cwd, command, accountLaunch, argumentsJson], projectId, sessionKey) {
+function shellEvent(words, projectId, sessionKey) {
+  return shellReport(shellEventFields(words), projectId, sessionKey);
+}
+
+function shellReport(fields, projectId, sessionKey) {
+  if (!fields) return null;
+  let { type } = fields;
+  const { sequence, exitCode, agent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args: argumentsJson } = fields;
   // Remove next version. An older shell wrapper may use the updated helper.
   if (type === 'codex-started') type = 'agent-started';
   if (type === 'codex-exited') type = 'agent-exited';
-  if (!shellEvents.includes(type) || !/^\d+$/.test(String(sequence))) return null;
+  if (!Object.hasOwn(WIRE_FIELDS.shell, type) || !/^\d+$/.test(String(sequence))) return null;
   let args;
   if (type === 'agent-started' && agent === 'codex' && argumentsJson !== undefined) {
     try { args = JSON.parse(argumentsJson); } catch { return null; }
     if (!Array.isArray(args) || args.length > 64 || args.some(value => typeof value !== 'string' || value.includes('\0')) || JSON.stringify(args).length > 32768) return null;
   }
   return {
-    projectId, sessionKey, type, sequence: Number(sequence), exitCode: Number.parseInt(exitCode, 10) || 0, agent: agent === 'claude' ? 'claude' : 'codex',
-    codexAvailable: codex === 'true', claudeAvailable: claude === 'true', codexHome: String(codexHome ?? ''), cwd: String(cwd ?? ''),
+    v: 1, projectId, sessionKey, type, sequence: Number(sequence), exitCode: Number.parseInt(exitCode, 10) || 0, agent: agent === 'claude' ? 'claude' : 'codex',
+    codexAvailable: codexAvailable === 'true', claudeAvailable: claudeAvailable === 'true', codexHome: String(codexHome ?? ''), cwd: String(cwd ?? ''),
     ...(command ? { command: String(command).slice(0, 24) } : {}),
     ...(args ? { args } : {}),
     ...(type === 'agent-started' && agent === 'codex' ? { accountLaunch: accountLaunch === 'model-only-v1' ? accountLaunch : 'unavailable' } : {}),
@@ -153,6 +176,13 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
     if (report) await send(socket, JSON.parse(report));
     return;
   }
+  if (action === 'shell-event' && /^[a-z][a-zA-Z0-9_]*=/.test(socket ?? '')) {
+    const fields = shellEventFields([socket, projectId, sessionKey, argument, ...rest].filter(value => value !== undefined));
+    if (!fields?.socket || !fields.projectId || !fields.sessionKey) return;
+    const event = shellReport(fields, fields.projectId, fields.sessionKey);
+    if (event) await send(fields.socket, event);
+    return;
+  }
   if (!socket || !projectId || !sessionKey) return;
   hookTrace(argument, `start uptime-ms=${Math.round(process.uptime() * 1000)}`);
   const input = action === 'claude-hook' ? await readInput() : null;
@@ -174,7 +204,7 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
   if (action === 'claude-hook' && argument === 'seat-routing') {
     const { output, observed } = seatRouting(input, process.env.AGENTRIX_SEATS, process.env.AGENTRIX_BOOTSTRAP);
     if (output) await writeOutput(output);
-    if (observed) await send(socket, { type: 'claude-seat-input', projectId, sessionKey, ...observed });
+    if (observed) await send(socket, { v: 1, type: 'claude-seat-input', projectId, sessionKey, ...observed });
     return;
   }
   if (action === 'claude-hook' && argument === 'session') {

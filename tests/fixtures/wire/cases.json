@@ -175,5 +175,97 @@
       5500
     ],
     "error": "wire.invalid"
+  },
+  {
+    "name": "lead seat with reordered launch fields",
+    "kind": "kv",
+    "format": "agentrix.lead-seat",
+    "input": "seats={\"qa\":{\"model\":\"sonnet\",\"effort\":\"high\"}}\nultracode=0\nversion=1\nmodel=opus\nfast=1\nformat=agentrix.lead-seat\neffort=max\n",
+    "expected": {
+      "seats": "{\"qa\":{\"model\":\"sonnet\",\"effort\":\"high\"}}",
+      "ultracode": "0",
+      "version": "1",
+      "model": "opus",
+      "fast": "1",
+      "format": "agentrix.lead-seat",
+      "effort": "max"
+    }
+  },
+  {
+    "name": "mode fields are independent of their line number",
+    "kind": "kv",
+    "format": "agentrix.session-mode",
+    "input": "mode=native\nversion=1\nformat=agentrix.session-mode\nfuture=a=b\n",
+    "expected": {
+      "mode": "native",
+      "version": "1",
+      "format": "agentrix.session-mode",
+      "future": "a=b"
+    }
+  },
+  {
+    "name": "classify route carries a version",
+    "kind": "kv",
+    "format": "agentrix.launch-route",
+    "input": "route=conversation\nformat=agentrix.launch-route\nversion=1\n",
+    "expected": {
+      "route": "conversation",
+      "format": "agentrix.launch-route",
+      "version": "1"
+    }
+  },
+  {
+    "name": "NUL words preserve separators, multiline values and empty arguments",
+    "kind": "words",
+    "format": "agentrix.launch-words",
+    "input": "arg=--\u0000env=EXAMPLE=你好=a\nb\u0000version=1\u0000unset=REMOVED\u0000format=agentrix.launch-words\u0000arg=-u\u0000arg=\u0000arg=甲\n乙\u0000",
+    "expected": {
+      "v": 1,
+      "type": "launch.words",
+      "unset": [
+        "REMOVED"
+      ],
+      "env": {
+        "EXAMPLE": "你好=a\nb"
+      },
+      "argv": [
+        "--",
+        "-u",
+        "",
+        "甲\n乙"
+      ]
+    }
+  },
+  {
+    "name": "PowerShell launch plan keeps full words by key",
+    "kind": "envelope",
+    "channel": "launch.words",
+    "localShell": true,
+    "input": "{\"argv\":[\"--\",\"-u\",\"\",\"中文\\na=b\"],\"type\":\"launch.words\",\"env\":{\"EXAMPLE\":\"a=b\"},\"unset\":[\"REMOVED\"],\"v\":1}",
+    "version": 1
+  },
+  {
+    "name": "local shell launch event",
+    "kind": "envelope",
+    "channel": "shell",
+    "localShell": true,
+    "version": 1,
+    "input": "{\"type\":\"agent-started\",\"sessionKey\":\"k\",\"cwd\":\"a=b\",\"projectId\":\"p\",\"v\":1,\"sequence\":3,\"agent\":\"claude\",\"codexAvailable\":false,\"claudeAvailable\":true}"
+  },
+  {
+    "name": "local seat map file",
+    "kind": "envelope",
+    "format": "agentrix.seat-map",
+    "localShell": true,
+    "version": 1,
+    "input": "{\"seats\":{\"qa\":{\"model\":\"sonnet\",\"effort\":\"high\"}},\"version\":1,\"format\":\"agentrix.seat-map\"}"
+  },
+  {
+    "name": "legacy shell event alias",
+    "kind": "envelope",
+    "channel": "shell",
+    "localShell": true,
+    "version": 0,
+    "input": "{\"type\":\"codex-started\",\"sessionKey\":\"fixture\",\"projectId\":\"project\",\"sequence\":4}"
   }
 ]

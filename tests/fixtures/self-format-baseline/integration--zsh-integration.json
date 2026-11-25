@@ -1,5 +1,3 @@
 {
-  "integration/zsh-integration.zsh :: ordered-shell-lines": 2,
-  "integration/zsh-integration.zsh :: whole-word": 6,
-  "integration/zsh-integration.zsh :: word-marker": 1
+  "integration/zsh-integration.zsh :: ordered-shell-lines": 2
 }

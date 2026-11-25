@@ -79,6 +79,17 @@ function assertLaunches(output, utilitySeats = 'null') {
   assert.match(output, /^RESTORED=inherited\|unset$/m);
 }
 
+const unsupportedSeat = /座位文件版本不受支持/g;
+function assertVersionedLaunches(output, diagnostic) {
+  assert.equal((diagnostic.match(unsupportedSeat) ?? []).length, 1);
+  const calls = output.split(/^CALL\n/gm).slice(1);
+  assert.deepEqual(calls.map(call => [...call.matchAll(/^WORD=(.*)$/gm)].map(row => row[1])),
+    [['--model', nextModel, '--effort', 'medium'], []]);
+  assert.deepEqual(calls.map(call => JSON.parse(/^SETTINGS=(.*)$/m.exec(call)[1])),
+    [{ ...JSON.parse(settings('fast')), ultracode: true }, JSON.parse(settings('ordinary'))]);
+  assert.deepEqual(calls.map(call => /^SEATS=(.*)$/m.exec(call)[1]), [seats, 'null']);
+}
+
 for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-integration.zsh']]) {
   const shell = posixShell(name);
   test(`${name} Claude takes the validated seat only on conversation launches`, { skip: !shell }, async t => {
@@ -114,6 +125,10 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       ...utilitiesWithMarker.map(words => `claude ${words.join(' ')}`),
       'printf "native\\n" > "$AGENTRIX_BOOTSTRAP.mode"; claude',
       'printf "RESTORED=%s|%s\\n" "${ANTHROPIC_DEFAULT_HAIKU_MODEL-unset}" "${CLAUDE_CODE_SUBAGENT_MODEL-unset}"',
+      'printf "VERSIONED\\n"',
+      'printf "%s\\n" mode=conductor version=1 format=agentrix.session-mode > "$AGENTRIX_BOOTSTRAP.mode.env"',
+      'cp "$AGENTRIX_BOOTSTRAP.ultra-fast.lead.env" "$AGENTRIX_BOOTSTRAP.lead.env"; claude',
+      'printf "%s\\n" version=9 format=agentrix.lead-seat > "$AGENTRIX_BOOTSTRAP.lead.env"; claude',
     ].join('\n') + '\n');
     const { stdout, stderr } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), shellPath(script)], {
       cwd: dir, timeout: win ? 240000 : 15000, env: {
@@ -123,7 +138,9 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
         AGENTRIX_HOOK_FALLBACK: settings('ordinary'), AGENTRIX_FAST_HOOK_FALLBACK: settings('fast'), ANTHROPIC_DEFAULT_HAIKU_MODEL: 'inherited' },
     });
     assert.match(stderr, refusal);
-    assertLaunches(stdout);
+    const [legacy, versioned] = stdout.split('VERSIONED\n');
+    assertLaunches(legacy);
+    assertVersionedLaunches(versioned, stderr);
   });
 }
 
@@ -172,6 +189,10 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
     '[IO.File]::WriteAllLines($env:AGENTRIX_BOOTSTRAP + ".mode", @("native")); claude',
     '$subagent = if ($env:CLAUDE_CODE_SUBAGENT_MODEL) { $env:CLAUDE_CODE_SUBAGENT_MODEL } else { "unset" }',
     '"RESTORED=$env:ANTHROPIC_DEFAULT_HAIKU_MODEL|$subagent"',
+    '"VERSIONED"',
+    '[IO.File]::WriteAllText($env:AGENTRIX_BOOTSTRAP + ".mode.env", "mode=conductor`nversion=1`nformat=agentrix.session-mode`n")',
+    '[IO.File]::Copy($env:AGENTRIX_BOOTSTRAP + ".ultra-fast.lead.env", ($lead + ".env"), $true); claude',
+    '[IO.File]::WriteAllText(($lead + ".env"), "version=9`nformat=agentrix.lead-seat`n"); claude',
   ].join('\n'));
   const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const { stdout } = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
@@ -182,7 +203,9 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   });
   const output = stdout.replaceAll('\r\n', '\n');
   assert.match(output, refusal);
-  assertLaunches(output, '');
+  const [legacy, versioned] = output.split('VERSIONED\n');
+  assertLaunches(legacy, '');
+  assertVersionedLaunches(versioned, versioned);
 });
 
 // Native mode: the lead is the plain CLI, so the owner's own --model and --effort reach it; conductor mode still refuses them.

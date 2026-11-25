@@ -1,4 +1,3 @@
 {
-  "electron/features/cli-adapters/terminal.cjs :: note-marker": 1,
   "electron/features/cli-adapters/terminal.cjs :: word-marker": 1
 }

@@ -31,9 +31,10 @@ unset __pg_login_files
 
 # The shim folder goes only to the Claude Code the claude wrapper starts (intercept.cjs --launch): this shell, its scripts and
 # whatever else it runs find the real CLIs, and the wrappers' own lookups skip the folder too.
-__pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" -e 'try { process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).shims || ""); } catch {}' "$AGENTRIX_BOOTSTRAP" 2>/dev/null)
-[[ -n $__pg_shims && -d $__pg_shims ]] || __pg_shims=
-__pg_intercept="${__pg_shims:-${BASH_SOURCE[0]%/*}/shims}/intercept.cjs"
+builtin source "${BASH_SOURCE[0]%/*}/shims/hooks/terminal-wire.sh"
+__pg_intercept="${BASH_SOURCE[0]%/*}/shims/intercept.cjs"
+__pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --bootstrap-shims 2>/dev/null)
+if [[ -n $__pg_shims && -d $__pg_shims ]]; then __pg_intercept="$__pg_shims/intercept.cjs"; else __pg_shims=; fi
 unset AGENTRIX_DISPATCH_DEPTH AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF AGENTRIX_SHIM_NODE
 
 # A JSON string (also a TOML basic string) for $1, in REPLY.
@@ -92,8 +93,9 @@ __pg_send() {
   local codex=false claude=false __pg_words
   __pg_program codex && codex=true
   __pg_program claude && claude=true
-  ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "$__pg_socket" "$__pg_project" "$__pg_key" \
-    "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" "${6-}" </dev/null >/dev/null 2>&1
+  ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "v=1" "type=$1" "sequence=$__pg_sequence" "agent=${3:-codex}" \
+    "socket=$__pg_socket" "projectId=$__pg_project" "sessionKey=$__pg_key" "exitCode=${2:-0}" "codexAvailable=$codex" "claudeAvailable=$claude" \
+    "codexHome=${CODEX_HOME:-$HOME/.codex}" "cwd=$PWD" "command=${4:-}" "accountLaunch=${5:-}" "args=${6-}" </dev/null >/dev/null 2>&1
   return 0
 }
 
@@ -141,7 +143,7 @@ __pg_hook_proxy() {
 
 __pg_ultracode_settings() {
   # The hook settings from main are compact JSON objects.
-  if [[ "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" != conductor ]]; then
+  if [[ "$(__pg_session_mode)" != conductor ]]; then
     printf '%s' "$1"
   elif [[ -z $1 || $1 == '{}' ]]; then
     printf '%s' '{"ultracode":true}'
@@ -150,19 +152,37 @@ __pg_ultracode_settings() {
   fi
 }
 
+# The old positional sidecar is used only when the versioned file is absent.
+__pg_seat_fields() {
+  local lead_file=$1 legacy_seats
+  local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
+  if [[ -e $lead_file.env || -L $lead_file.env ]]; then
+    __pg_read_lead "$lead_file.env" || return 1
+  else
+    [[ -r $lead_file ]] || return 1
+    { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
+        # Old files put the seat map on line 6, after two retired fields.
+        IFS= read -r seat_map || :
+        if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
+      }; } < "$lead_file" || return 1
+  fi
+  [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]
+}
+
 # The shell keeps executable lookup, pipe events and temporary hook files.
 agentrix_agent() {
   local agent=$1; shift
   local -a __pg_words program
-  local found=1 mode=conductor word route
+  local found=1 mode=conductor route fields
   if __pg_program "$agent"; then program=("${__pg_words[@]}"); else found=0; fi
-  [[ -n ${AGENTRIX_BOOTSTRAP-} && "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" == native ]] && mode=native
+  [[ -n ${AGENTRIX_BOOTSTRAP-} && "$(__pg_session_mode)" == native ]] && mode=native
   # Without a runnable helper the CLI starts with the user's words alone.
   if [[ ! -x $__pg_node ]]; then
     [[ $found == 1 ]] || { printf '%s\n' "$agent was not found in PATH. Install it, then restart this terminal."; return 127; }
     "${program[@]}" "$@"; return
   fi
-  route=$(AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@") || return
+  fields=$(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@") || return
+  route=$(__pg_launch_route "$fields") || return
   case $route in
     native)
       __pg_redirect_agent "$agent" ${program[@]+"${program[@]:1}"} "$@"
@@ -179,19 +199,12 @@ agentrix_agent() {
   fi
   if [[ $route == passthrough ]]; then "${program[@]}" "$@"; return; fi
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  local model effort fast seat_map ultracode legacy_seats seat_valid=0 lead_file=${AGENTRIX_BOOTSTRAP-}.lead
-  local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-  if [[ $route == conversation && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
-    { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
-        # Old files put the seat map on line 6, after two retired fields.
-        IFS= read -r seat_map || :
-        if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
-      }; } < "$lead_file" &&
-    [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]; then
+  local model effort fast seat_map ultracode seat_valid=0 lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  if [[ $route == conversation && -n ${AGENTRIX_BOOTSTRAP-} ]] && __pg_seat_fields "$lead_file"; then
     seat_valid=1
     if [[ $fast == 1 ]]; then launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback; fi
   fi
-  if [[ $seat_valid == 0 ]]; then model= effort=; fi
+  if [[ $seat_valid == 0 ]]; then model= effort= seat_map=; fi
   [[ ${seat_map-} == \{* ]] || seat_map=null
   local settings=$launch_fallback REPLY
   if [[ $__pg_hook_channel == http ]]; then
@@ -199,7 +212,12 @@ agentrix_agent() {
   fi
   [[ ${ultracode-} == ultracode && $seat_valid == 1 ]] && settings=$(__pg_ultracode_settings "$settings")
   __pg_send agent-started 0 "$agent" "$(__pg_command "$@")"
-  local current_note=$(__pg_reading_note)
+  local current_note
+  if [[ -n ${AGENTRIX_BOOTSTRAP-} && -r $AGENTRIX_BOOTSTRAP.launch-note ]]; then
+    current_note=$(cat -- "$AGENTRIX_BOOTSTRAP.launch-note")
+  else
+    current_note=$(__pg_reading_note)
+  fi
   # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
   local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file=
   if [[ -n $settings ]]; then
@@ -208,17 +226,14 @@ agentrix_agent() {
     settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
     printf '%s' "$settings" > "$settings_file"
   fi
-  local -a planner=() launch_args=()
-  local reading_args= target=plain
+  local -a planner_unset=() planner_env=() launch_args=()
+  local target=plain code=1
   [[ -n $__pg_shims ]] && target=shims
-  while IFS= read -r -d '' word; do
-    if [[ -n $reading_args ]]; then launch_args+=("$word"); elif [[ $word == -- ]]; then reading_args=1; else planner+=("$word"); fi
-  done < <(AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" AGENTRIX_LAUNCH_NOTE="$current_note" \
-      AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 \
-      "$__pg_node" "$__pg_intercept" --launch "$agent" words "$target" "$@")
-  local code=1
-  if [[ -n $reading_args ]]; then
-    command env ${planner[@]+"${planner[@]}"} AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+  if __pg_launch_words < <(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" \
+      AGENTRIX_LAUNCH_NOTE="$current_note" AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 \
+      "$__pg_node" "$__pg_intercept" --launch "$agent" words "$target" "$@"); then
+    command env ${planner_unset[@]+"${planner_unset[@]}"} ${planner_env[@]+"${planner_env[@]}"} \
+      AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
       "${program[@]}" ${launch_args[@]+"${launch_args[@]}"} "$@"
     code=$?
   fi

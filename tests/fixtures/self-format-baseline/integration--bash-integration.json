@@ -1,5 +1,3 @@
 {
-  "integration/bash-integration.bash :: ordered-shell-lines": 2,
-  "integration/bash-integration.bash :: whole-word": 6,
-  "integration/bash-integration.bash :: word-marker": 1
+  "integration/bash-integration.bash :: ordered-shell-lines": 2
 }

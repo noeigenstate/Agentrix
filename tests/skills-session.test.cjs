@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
-const { startupNote } = require('../electron/features/agents/handoff.cjs');
+const { startupNote, startupNoteFields } = require('../electron/features/agents/handoff.cjs');
 const { READING_NOTE } = require('../electron/features/agents/reading-note.cjs');
 const { digest, deliveryMarker, readDelivery, sessionContext } = require('../electron/features/skills/session.cjs');
 const receiptFixture = require('./fixtures/skill-receipts/lifecycle.json');
@@ -32,8 +32,10 @@ async function fixture(t, routingNote = () => '') {
   const draft = { name: 'sample', scope: 'global', projectId: null, description: 'Use when testing 中文说明.', text: 'First body.' };
   await store.save(null, draft);
   const delivery = id => store.delivery(project, false, id, { agent: 'claude', started: true });
-  const note = id => startupNote(READING_NOTE, path.join(root, 'handoff.md'), path.join(project.path, 'skills'), delivery(id), path.join(root, 'dispatch.cjs'));
-  return { root, store, project, draft, delivery, note };
+  const noteFields = id => startupNoteFields(READING_NOTE, path.join(root, 'handoff.md'), path.join(project.path, 'skills'),
+    delivery(id), path.join(root, 'dispatch.cjs'));
+  const note = id => noteFields(id).full;
+  return { root, store, project, draft, delivery, note, noteFields };
 }
 
 test('startup/resume deduplicate CLI session plus content fingerprint, compact/clear always deliver', async t => {
@@ -436,7 +438,9 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
 test('Unix Claude wrapper keeps the startup note on the command line, with skills only in SessionStart; the shell never runs Codex', { skip: process.platform === 'win32' }, async t => {
   const terminalSession = '11111111-1111-4111-8111-111111111111';
   const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`);
-  fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, f.note('unix'));
+  const note = f.noteFields('unix'), bootstrap = path.join(f.root, 'terminal.json');
+  fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, note.full);
+  fs.writeFileSync(bootstrap + '.launch-note', note.launch);
   const script = path.join(f.root, 'fake.cjs');
   fs.writeFileSync(script, `const fs=require('node:fs'),args=process.argv.slice(3);fs.writeFileSync(require('node:path').join(process.env.CAPTURE_ROOT, process.argv[2]+'.json'),JSON.stringify({note:process.env.AGENTRIX_READING_NOTE_FILE,args,settings:process.argv[2]==='claude'?JSON.parse(fs.readFileSync(args[1],'utf8')):null}));`);
   const quote = value => `'${value.replace(/'/g, "'\\''")}'`;
@@ -444,7 +448,8 @@ test('Unix Claude wrapper keeps the startup note on the command line, with skill
   const shell = process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash';
   const source = path.join(__dirname, process.platform === 'darwin' ? '../integration/zsh-integration.zsh' : '../integration/bash-integration.bash');
   const env = { HOME: home, ZDOTDIR: home, AGENTRIX_USER_ZDOTDIR: home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'),
-    CAPTURE_ROOT: f.root, AGENTRIX_NODE: process.execPath, AGENTRIX_EVENT_HELPER: path.join(__dirname, '../integration/agent-event.cjs'), AGENTRIX_READING_NOTE_FILE: noteFile };
+    CAPTURE_ROOT: f.root, AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_NODE: process.execPath, AGENTRIX_READING_NOTE_FILE: noteFile,
+    AGENTRIX_EVENT_HELPER: path.join(__dirname, '../integration/agent-event.cjs') };
   const hooks = hooksFor({ posix: true, node: process.execPath, helper: env.AGENTRIX_EVENT_HELPER, noteFile });
   Object.assign(env, { AGENTRIX_HOOK_PORT: String(hooks.port), AGENTRIX_HOOK_CHANNEL: hooks.channel, AGENTRIX_HOOK_SETTINGS: hooks.settings.http, AGENTRIX_HOOK_FALLBACK: hooks.settings.fallback });
   await new Promise((resolve, reject) => {
@@ -457,7 +462,7 @@ test('Unix Claude wrapper keeps the startup note on the command line, with skill
   assert.equal(fs.existsSync(path.join(f.root, 'codex.json')), false);
   assert.equal(claude.note, noteFile);
   assert.equal(claude.args[2], '--append-system-prompt');
-  assert.equal(claude.args[3], fs.readFileSync(noteFile, 'utf8').split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
+  assert.equal(claude.args[3], note.launch);
   assert.match(claude.args[3], /^You run inside Agentrix/);
   assert.deepEqual(claude.args.slice(4), ['hello']);
   assert.ok(!JSON.stringify(claude.args).includes('中文说明'));
@@ -469,8 +474,10 @@ test('Unix Claude wrapper keeps the startup note on the command line, with skill
 
 test('PowerShell Claude wrapper keeps the startup note and fallback before intact resume arguments', { skip: process.platform !== 'win32' }, async t => {
   const terminalSession = '11111111-1111-4111-8111-111111111111';
-  const f = await fixture(t), noteFile = path.join(f.root, `${terminalSession}-skills.txt`), note = f.note('wrapper');
-  fs.writeFileSync(noteFile, note);
+  const f = await fixture(t), noteFile = path.join(f.root, `${terminalSession}-skills.txt`), note = f.noteFields('wrapper');
+  const bootstrap = path.join(f.root, 'terminal.json');
+  fs.writeFileSync(noteFile, note.full);
+  fs.writeFileSync(bootstrap + '.launch-note', note.launch);
   const command = path.join(f.root, 'claude.ps1');
   fs.writeFileSync(command, "@{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress\n");
   const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
@@ -485,7 +492,7 @@ function global:Send-AgentrixEvent {}
 function global:Get-AgentrixCommand {}
 ${powershellSession()}
 # Main names a terminal's bootstrap after the terminal; the settings file still carries the session, as main removes it by.
-$env:AGENTRIX_BOOTSTRAP = '${path.join(f.root, 'terminal.json').replace(/'/g, "''")}'
+$env:AGENTRIX_BOOTSTRAP = '${bootstrap.replace(/'/g, "''")}'
 $global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand = '${command.replace(/'/g, "''")}'
 claude --resume fixture '继续'`;
   const result = await powershellProbe(f.root, script, noteFile);
@@ -496,7 +503,7 @@ claude --resume fixture '继续'`;
   assert.match(path.basename(args[1]), new RegExp(`^${terminalSession}-claude-settings-[0-9a-f]{32}\\.json$`));
   assert.equal(fs.existsSync(args[1]), false);
   assert.equal(args[2], '--append-system-prompt');
-  assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
+  assert.equal(args[3], note.launch);
   assert.match(args[3], /^You run inside Agentrix/);
   assert.doesNotMatch(args[3], /中文说明|Agentrix skill delivery:/);
   assert.deepEqual(args.slice(4), ['--resume', 'fixture', '继续']);
@@ -545,7 +552,9 @@ test('PowerShell compact/clear reads updated per-session instructions and keeps 
 test('PowerShell 5.1 fallback passes a settings file through a real fake claude.cmd with the startup note intact', { skip: process.platform !== 'win32' }, async t => {
   const terminalSession = '11111111-1111-4111-8111-111111111111';
   const f = await fixture(t), bin = path.join(f.root, 'shim with spaces'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`); fs.mkdirSync(bin);
-  const note = f.note('cmd'); fs.writeFileSync(noteFile, note);
+  const note = f.noteFields('cmd'), bootstrap = path.join(f.root, 'terminal.json');
+  fs.writeFileSync(noteFile, note.full);
+  fs.writeFileSync(bootstrap + '.launch-note', note.launch);
   const captureFile = path.join(f.root, 'argv.json'), fake = path.join(bin, 'capture.cjs'), command = path.join(bin, 'claude.cmd');
   fs.writeFileSync(fake, `const fs=require('node:fs'),args=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,settings:JSON.parse(fs.readFileSync(args[1],'utf8'))}));`);
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`);
@@ -555,6 +564,7 @@ test('PowerShell 5.1 fallback passes a settings file through a real fake claude.
   const quote = value => `'${value.replace(/'/g, "''")}'`;
   const script = `$ProgressPreference = 'SilentlyContinue'\n${helper}\n${wrapper}\nfunction global:Send-AgentrixEvent {}\nfunction global:Get-AgentrixCommand {}
 ${powershellSession()}
+$env:AGENTRIX_BOOTSTRAP = ${quote(bootstrap)}
 $global:AgentrixClaudeExecutable = ${quote(command)}
 $global:AgentrixClaudeCommand = ${quote(command)}
 claude --resume fixture 'next task'`;
@@ -565,7 +575,7 @@ claude --resume fixture 'next task'`;
   assert.match(path.basename(args[1]), new RegExp(`^${terminalSession}-claude-settings-[0-9a-f]{32}\\.json$`));
   assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes('fixture.ps1'));
   assert.equal(args[2], '--append-system-prompt');
-  assert.equal(args[3], note.split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
+  assert.equal(args[3], note.launch);
   assert.deepEqual(args.slice(4), ['--resume', 'fixture', 'next task']);
   assert.equal(fs.existsSync(args[1]), false);
 });

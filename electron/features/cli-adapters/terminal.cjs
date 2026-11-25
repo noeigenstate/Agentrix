@@ -5,6 +5,7 @@ const claudeWire = {
   remoteOrder: ['settings', 'note', 'model', 'effort', 'resume', 'roleTools'],
   flags: { settings: '--settings', note: '--append-system-prompt', model: '--model', effort: '--effort', resume: '--resume' },
   roleTools: { prefix: '--mcp-config=', table: 'mcpServers', name: 'agentrix', type: 'stdio' },
+  // The legacy SSH Python launcher still reads this layout during the migration.
   note: { marker: ' Agentrix skill delivery: ', suffix: ' Agentrix delivers skill instructions through its SessionStart hook.' },
   overrides: ['--model', '--effort'],
 };
@@ -22,7 +23,6 @@ function codexCommand(argv) {
 }
 
 const beforeSeparator = argv => argv.slice(0, argv.includes('--') ? argv.indexOf('--') : argv.length);
-const startupNote = note => note?.includes(claudeWire.note.marker) ? note.split(claudeWire.note.marker, 1)[0] + claudeWire.note.suffix : note;
 const claudeConfig = server => {
   const { table, name, type } = claudeWire.roleTools;
   return { [table]: { [name]: { type, ...server } } };
@@ -35,7 +35,7 @@ const codexRoleTools = {
 };
 
 function claudeLaunch({ resume, seat, note, roleServer, roleTools = roleServer ? claudeRoleTools.args(roleServer) : [], hooks, roleError, remote = false, env = [] }) {
-  let startup = startupNote(note) || '';
+  let startup = note || '';
   if (roleError && !startup.includes(roleError)) startup = startup ? roleError + ' ' + startup : roleError;
   const values = { settings: hooks?.file, note: startup, model: seat?.model, effort: seat?.effort, resume };
   const order = remote ? claudeWire.remoteOrder : claudeWire.localOrder;
@@ -96,7 +96,7 @@ function terminalAdapters(words) {
         hookSession: true,
       },
       notes: {
-        startup: note => ({ argv: note ? [claudeWire.flags.note, startupNote(note)] : [] }),
+        startup: note => ({ argv: note ? [claudeWire.flags.note, note] : [] }),
         message: (note, { native = false } = {}) => native ? { send: note } : { hook: { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: note } } },
       },
     },

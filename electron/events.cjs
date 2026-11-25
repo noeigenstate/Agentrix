@@ -1,5 +1,6 @@
 const net = require('node:net');
 const { randomUUID, randomBytes } = require('node:crypto');
+const { readEnvelope } = require('./features/agents/dispatch-events.cjs');
 
 // A Unix socket path holds at most 104 bytes on macOS, and the per-user temporary folder there is already about 50.
 function socketAddress(name, folder = require('node:os').tmpdir()) {
@@ -31,7 +32,8 @@ async function createEventServer(onEvent, { dispatchControl } = {}) {
           dispatchControl.accept(socket, { ...event, type: 'register' });
           return;
         }
-        if (event && typeof event.projectId === 'string' && typeof event.sessionKey === 'string' && typeof event.type === 'string') onEvent(event);
+        const { value } = readEnvelope(event, { channel: 'local event pipe' });
+        if (typeof value.projectId === 'string' && typeof value.sessionKey === 'string' && typeof value.type === 'string') onEvent(value);
       } catch { /* Invalid messages never affect a terminal. */ }
       socket.end();
     });

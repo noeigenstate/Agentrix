@@ -121,7 +121,8 @@ function createHostInputs(deps) {
     const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
       sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
       roleServer: roleServer(env, agent) };
-    env.AGENTRIX_SEATS = nativePolicy.envSeats?.(dispatchSnapshot) ?? JSON.stringify(spec.seatsMap ?? null);
+    const encodeSeats = seats => JSON.stringify({ format: 'agentrix.seat-map', version: 1, seats: seats ?? null });
+    env.AGENTRIX_SEATS = nativePolicy.envSeats?.(dispatchSnapshot ?? encodeSeats(null)) ?? encodeSeats(spec.seatsMap);
     nativePolicy.observeSubagents?.(spec, (session, signal, binding) => deps.nativeSubagent(session, signal, binding));
     const running = s => s.cliActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId);
     if (spec.providerSessionId && [...sessions.values()].some(running)) throw new Error('该会话正在其他终端运行。');

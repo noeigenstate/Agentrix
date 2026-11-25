@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { builtinModules } = require('node:module');
 const { runtimeFiles, dispatchCompanions } = require('../integration/dispatch.cjs');
+const { readKeyValue } = require('../electron/features/agents/dispatch-events.cjs');
 
 const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
@@ -26,9 +27,9 @@ test('the carried intercept runtime includes the six launchers in a CJS envelope
   assert.equal(fs.readFileSync(path.join(install, 'shims/intercept.cjs'), 'utf8'), carried['shims/intercept.cjs']);
   const packaged = require(path.join(install, 'shims/intercept.cjs'));
   assert.equal(packaged.runtimeFiles()['shims/launchers.cjs'], carried['shims/launchers.cjs']);
-  assert.equal(packaged.terminalLaunch({}, 'codex', 'classify', '', ['login']), 'passthrough');
+  assert.equal(readKeyValue(packaged.terminalLaunch({}, 'codex', 'classify', '', ['login']), { format: 'agentrix.launch-route' }).route, 'passthrough');
   const transferred = require(path.join(install, 'electron/shims/intercept.cjs'));
-  assert.equal(transferred.terminalLaunch({}, 'claude', 'classify', 'remote', ['-p', 'prompt']), 'print');
+  assert.equal(readKeyValue(transferred.terminalLaunch({}, 'claude', 'classify', 'remote', ['-p', 'prompt']), { format: 'agentrix.launch-route' }).route, 'print');
   // The start-up hooks are installed beside them, dotfiles included; they are not carried to SSH hosts.
   const hooks = require('../integration/shims/intercept.cjs').hookFiles();
   assert.ok(Object.keys(hooks).includes('hooks/zsh/.zshenv'));

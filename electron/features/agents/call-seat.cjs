@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
+const { readEnvelope, readLeadSeat } = require('./dispatch-events.cjs');
 
 const DESCRIPTION_PREFIX = /^\[([a-z][a-z0-9-]{0,31}(?:\/[a-z][a-z0-9-]{0,23})?)\]\s*/;
 const CLAUDE_ALIAS = /^(sonnet|opus|haiku|fable)$/;
@@ -10,11 +11,16 @@ const SEAT_BYTES = 8192;
 const SEAT_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const MODEL = /^[A-Za-z0-9][\w.:@+/[\]-]{0,159}$/;
 const EFFORT = /^[a-z][a-z0-9-]{0,31}$/;
+const SEAT_FORMAT = 'agentrix.seat-map';
+const writeSeatMap = seats => JSON.stringify({ format: SEAT_FORMAT, version: 1, seats: seats ?? null });
 
 function parseSeatMap(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text) > SEAT_BYTES) return null;
   let seats;
-  try { seats = JSON.parse(text); } catch { return null; }
+  try {
+    const { value, legacy } = readEnvelope(text, { format: SEAT_FORMAT });
+    seats = legacy ? value : value.seats;
+  } catch { return null; }
   if (!seats || typeof seats !== 'object' || Array.isArray(seats)) return null;
   return Object.entries(seats).every(([id, choice]) => SEAT_ID.test(id) && choice && typeof choice === 'object'
     && typeof choice.model === 'string' && MODEL.test(choice.model) && typeof choice.effort === 'string' && EFFORT.test(choice.effort)
@@ -56,11 +62,19 @@ function seatExpectation(choice) {
 function claudeLeadSeat(bootstrap) {
   try {
     if (typeof bootstrap !== 'string' || !path.isAbsolute(bootstrap) || /^[\\/]{2}/.test(bootstrap)) return null;
-    const file = bootstrap + '.lead', stat = fs.lstatSync(file);
+    const next = fs.lstatSync(bootstrap + '.lead.env', { throwIfNoEntry: false });
+    const file = next ? bootstrap + '.lead.env' : bootstrap + '.lead';
+    const stat = next ?? fs.lstatSync(file);
     if (!stat.isFile() || stat.size > 2 * SEAT_BYTES) return null;
-    const [model, effort] = fs.readFileSync(file, 'utf8').split(/\r?\n/, 2);
+    const text = fs.readFileSync(file, 'utf8');
+    const { model, effort } = next ? readLeadSeat(text) : legacyLeadSeat(text);
     return familyOf(model) === 'claude' ? seatExpectation({ model, effort }) : null;
   } catch { return null; }
+}
+
+function legacyLeadSeat(text) {
+  const [model, effort] = text.split(/\r?\n/, 2);
+  return { model, effort };
 }
 
 function launchSeat(value, enabledIds) {
@@ -105,4 +119,4 @@ function callSeat(call, model) {
 }
 
 module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf,
-  liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation, claudeLeadSeat, SEAT_BYTES };
+  liveSeatMap, launchSeatMap, parseSeatMap, writeSeatMap, seatExpectation, claudeLeadSeat, SEAT_BYTES };

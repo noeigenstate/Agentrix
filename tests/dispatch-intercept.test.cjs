@@ -91,7 +91,11 @@ test('Claude role arguments use the carried seat reader without loading dispatch
   }
   const canonicalHelper = fs.realpathSync.native(helper);
   assert.deepEqual(await launchWords(), [canonicalHelper, 'mcp', 'claude']);
-  fs.copyFileSync(path.join(root, 'electron/features/agents/call-seat.cjs'), seatFile);
+  for (const name of ['agents/call-seat.cjs', 'agents/dispatch-events.cjs', 'dashboard/records-routing.cjs']) {
+    const relative = path.join('electron/features', name);
+    fs.mkdirSync(path.dirname(path.join(folder, relative)), { recursive: true });
+    fs.copyFileSync(path.join(root, relative), path.join(folder, relative));
+  }
   assert.deepEqual(await launchWords(), [canonicalHelper, 'mcp', 'claude', 'sonnet', 'low']);
 });
 
@@ -301,7 +305,7 @@ test('a native owner receives shim depth zero while account reads remain without
 test('interactive wrappers read bootstrap shims, keep real CLI lookup outside that folder, and give the shims only to the Claude Code they start', () => {
   for (const name of ['integration/bootstrap.ps1', 'integration/bash-integration.bash', 'integration/zsh-integration.zsh']) {
     const text = read(name);
-    assert.match(text, /\.shims|\[.?shims.?\]/); assert.match(text, /--launch/);
+    assert.match(text, /\.shims|--bootstrap-shims/); assert.match(text, /--launch/);
     assert.match(text, /\.agentrix-shims|__pg_shims/, `${name} excludes shims when an owner wrapper resolves the CLI`);
     assert.doesNotMatch(text, /export PATH=|\$env:Path\s*=/, `${name} leaves the terminal's own PATH alone`);
   }
@@ -311,8 +315,7 @@ test('Claude launch argv matches the former wrapper order and the old intercept 
   const folder = temporary(t), { file } = sessionBootstrap(folder, { conductor: true });
   const model = 'claude-sonnet-5-5[1m]', effort = 'high', settings = path.join(folder, 'hook settings.json');
   const original = ['--resume', 'fixture-session', '中文 "quoted" prompt', ''];
-  const note = 'Earlier work. Agentrix skill delivery: loaded skills';
-  const prompt = 'Earlier work. Agentrix delivers skill instructions through its SessionStart hook.';
+  const prompt = 'Earlier work. Agentrix skill delivery: a literal phrase\n继续=a=b';
   fs.writeFileSync(file + '.lead', [model, effort, '1', 'null', ''].join('\n'));
   const source = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: file, AGENTRIX_SEATS: 'null' };
   const ask = (words, env = source) => {
@@ -328,13 +331,23 @@ test('Claude launch argv matches the former wrapper order and the old intercept 
   assert.deepEqual(legacy.slice(0, -2), shimOnly);
   assert.equal(legacy.at(-2), '--');
   assert.deepEqual(toolServer(mcp).args.slice(1), ['mcp', 'claude', model, effort]);
-  const fields = { AGENTRIX_LAUNCH_MODEL: model, AGENTRIX_LAUNCH_EFFORT: effort, AGENTRIX_LAUNCH_SETTINGS: settings, AGENTRIX_LAUNCH_NOTE: note };
+  const fields = { AGENTRIX_LAUNCH_MODEL: model, AGENTRIX_LAUNCH_EFFORT: effort, AGENTRIX_LAUNCH_SETTINGS: settings, AGENTRIX_LAUNCH_NOTE: prompt };
   const oldLocal = [mcp, '--settings', settings, '--append-system-prompt', prompt, '--model', model, '--effort', effort, ...original];
   const local = JSON.parse(ask(['--launch', 'claude', 'json', 'shims', ...original], { ...source, ...fields }));
-  assert.deepEqual(local.slice(0, shimOnly.length), shimOnly);
-  assert.deepEqual([...local.slice(shimOnly.length + 1), ...original], oldLocal);
-  const remote = ask(['--launch', 'claude', 'words', 'remote', ...original], { ...source, ...fields, AGENTRIX_LAUNCH_ROLE: mcp }).split('\0').slice(1, -1);
+  assert.equal(local.v, 1);
+  assert.equal(local.type, 'launch.words');
+  assert.deepEqual([...local.unset.flatMap(name => ['-u', name]), ...Object.entries(local.env).map(([name, value]) => `${name}=${value}`)], shimOnly);
+  assert.deepEqual([...local.argv, ...original], oldLocal);
+  const records = ask(['--launch', 'claude', 'words', 'remote', ...original], { ...source, ...fields, AGENTRIX_LAUNCH_ROLE: mcp }).split('\0');
+  assert.deepEqual(records.slice(0, 2), ['format=agentrix.launch-words', 'version=1']);
+  assert.equal(records.pop(), '');
+  const remote = records.filter(record => record.startsWith('arg=')).map(record => record.slice(4));
   assert.deepEqual([...remote, ...original], [...oldLocal.slice(1, -original.length), mcp, ...original]);
+  fs.writeFileSync(file, '{}');
+  assert.equal(ask(['--launch', 'claude', 'classify', 'native', '--version']), 'utility');
+  assert.deepEqual(JSON.parse(ask(['--launch', 'claude', 'json', 'plain'], { ...source, ...fields })),
+    ['--', '--settings', settings, '--append-system-prompt', prompt, '--model', model, '--effort', effort]);
+  assert.match(ask(['--launch', 'claude', 'classify', 'native', '--version'], { ...source, AGENTRIX_LAUNCH_WIRE: '1' }), /^format=agentrix.launch-route\n/);
 });
 
 // The terminal's own PATH stays clean; only the Claude Code its wrapper starts is a planner.

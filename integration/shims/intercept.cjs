@@ -6,9 +6,13 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const SHIM_NAMES = ['.agentrix-shims', 'codex', 'codex.cmd', 'codex.ps1', 'claude', 'claude.cmd', 'claude.ps1'];
 const ZSH_PHASES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'];
-const HOOK_FILES = ['hooks/path.sh', 'hooks/bash-env.sh', 'hooks/claude-env.sh', 'hooks/owner.sh', 'hooks/zsh/phase.zsh', ...ZSH_PHASES.map(name => `hooks/zsh/${name}`)];
+const HOOK_FILES = ['hooks/path.sh', 'hooks/bash-env.sh', 'hooks/claude-env.sh', 'hooks/owner.sh', 'hooks/terminal-wire.sh',
+  'hooks/zsh/phase.zsh', ...ZSH_PHASES.map(name => `hooks/zsh/${name}`)];
 const sourceAdapters = path.resolve(__dirname, '../../electron/features/cli-adapters');
 const terminalSource = path.join(sourceAdapters, 'terminal.cjs');
+const packagedRuntime = path.resolve(__dirname, '../electron');
+const runtimeRoot = fs.existsSync(packagedRuntime) ? packagedRuntime : path.resolve(__dirname, '../../electron');
+const wire = () => require(path.join(runtimeRoot, 'features/agents/dispatch-events.cjs'));
 
 function sourceWords() {
   const { adapters } = require(path.join(sourceAdapters, 'registry.mjs'));
@@ -42,7 +46,7 @@ function runtimeFiles() {
   const words = sourceWords(), source = fs.readFileSync(terminalSource, 'utf8');
   const { claudeWire } = require(terminalSource);
   const envelope = [
-    'const terminalWire = ' + JSON.stringify({ words, claude: claudeWire }) + ';',
+    'const terminalWire = ' + JSON.stringify({ format: 'agentrix.terminal-wire', version: 1, words, claude: claudeWire }) + ';',
     'const terminalModule = { exports: {} };',
     '(function (module) {',
     source,
@@ -77,7 +81,7 @@ function withShims(source, { depth, runId, proof }) {
     const nested = source.AGENTRIX_SHIMS !== undefined, shell = shellFolder(__dirname);
     // CLAUDE_ENV_FILE is the session's private copy (bootstrap-file.cjs), never an installed file: Claude Code lets
     // SessionStart hooks append to it.
-    const session = nested && source.CLAUDE_ENV_FILE || bootstrapField(source.AGENTRIX_BOOTSTRAP, 'claudeEnvFile');
+    const session = nested && source.CLAUDE_ENV_FILE || readBootstrap(source.AGENTRIX_BOOTSTRAP)?.value.claudeEnvFile;
     env.AGENTRIX_SHIMS = shell;
     for (const [name, file] of [['BASH_ENV', `${shell}/hooks/bash-env.sh`], ['CLAUDE_ENV_FILE', session], ['ZDOTDIR', `${shell}/hooks/zsh`]]) {
       const saved = `AGENTRIX_SHIM_USER_${name}`;
@@ -92,15 +96,19 @@ function withShims(source, { depth, runId, proof }) {
 const shimHook = value => !!value && fs.existsSync(path.join(path.dirname(path.dirname(process.platform === 'win32'
   ? value.replace(/^\/([A-Za-z])(?=\/)/, '$1:') : value)), '.agentrix-shims'));
 
-function bootstrapField(file, name) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))[name]; } catch { return undefined; }
+function readBootstrap(file, format = 'agentrix.bootstrap') {
+  try {
+    const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+    return wire().readEnvelope(text, { format });
+  } catch { return undefined; }
 }
 
 // What withShims changes, as words for env(1): -u NAME or NAME=VALUE. A shell wrapper starts one planner with them.
-const shimWords = (source, options) => envWords(source, withShims(claudeLaunchEnvironment(source), options));
-function envWords(source, next) {
-  return [...Object.keys(source).filter(name => !(name in next)).flatMap(name => ['-u', name]),
-    ...Object.entries(next).filter(([name, value]) => source[name] !== value).map(([name, value]) => `${name}=${value}`)];
+const shimWords = (source, options) => envWords(envChanges(source, withShims(claudeLaunchEnvironment(source), options)));
+const envWords = ({ unset, env }) => [...unset.flatMap(name => ['-u', name]), ...Object.entries(env).map(([name, value]) => `${name}=${value}`)];
+function envChanges(source, next) {
+  return { unset: Object.keys(source).filter(name => !Object.hasOwn(next, name)),
+    env: Object.fromEntries(Object.entries(next).filter(([name, value]) => source[name] !== value)) };
 }
 
 // Wrappers call this immediately before each Claude launch, including terminals opened before a Settings change.
@@ -108,8 +116,8 @@ function claudeLaunchEnvironment(source) {
   const next = { ...source };
   for (const name of Object.keys(next)) if (name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') delete next[name];
   const policy = source.AGENTRIX_BOOTSTRAP && source.AGENTRIX_BOOTSTRAP + '.background.json';
-  const allow = policy && fs.existsSync(policy) ? bootstrapField(policy, 'claudeBackgroundTasks')
-    : bootstrapField(source.AGENTRIX_BOOTSTRAP, 'claudeBackgroundTasks');
+  const allow = (policy && fs.existsSync(policy) ? readBootstrap(policy, 'agentrix.background-policy')
+    : readBootstrap(source.AGENTRIX_BOOTSTRAP))?.value.claudeBackgroundTasks;
   if (allow !== true) next.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
   return next;
 }
@@ -123,7 +131,18 @@ function helperPath() {
 // closed as nested.
 const planner = env => env.AGENTRIX_DISPATCH_DEPTH === '0' && !env.AGENTRIX_RUN_ID && !env.AGENTRIX_RUN_PROOF && !!env.AGENTRIX_BOOTSTRAP;
 const locateCli = (agent, env) => require(helperPath())[agent === 'codex' ? 'locateCodex' : 'locateClaude'](env);
-const sessionMode = env => { try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim(); } catch { return 'native'; } };
+function sessionMode(env) {
+  if (!env.AGENTRIX_BOOTSTRAP) return 'native';
+  try {
+    return wire().readSessionMode(fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode.env', 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim(); } catch { return 'native'; }
+    }
+    // An unreadable or unsupported mode cannot authorize shell delegation.
+    return 'conductor';
+  }
+}
 
 // The lead session gets the role tools, which the worker engine serves over MCP stdio and refuses in native mode: a
 // session started in native mode has them when the owner switches it to conductor mode.
@@ -187,26 +206,35 @@ function plannerLaunch(source, agent, args) {
   const next = withShims(claudeLaunchEnvironment(source), { depth: 0 });
   const terminal = Object.hasOwn(terminalFacets(), agent) && terminalFacets()[agent].terminal;
   const tools = planner(next) && terminal?.converses?.(args) && !terminal.delegates?.(args);
-  return { env: envWords(source, next), roleTools: tools ? roleToolArgs(agent, next) : [] };
+  return { ...envChanges(source, next), roleTools: tools ? roleToolArgs(agent, next) : [] };
 }
 
-function terminalLaunch(source, agent, action, mode, args, lookup = id => Object.hasOwn(terminalFacets(), id) ? terminalFacets()[id] : undefined) {
+function terminalLaunch(source, agent, action, mode, args, lookup = id => Object.hasOwn(terminalFacets(), id) ? terminalFacets()[id] : undefined,
+  legacy = false) {
   const adapter = lookup(agent), terminal = adapter?.terminal;
   if (!terminal) throw new Error('Unknown terminal adapter');
   const remote = mode === 'remote';
   if (action === 'classify') {
     const classified = terminal.classify?.(args, { native: mode === 'native', remote, alias: remote ? undefined : source.AGENTRIX_LAUNCH_ALIAS });
     const words = adapter.manifest?.words ?? adapter.words;
-    return classified ?? (words?.utilities.includes(args[0]) ? 'passthrough' : terminal.redirect ?? 'conversation');
+    const route = classified ?? (words?.utilities.includes(args[0]) ? 'passthrough' : terminal.redirect ?? 'conversation');
+    return legacy ? route : wire().writeKeyValue({ format: 'agentrix.launch-route', version: '1', route });
   }
   if (terminal.redirect) throw new Error('Terminal launch redirects to ' + terminal.redirect);
   const { AGENTRIX_LAUNCH_MODEL: model, AGENTRIX_LAUNCH_EFFORT: effort,
     AGENTRIX_LAUNCH_NOTE: note, AGENTRIX_LAUNCH_SETTINGS: file, AGENTRIX_LAUNCH_ROLE: role, AGENTRIX_LAUNCH_ROLE_ERROR: roleError } = source;
-  const plan = mode === 'shims' ? plannerLaunch(source, agent, args) : { env: [], roleTools: remote && role ? [role] : [] };
-  const { argv, env } = terminal.launch({ ...plan, seat: { model, effort }, note, roleError: remote ? roleError : undefined, hooks: { file }, remote });
-  const words = [...env, '--', ...argv];
-  return action === 'json' ? JSON.stringify(words) : words.map(word => word + '\0').join('');
+  const { unset, env, roleTools } = mode === 'shims' ? plannerLaunch(source, agent, args) : { unset: [], env: {}, roleTools: remote && role ? [role] : [] };
+  const { argv } = terminal.launch({ roleTools, seat: { model, effort }, note, roleError: remote ? roleError : undefined, hooks: { file }, remote });
+  if (legacy) {
+    const words = [...envWords({ unset, env }), '--', ...argv];
+    return action === 'json' ? JSON.stringify(words) : nulWords(words);
+  }
+  if (action === 'json') return JSON.stringify({ v: 1, type: 'launch.words', unset, env, argv });
+  return nulWords(['format=agentrix.launch-words', 'version=1', ...unset.map(name => 'unset=' + name),
+    ...Object.entries(env).map(([name, value]) => `env=${name}=${value}`), ...argv.map(word => 'arg=' + word)]);
 }
+
+const nulWords = words => words.map(word => word + '\0').join('');
 
 module.exports = { intercept, terminalLaunch, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };
 
@@ -217,16 +245,21 @@ if (require.main === module) {
   }
   delete process.env.AGENTRIX_INTERCEPT_ARGV;
   if (!Array.isArray(argv) || !argv.every(word => typeof word === 'string')) argv = [];
-  if (argv[0] === '--launch') {
+  if (argv[0] === '--bootstrap-shims') {
+    process.stdout.write(readBootstrap(process.env.AGENTRIX_BOOTSTRAP)?.value.shims || '');
+  } else if (argv[0] === '--launch') {
     const [, agent, action, mode, ...args] = argv;
-    process.stdout.write(terminalLaunch(process.env, agent, action, mode, args));
+    // Terminals already open across an in-place update still send the original launch request.
+    const legacy = process.env.AGENTRIX_LAUNCH_WIRE !== '1' && readBootstrap(process.env.AGENTRIX_BOOTSTRAP)?.legacy === true;
+    delete process.env.AGENTRIX_LAUNCH_WIRE;
+    process.stdout.write(terminalLaunch(process.env, agent, action, mode, args, undefined, legacy));
   } else if (argv[0] === '--shim-env') {
     // Remove next version, once old terminal wrappers are gone.
     // --shim-env [json] [--role-tools <agent> <the user's arguments>]: NUL-terminated words, or JSON. A terminal opened
     // before an update still asks without --role-tools, for the planner's words alone.
     const json = argv[1] === 'json', [flag, agent, ...args] = argv.slice(json ? 2 : 1);
     const plan = flag === '--role-tools' && plannerLaunch(process.env, agent, args);
-    const words = plan ? [...plan.env, '--', ...plan.roleTools] : shimWords(process.env, { depth: 0 });
-    process.stdout.write(json ? JSON.stringify(words) : words.map(word => word + '\0').join(''));
+    const words = plan ? [...envWords(plan), '--', ...plan.roleTools] : shimWords(process.env, { depth: 0 });
+    process.stdout.write(json ? JSON.stringify(words) : nulWords(words));
   } else intercept(argv).then(code => { process.exitCode = code; });
 }
