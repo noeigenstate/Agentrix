@@ -1,3 +1,4 @@
+const { createCliChecks } = require('../electron/features/agents/usage-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -249,9 +250,8 @@ test("main tells the agents' state again whenever what it says of Claude Code ch
   // main's own inspectClaude and checkClaude, over a locator of fake files.
   const context = vm.createContext({ claudeLocator, claudeState, agents: { changed: () => { pushes++; } }, claudeRuntime: undefined,
     inspectClaudeExecutable: settings => inspectClaudeExecutable({ ...settings, ...options }) });
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), start = source.indexOf('async function inspectClaude(');
-  const check = source.indexOf('function checkClaude(', start);
-  vm.runInContext(source.slice(start, source.indexOf('\n}', check) + 2), context);
+  Object.assign(context, createCliChecks(context));
+
   assert.equal((await context.checkClaude('refresh')).reason, 'not_found'); assert.equal(pushes, 1, 'the first answer');
   await context.checkClaude('refresh'); assert.equal(pushes, 1, 'the same answer again is no news');
   // The reason stays not_found, but the agents' state now says incomplete: it is pushed.

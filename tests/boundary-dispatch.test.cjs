@@ -126,16 +126,19 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
 // registration past the helper's wait, so a worker lost its account name. Main asks locateTeam; only the helper keeps projectTeam.
 test('main, the control channel and the sub-agent view ask the team without a synchronous Git call', () => {
   const files = ['electron/main.cjs', 'electron/features/agents/dispatch-control.cjs', 'electron/features/agents/subagent-feed.cjs'];
-  // A reference such as the SSH runtime's injected execFileSync is not a call; comments may name what they replaced.
-  const code = source => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const syncLookups = new Set(['projectTeam', 'execFileSync', 'execSync', 'spawnSync']);
   for (const file of files) {
-    const source = code(read(file));
-    assert.doesNotMatch(source, /\bprojectTeam\s*\(/, `${file} looks a team up with the synchronous projectTeam`);
-    assert.doesNotMatch(source, /\b(?:execFileSync|execSync|spawnSync)\s*\(/, `${file} runs a process synchronously`);
+    const calls = nodes(syntax(file), node => ts.isCallExpression(node));
+    for (const { expression, arguments: [specifier] } of calls) {
+      const name = ts.isIdentifier(expression) ? expression.text : ts.isPropertyAccessExpression(expression) ? expression.name.text : null;
+      assert.ok(!syncLookups.has(name), `${file} uses synchronous lookup ${name}`);
+      if (name === 'require' || expression.kind === ts.SyntaxKind.ImportKeyword) {
+        assert.ok(!specifier || !ts.isStringLiteral(specifier) || !specifier.text.endsWith('/team/team.cjs'), file);
+      }
+    }
   }
-  // Renaming a destructured import must not get past the call scan above: the synchronous module is not required here at all.
-  for (const file of files) assert.doesNotMatch(code(read(file)), /\b(?:require|import)\s*\(\s*['"][^'"]*team\/team\.cjs['"]/, `${file} requires team/team.cjs`);
-  assert.match(read('electron/main.cjs'), /team-locate\.cjs/, 'main asks the asynchronous lookup');
+  const intake = syntax('electron/features/agents/dispatch-intake.cjs');
+  assert.ok(nodes(intake, node => ts.isPropertyAccessExpression(node) && node.name.text === 'locateTeam').length);
   const feed = syntax('electron/features/agents/subagent-feed.cjs');
   const calls = nodes(feed, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression));
   const imports = calls.filter(node => node.expression.text === 'require').map(node => node.arguments[0].text);

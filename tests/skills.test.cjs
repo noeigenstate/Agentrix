@@ -1,3 +1,4 @@
+const { createSessionPresentation } = require('../electron/app/session-presentation.cjs');
 const { bootstrapScript, runPowerShell } = require('./helpers/powershell-hook.cjs');
 const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
@@ -1301,18 +1302,16 @@ test('delivery is reused until relevant changes and successful reads publish usa
   assert.equal(refresh.mock.callCount(), 0, 'starts and usage publications do not scan every project');
   store.setOptions(info.id, { trigger: 'always' });
   assert.notEqual(store.delivery(projects[0]), delivery);
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const notes = source.slice(source.indexOf('function refreshSkillNotes()'), source.indexOf('// Workspace broadcasts'));
   const sessions = new Map([['one', { projectId: 'p1', terminalId: 'one', sessionId: 'first', skillNoteFile: 'one.txt' }], ['two', { projectId: 'p1', terminalId: 'two', sessionId: 'later', skillNoteFile: 'two.txt' }]]);
   let deliveries = 0, writes = 0;
   const deliverForTest = (project, remote, sessionId) => {
     assert.equal(project.id, 'p1'); assert.equal(remote, false); assert.ok(['first', 'later'].includes(sessionId)); deliveries++; return {};
   };
-  const refreshNotes = require('node:vm').runInNewContext('(' + notes + ')', {
+  const { refreshSkillNotes } = createSessionPresentation({
     sessions, store: { projects }, skills: { delivery: deliverForTest }, startupNoteFields: () => ({ full: 'Current instructions.', launch: 'Short note.' }), path,
     integrationDir: '/synthetic/integration', handoffFile: id => id, READING_NOTE: 'Read.', writeFileAtomic: () => writes++ });
-  refreshNotes(); assert.equal(deliveries, 2); assert.equal(writes, 2);
-  refreshNotes(); assert.equal(writes, 2, 'unchanged notes are not rewritten');
+  refreshSkillNotes(); assert.equal(deliveries, 2); assert.equal(writes, 2);
+  refreshSkillNotes(); assert.equal(writes, 2, 'unchanged notes are not rewritten');
 });
 
 test('imports skip dependency and dot folders, enforce total/count limits, and yield to the event loop', async t => {

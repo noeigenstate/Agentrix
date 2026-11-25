@@ -1,11 +1,9 @@
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 const { defineMain } = require('./helpers/main-modules.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 function fixture({ wrongIdentity = false } = {}) {
   const agent = 'claude';
@@ -24,12 +22,12 @@ function fixture({ wrongIdentity = false } = {}) {
         claudeSessionId: wrongIdentity ? 'wrong-conversation' : 'same-conversation', status: wrongIdentity ? 'exited' : 'codex',
         cliState: { sessionId: 'new-pty', state: 'idle' }, completionWork: { changed() {} }, promptQueue: { changed() {} } });
     }, disposeTerminal(id, options) { assert.equal(options.preserveSwitch, true); sessions.delete(id); },
-    findProject: () => project, applyActivity: () => signals.push('activity'), scheduleState: () => signals.push('state'), setTimeout,
+    findProject: () => project, applyActivity: () => signals.push('activity'), scheduleState: () => signals.push('state'),
     publishCliState(host, state) { host.cliState = { sessionId: host.sessionId, state }; },
   };
   vm.createContext(context);
   defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal');
-  vm.runInContext(source.slice(source.indexOf('function resolveIntervention('), source.indexOf('const interventions =')), context);
+  context.resolveIntervention = createDispatchIntake(context).resolveIntervention;
   return { context, old, saves, signals, sessions };
 }
 test('I3/I5: staged terminal keeps the native surface until commit and preserves dispatch/intervention identity without a completion signal', async () => {
@@ -51,35 +49,39 @@ test('I4: a wrong terminal resume identity restores the original native surface 
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0); assert.equal(f.signals.length, 0);
 });
 
-test('a live terminal cold start can pass fifteen seconds and still resume the exact provider', async () => {
+test('a live terminal cold start can pass fifteen seconds and still resume the exact provider', async t => {
   const f = fixture(), start = f.context.startTerminal;
-  let elapsed = 0, waits = 0;
-  f.context.Date = { now: () => elapsed };
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
   f.context.startTerminal = (...args) => {
     start(...args);
     Object.assign(f.sessions.get('t'), { status: 'starting', claudeSessionId: null, cliState: null });
   };
-  f.context.setTimeout = callback => setImmediate(() => {
-    elapsed += 16000; waits++;
-    if (waits === 2) Object.assign(f.sessions.get('t'), {
-      status: 'codex', claudeSessionId: 'same-conversation', cliState: { sessionId: 'new-pty', state: 'idle' },
-    });
-    callback();
+  const pending = f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true);
+  t.mock.timers.tick(16000);
+  await Promise.resolve();
+  assert.equal(f.sessions.get('t').switchPreviousHost, f.old);
+  assert.equal(f.saves.length, 0);
+  Object.assign(f.sessions.get('t'), {
+    status: 'codex', claudeSessionId: 'same-conversation', cliState: { sessionId: 'new-pty', state: 'idle' },
   });
-  const prepared = await f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true);
-  assert.equal(elapsed, 32000);
+  t.mock.timers.tick(16000);
+  const prepared = await pending;
+  assert.equal(Date.now(), 32000);
   assert.equal(f.sessions.get('t').switchPreviousHost, f.old, 'keep the API view until actual readiness');
   assert.equal(f.saves.length, 0, 'elapsed time cannot commit or abandon the source');
   prepared.commit();
   assert.equal(f.saves[0].threadId, 'same-conversation');
 });
 
-test('an owner cancellation during terminal startup reaps the staged host and preserves the source', async () => {
+test('an owner cancellation during terminal startup reaps the staged host and preserves the source', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(), start = f.context.startTerminal;
   let current = true;
   f.context.startTerminal = (...args) => { start(...args); Object.assign(f.sessions.get('t'), { status: 'starting', claudeSessionId: null, cliState: null }); };
-  f.context.setTimeout = callback => setImmediate(() => { current = false; callback(); });
-  await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => current), /session_changed/);
+  const pending = f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => current);
+  current = false;
+  t.mock.timers.tick(50);
+  await assert.rejects(pending, /session_changed/);
   assert.equal(f.sessions.get('t'), f.old);
   assert.equal(f.saves.length, 0);
 });

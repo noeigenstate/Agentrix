@@ -1,9 +1,11 @@
+const { createUsageHost, createClaudeAccountService } = require('../electron/features/agents/usage-host.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
+const { createClaudeActivity } = require('../electron/features/terminal-events/claude-activity.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
 const { UsageMeter, claudeAccount, selectClaudeAccount } = require('../electron/features/agents/agent-usage.cjs');
 const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
 const { CodexAccountUsage, accountResult } = require('../electron/features/agents/codex-account-usage.cjs');
@@ -12,16 +14,6 @@ const { promptText } = require('../electron/prompt-queue.cjs');
 
 const { defineMain } = require('./helpers/main-modules.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-const activity = fs.readFileSync(path.join(__dirname, '../electron/features/terminal-events/claude-activity.cjs'), 'utf8');
-const section = (from, to) => main.slice(main.indexOf(from), main.indexOf(to));
-const accounts = section('let claudeAccountTimer =', '// The agent chosen on a new project');
-const claudeService = section('const claudeAccounts = new', 'const { agentCommand }');
-const notes = section('function noteSettings(', '// A skill step names the skill;');
-const historyUsage = section('function usageHistory(', '// What the activity pane shows');
-const lifecycle = section('function startUsage(', 'let claudeAccountTimer =');
-const state = section('function publicState(', 'function terminalIds(');
-const claudeHistory = activity.match(/const onHistory = ready => \{[\s\S]*?\r?\n {6}\};/)[0];
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const account = (at = 1000, percent = 12, resetsAt = null) => ({ limits: [{ minutes: 300, percent, resetsAt }], at, source: 'Claude Code' });
 const session = (terminalId, agent = 'claude', projectId = 'local') => ({
@@ -39,11 +31,7 @@ function watcherFs(existsSync = () => true) {
 
 function runtime(overrides = {}) {
   const sessions = overrides.sessions || new Map([['one', session('one')]]);
-  const terminalIds = project => {
-    const ids = [...sessions.values()].filter(s => s.projectId === project.id).map(s => s.terminalId);
-    return ids.length ? ids : [project.id];
-  };
-  const context = vm.createContext({ restorePlans: new Map(), readingHistory: { summary: () => null },
+  const context = { restorePlans: new Map(), readingHistory: { summary: () => null },
     UsageMeter, promptText, sessions, process, path, Date, setTimeout, clearTimeout, setInterval, clearInterval, callsOf: () => null, dispatchedOnly: () => null,
     fs: watcherFs().fs, quitting: false, scheduleState() {},
     store: { projects: [{ id: 'local', kind: 'local' }, { id: 'remote', kind: 'ssh' }], settings: {}, expectCompletion: () => assert.fail('background usage must not rearm completion'), setRestore() {} },
@@ -53,27 +41,34 @@ function runtime(overrides = {}) {
     electronNet: { fetch: () => assert.fail('unexpected Chromium fetch') },
     codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '',
     followClaude() {}, applyActivity() {}, broadcast() {}, startSkillSession() {}, endSkillSession() {}, isLocalAgentCommand: (_agent, text) => text.startsWith('/'),
-    terminalIds, shownTerminalIds: terminalIds,
     localShell: () => ({ kind: 'pwsh' }), t: value => value, getBranch: () => '', startupErrors: new Map(),
     desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, windowZoom: null, macTitlebar: null, app: { getVersion: () => 'test' },
     ...overrides,
-  });
+  };
   const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
   context.adapterOf = id => id === 'claude' ? { ...adapterOf(id), usage: { ...adapterOf(id).usage, accountReader: context.readClaudeAccount } } : adapterOf(id);
-  // Run the real main-process functions without requiring Electron or creating a terminal.
-  defineMain(context, 'publishCliState', 'claudeActivity', 'acceptDispatchEvent');
-  Object.assign(context, createShellEvents(context));
-  const api = vm.runInContext(`${claudeService}\n${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${state}\n({
-    refreshClaudeAccounts, startUsage, stopUsageAccount, disposeClaudeAccounts, scheduleUsageRollover, noteSettings, usageHistory, claudeActivity, onEvent, publicState,
-    claudeAccounts,
-    resources: () => ({ claudeAccountTimer, claudeAccountSoon, claudeAccountPending, claudeAccountWatchers, usageRolloverTimer, usageRolloverAt })
-  })`, context);
+  for (const project of context.store.projects) {
+    project.terminals = [...sessions.values()].filter(s => s.projectId === project.id && s.terminalId !== project.id).map(s => ({ id: s.terminalId }));
+    project.primaryTerminalClosed = !sessions.has(project.id);
+  }
+  const usage = createUsageHost(context);
+  context.claudeAccounts = createClaudeAccountService({ ...context, ...usage });
+  const activity = createClaudeActivity(context);
+  Object.assign(context, usage, { publishCliState: activity.publishCliState, claudeActivity: activity.claudeActivity }, createShellEvents(context));
+  defineMain(context, 'acceptDispatchEvent');
+  const api = { ...usage, claudeActivity: context.claudeActivity, onEvent: context.onEvent,
+    claudeAccounts: context.claudeAccounts, projects: context.store.projects, publicState: createPublicState(context).publicState, resources: usage.usageResources };
   // Claude's handler also rebinds the transcript's background tasks; the handlers close over their project and file.
   api.history = (s, agent) => {
     const project = { id: s.projectId, kind: 'local' };
-    if (agent === 'claude') return vm.runInContext(`(s, project, file, callsOf) => { ${claudeHistory}; return onHistory; }`, context)(
-      s, project, 'transcript.jsonl', () => ({ bindBackground() {} }));
     let history;
+    if (agent === 'claude') {
+      createClaudeActivity({ ...context, claudeConfigDir: () => os.tmpdir(), prepareReading: async () => {},
+        callsOf: () => ({ setFolder() {}, bindBackground() {} }),
+        TranscriptTail: class { constructor(_file, options) { history = options.onHistory; } }, monitorActivity: () => ({ stop() {} }),
+      }).followClaude(project, s, { sessionId: 'transcript', transcriptPath: path.join(os.tmpdir(), 'transcript.jsonl') });
+      return history;
+    }
     createShellEvents({ ...context, usageHistory: api.usageHistory, monitorActivity: () => null,
       CodexActivityReader: class { constructor(_cwd, _home, _since, options) { history = options.onHistory; } },
     }).watchCodexActivity(project, s, {});
@@ -243,6 +238,7 @@ test('the real Claude poller uses Chromium fetch, publishes sanitized limits wit
   await api.refreshClaudeAccounts();
   t.mock.timers.tick(60000); await flush(); assert.equal(requests, 0);
   const s = session('one'); s.usageEnv = {}; s.usageCwd = path.join(root, 'project'); sessions.set('one', s);
+  api.projects[0].terminals.push({ id: 'one' });
   await api.refreshClaudeAccounts();
   t.mock.timers.tick(249); await flush(); assert.equal(requests, 0);
   t.mock.timers.tick(1); await flush(); assert.equal(requests, 1);

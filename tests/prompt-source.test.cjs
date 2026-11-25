@@ -1,6 +1,6 @@
+const { createPublicState } = require('../electron/app/public-state.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { PromptQueue, promptText, promptSummary } = require('../electron/prompt-queue.cjs');
@@ -16,7 +16,6 @@ const { createNativeHost } = require('../electron/features/native-session/host.c
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 function activityHarness(mode = 'codex') {
   let now = 2000, alerts = 0, arms = 0;
   const agent = mode.startsWith('claude') ? 'claude' : 'codex';
@@ -364,7 +363,7 @@ test('main keeps the short lastTask and long card task across bare follow-ups in
       t: text => text, briefAction: value => value, desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, windowZoom: null, macTitlebar: null,
       startupErrors: new Map(), restorePlans: new Map(), readingHistory: { summary: () => null },
       process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'synthetic' } }, app: { getVersion: () => '0.0.0' } });
-    vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
+    context.publicState = createPublicState(context).publicState;
     const card = () => context.publicState().projects[0].terminals[0];
     assert.equal(card().task, cardSummary); assert.equal(card().taskTitle, request);
     s.promptQueue.reset();

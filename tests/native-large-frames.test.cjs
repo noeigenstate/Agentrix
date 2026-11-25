@@ -1,3 +1,4 @@
+const { createProjectPreviews } = require('../electron/app/project-previews.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -63,20 +64,19 @@ test('thread/resume accepts a response above 4 MiB without changing thread or tr
 });
 
 test('generated image cards serve only the saved file and never retain encoded pixels', async t => {
-  const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm');
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-picture-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const folder = path.join(root, 'generated_images', 'one'); fs.mkdirSync(folder, { recursive: true });
   const savedPath = path.join(folder, 'picture.png'); fs.writeFileSync(savedPath, Buffer.from('89504e470d0a1a0a', 'hex'));
   const { PreviewResources } = require('../electron/preview-resources.cjs'), previewResources = new PreviewResources();
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const render = vm.runInNewContext(source.slice(source.indexOf('function generatedPreview('), source.indexOf('const { thumbnail, small,')) + '\ngeneratedPreview;',
-    { fs, path, previewResources, isGeneratedImage: require('../electron/generated-image-path.cjs').isGeneratedImage });
+  const { generatedPreview } = createProjectPreviews({ fs, path, previewResources,
+    isGeneratedImage: require('../electron/generated-image-path.cjs').isGeneratedImage });
   const f = fixture(), spec = { agent: 'codex', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', cwd: root };
   const { createEventStream } = require('../electron/features/native-session/events.cjs');
   const stream = createEventStream(spec, () => {});
   const events = require('../electron/features/codex-app-server/events.cjs').createEvents(spec,
-    event => stream.publish(event.type, event.payload, { itemId: event.itemId }), Date.now, item => render(item, spec));
+    event => stream.publish(event.type, event.payload, { itemId: event.itemId }), Date.now, item => generatedPreview(item, spec));
   try {
     f.child.stdout.write(JSON.stringify({ method: 'item/completed', params: { item: { id: 'image', type: 'imageGeneration',
       status: 'completed', result: 'X'.repeat(5 * 1024 * 1024), savedPath, revisedPrompt: 'Offline picture' } } }) + '\n');

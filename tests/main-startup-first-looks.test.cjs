@@ -1,14 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const ts = require('typescript');
 const { createCodexLocator } = require('../electron/features/codex-runtime/locator.cjs');
 const { fakeFiles } = require('./helpers/claude-files.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 
-const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 
 function fixture() {
   let found = null;
@@ -59,16 +54,4 @@ test("a restored terminal is told the Codex found when its --version check outla
   assert.equal(env.AGENTRIX_CODEX_EXECUTABLE, exe);
   answer(null, 'codex-cli 0.170.0');
   assert.equal((await codexFirst).version, '0.170.0');
-});
-
-test('main starts both first looks and the restore waits through firstLooksSettled', () => {
-  const calls = [];
-  function visit(node) {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) calls.push(node.expression.text);
-    ts.forEachChild(node, visit);
-  }
-  visit(ast);
-  const restoreAt = calls.indexOf('restoreTerminals');
-  assert.ok(calls.includes('checkCodex') && calls.indexOf('checkCodex') < restoreAt);
-  assert.equal(calls[restoreAt - 1], 'firstLooksSettled');
 });

@@ -1,3 +1,4 @@
+const { registerImageSave } = require('../electron/app/application-ipc.cjs');
 const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -3264,10 +3265,26 @@ test('the reading view keeps two vertical lines: the avatars and the reply text 
   assertRule(css, '.reading-step.is-user:not(:first-child)', { 'margin-top': '16px' });
 });
 
-test('the save-as channel is registered in the main process, the preload and the types', () => {
-  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-  assert.match(read('electron/main.cjs'), /handle\('agent:saveImageAs'[\s\S]*isGeneratedImage\(file\)[\s\S]*remoteProjectImage\(projectId, file\)[\s\S]*showSaveDialog[\s\S]*writeFile\(target, bytes\) : fs\.promises\.copyFile/);
-  let bridge; const calls = [];
+test('the save-as channel is registered in the main process, the preload and the types', async () => {
+  const handlers = new Map(), calls = [], writes = [];
+  const saveDialog = { canceled: false, filePath: 'chosen' }, window = {};
+  const { saveDialogOptions, saveTarget } = require('../electron/image-save.cjs');
+  registerImageSave({ findProject: id => ({ kind: id === 'ssh' ? 'ssh' : 'local' }), isGeneratedImage: file => file === 'fixture.png',
+    fs: { statSync: () => ({ isFile: () => true }), promises: {
+      writeFile: async (...args) => writes.push(['write', ...args]), copyFile: async (...args) => writes.push(['copy', ...args]),
+    } }, window, dialog: { showSaveDialog: async (parent, options) => {
+      assert.equal(parent, window); assert.equal(options.defaultPath, path.join('pictures', 'fixture.png')); return saveDialog;
+    } }, app: { getPath: () => 'pictures' }, saveDialogOptions, saveTarget, t: text => text },
+    (name, handler) => handlers.set(name, handler), async (...args) => { calls.push(args); return Buffer.from('remote image'); });
+  const save = handlers.get('agent:saveImageAs');
+  await assert.rejects(save('other.png', 'ssh'), /只能保存/);
+  assert.equal(await save('fixture.png', 'local'), 'chosen.png');
+  assert.equal(await save('fixture.png', 'ssh'), 'chosen.png');
+  saveDialog.canceled = true;
+  assert.equal(await save('fixture.png', 'local'), null);
+  assert.deepEqual(writes, [['copy', 'fixture.png', 'chosen.png'], ['write', 'chosen.png', Buffer.from('remote image')]]);
+  assert.deepEqual(calls.splice(0), [['ssh', 'fixture.png']]);
+  let bridge;
   loadPreload('electron/preload.cjs', { contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
     ipcRenderer: { invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true, value: null }); } } });
   bridge.saveImageAs('fixture.png', 'project');

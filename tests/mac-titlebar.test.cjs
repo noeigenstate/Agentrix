@@ -1,3 +1,6 @@
+const { registerTitlebarState } = require('../electron/app/application-ipc.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
+const { createWindowHost } = require('../electron/app/window-host.cjs');
 const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -5,8 +8,6 @@ const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
-const ts = require('typescript');
 const { registerMacTitlebar } = require('../electron/app/mac-titlebar.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { translate, en } = require('../electron/i18n.cjs');
@@ -17,8 +18,6 @@ const binary = path.join(root, 'native/mac-titlebar/build/Release/mac_titlebar.n
 const script = path.join(root, 'scripts/build-mac-titlebar.cjs');
 const workspaceTooltip = language => translate(language,
   en['回到工作台 · {key}'] ? '回到工作台 · {key}' : '工作台', { key: 'Ctrl+Shift+G' });
-const main = ts.createSourceFile('main.cjs', fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const mainFunction = name => main.statements.find(node => ts.isFunctionDeclaration(node) && node.name.text === name);
 const templateIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
 
 function styleFixture() {
@@ -277,9 +276,8 @@ test('language changes refresh the latest count and selected page through the re
   const f = fixture();
   f.controller.update({ view: 'decisions', decisions: 3 });
   const store = { settings: { language: 'en' }, updateSettings(patch) { Object.assign(this.settings, patch); } };
-  const context = vm.createContext({ store, macTitlebar: f.controller, process: { platform: 'darwin' },
-    trayMenu() {}, rebuildMacMenu() {} });
-  vm.runInContext(mainFunction('updateStoreSettings').getText(main), context);
+  const context = createWindowHost({ store, macTitlebar: f.controller, process: { platform: 'darwin' },
+    Menu: { buildFromTemplate: items => items, setApplicationMenu() {} }, app: { name: 'Agentrix' }, t: text => text });
   f.setLanguage('zh');
   context.updateStoreSettings({ language: 'zh' });
   assert.deepEqual(f.updates.at(-1), { items: [
@@ -296,8 +294,8 @@ test('shortcut settings refresh native hints without changing the selected page 
   const f = fixture({ getShortcuts: () => store.settings.shortcuts });
   f.controller.update({ view: 'decisions', decisions: 4 });
   assert.equal(f.updates.at(-1).items[0].toolTip, 'Back to decisions · Alt+D');
-  const context = vm.createContext({ store, macTitlebar: f.controller, process: { platform: 'darwin' }, rebuildMacMenu() {} });
-  vm.runInContext(mainFunction('updateStoreSettings').getText(main), context);
+  const context = createWindowHost({ store, macTitlebar: f.controller, process: { platform: 'darwin' },
+    Menu: { buildFromTemplate: items => items, setApplicationMenu() {} }, app: { name: 'Agentrix' }, t: text => text });
   context.updateStoreSettings({ shortcuts: { decisions: 'Ctrl+Alt+D' } });
   const item = f.updates.at(-1).items[0];
   assert.equal(item.toolTip, 'Back to decisions · Ctrl+Alt+D');
@@ -370,12 +368,10 @@ test('Windows and Linux never load or attach the macOS binary', () => {
 });
 
 test('titlebar state uses the main-frame IPC guard and is registered only on macOS', () => {
-  const statement = mainFunction('registerIpc').body.statements.find(node => ts.isIfStatement(node) && node.getText(main).includes('titlebar:state'));
-  assert.ok(statement);
   for (const platform of ['darwin', 'win32', 'linux']) {
     const f = fixture(), ipcMain = new EventEmitter(), errors = [];
     const { listen } = createIpcAdapter({ ipcMain, getWindow: () => f.window, report: error => errors.push(error) });
-    vm.runInNewContext(statement.getText(main), { process: { platform }, macTitlebar: f.controller, listen });
+    registerTitlebarState({ process: { platform }, macTitlebar: f.controller }, listen);
     assert.equal(ipcMain.listenerCount('titlebar:state'), platform === 'darwin' ? 1 : 0);
     const event = { sender: f.window.webContents, senderFrame: f.window.webContents.mainFrame };
     ipcMain.emit('titlebar:state', { ...event, senderFrame: { url: 'agentrix://app/preview' } }, { view: 'decisions', decisions: 5 });
@@ -403,13 +399,13 @@ test('preload sends state and exposes an unsubscribable navigation listener with
 });
 
 test('workspace availability follows the controller, including addon failure and window close', () => {
-  const declaration = mainFunction('publicState').body.statements[0].expression.properties.find(node => node.name?.getText(main) === 'nativeTitlebar');
-  assert.ok(declaration);
-  const f = fixture(), macTitlebar = f.controller;
-  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { macTitlebar }), true);
+  const f = fixture();
+  const available = macTitlebar => createPublicState({ macTitlebar, store: { projects: [], settings: {} },
+    localShell: () => ({ kind: 'zsh' }), app: { getVersion: () => 'fixture' } }).publicState().nativeTitlebar;
+  assert.equal(available(f.controller), true);
   f.window.emit('closed');
-  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { macTitlebar }), false);
-  assert.equal(vm.runInNewContext(declaration.initializer.getText(main), { macTitlebar: null }), false);
+  assert.equal(available(f.controller), false);
+  assert.equal(available(null), false);
 });
 
 test('packaging includes and unpacks only the macOS binary, keeping node-pty unpacking', () => {

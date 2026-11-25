@@ -1,7 +1,10 @@
+const { createUsageHost } = require('../electron/features/agents/usage-host.cjs');
+const { createSessionPresentation } = require('../electron/app/session-presentation.cjs');
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const syncFs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
@@ -102,7 +105,6 @@ test('large transcripts never read titles beyond 256 KiB and estimate message de
   assert.equal(list.find(item => item.id === 'broken').messages, 1);
 });
 
-const main = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 function mainHarness(t, f) {
   const project = { id: 'project', path: f.cwd, kind: 'local' };
   const restore = { cwd: f.cwd, agent: 'claude' };
@@ -121,17 +123,19 @@ function mainHarness(t, f) {
     describeActions() {}, skills: null, findProject: () => project, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, startHookLaunch() {}, noteSettings() {}, readEvery: () => 1000,
     startSkillSession() {}, endSkillSession() {},
     ...require('../electron/features/agents/agent-usage.cjs'), claudeAccount: async () => null, setInterval: (run, ms) => setInterval(run, ms).unref(), clearInterval, agentCommand: require('../electron/features/agents/agent-command.cjs').agentCommand,
-    claudeAccounts: { account: null, setActive() {}, refresh() {} },
+    claudeAccounts: { account: null, setActive() {}, refresh() {} }, claudeAccountFiles: () => [],
     quitting: false, Date, claudeResumeCommand, restorePlans: new Map(), agentCommand, sshHandoff: async () => false,
     // The handoff of earlier work is written on start (handoff.cjs, tested on its own).
     writeHandoff: async () => false, handoffFile: id => path.join(f.home, 'handoff', `${id}.md`), memoryDir: () => path.join(f.home, 'memory'), scrubProjectSkills: async () => [],
   });
-  vm.runInContext(main.slice(main.indexOf('// Workspace broadcasts'), main.indexOf('// The agent chosen on a new project')), context);
+  Object.assign(context, createDispatchIntake(context));
+  const usageHost = createUsageHost(context);
+  Object.assign(context, usageHost);
   defineMain(context, 'followClaude', 'followClaudeSession', 'publishCliState', 'acceptDispatchEvent');
   context.now = context.Date?.now;
   Object.assign(context, createShellEvents(context));
   Object.assign(context, createTerminalLifecycle(context));
-  t.after(() => s.activityMonitor?.stop());
+  t.after(() => { s.activityMonitor?.stop(); usageHost.disposeClaudeAccounts(); });
   return { project, s, store, sessions, context, restore, resets: () => resets };
 }
 
@@ -314,7 +318,7 @@ test('both Claude followers load a large session window and clear old consumers 
       { type: 'tool_use', id: 'recent-skill', name: 'Skill', input: { skill: 'recent-skill' } }] } }]);
   const h = mainHarness(t, f), described = [];
   h.context.skillDescription = async name => { described.push(name); return 'Recent skill description'; };
-  vm.runInContext(main.slice(main.indexOf('function describeActions('), main.indexOf('// Workspace broadcasts')), h.context);
+  h.context.describeActions = createSessionPresentation(h.context).describeActions;
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'large'), true);
   for (let count = 0; h.s.claudeTranscript.historyPending && count < 8; count++) await h.s.activityMonitor.poll();
   assert.equal(h.s.claudeTranscript.historyPending, false);
@@ -371,7 +375,9 @@ test('Claude restore keeps the same read-only preview in broadcasts until its CL
     desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null, macTitlebar: null,
   });
   h.store.settings = {};
-  vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), h.context);
+  h.project.primaryTerminalClosed = true;
+  h.project.terminals = [{ id: h.s.terminalId }];
+  h.context.publicState = createPublicState(h.context).publicState;
   const shown = () => h.context.publicState().projects[0].terminals[0];
   h.context.broadcast = () => snapshots.push(shown());
   const follow = h.context.followClaudeSession;

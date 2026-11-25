@@ -1,3 +1,4 @@
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { assertIdlePowerShellHook } = require('./helpers/powershell-hook.cjs');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
@@ -22,7 +23,6 @@ const { TranscriptTail } = require('../electron/agent-actions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
 
-const main = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 async function harness(t, kind = 'local', agent = 'codex') {
   const scratch = path.resolve(__dirname, '../.test-output/bug-fixes-work/backend/unit-tmp');
   await fs.mkdir(scratch, { recursive: true });
@@ -163,7 +163,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     runtimeDir: project.path, fs: syncFs, process: { platform: process.platform, env: {} },
     createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', integrationDir: 'integration' });
-  vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), context);
+  Object.assign(context, createDispatchIntake(context));
   defineMain(context, 'bindDispatchInbox', 'disposeDispatchInbox', 'replayCompletion');
   const calls = context.callsOf(s, project), runId = context.randomUUID();
   t.after(() => { context.disposeDispatchInbox(); calls.dispose(); });

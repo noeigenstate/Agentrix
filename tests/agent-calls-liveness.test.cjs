@@ -1,10 +1,9 @@
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const start = helperPid => ({ type: 'dispatch-start', id: '11111111-1111-4111-8111-111111111111', helperPid, agent: 'codex', model: 'gpt-test', effort: 'high', fast: true,
   role: '执行', title: 'Synthetic worker', sessionId: 'synthetic-thread', cwd: '/synthetic', startedAt: 100 });
@@ -30,15 +29,14 @@ test('N6: a silent or temporarily disconnected helper that is still alive remain
   const unknown = tracker(t, { dispatchAlive: async () => null }); unknown.calls.dispatch(start()); await unknown.poll(); assert.equal(unknown.calls.running().length, 1);
 });
 test('N6: main caches a verified team-board PID, so later board cleanup does not hide a dead helper', async t => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let alive = true, reads = 0;
   const s = { terminalId: 't', recordRun() {} }, project = { kind: 'local', path: '/synthetic' };
   const context = { AgentCalls: class extends AgentCalls { static alive() { return alive; } }, path, os: { homedir: () => '/synthetic' }, sessions: new Map([['t', s]]), scheduleState() {}, send() {},
-    require: () => ({ locateTeam: async () => ({ board: '/synthetic/board' }) }),
-    fs: { statSync: () => ({ size: 100 }), readFileSync() { reads++; return JSON.stringify({ id: start().id, pid: 123, cwd: '/synthetic' }); } },
+    loadTeamLocator: () => ({ locateTeam: async () => ({ board: '/synthetic/board' }) }),
+    fs: { statSync: () => ({ size: 100 }), readFileSync() { reads++; return JSON.stringify({ id: start().id, pid: 123, allow: [], cwd: '/synthetic' }); } },
     process: { kill() { if (!alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' }); } },
   };
-  vm.createContext(context); vm.runInContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function resolveIntervention(')), context);
+  Object.assign(context, createDispatchIntake(context));
   const calls = context.callsOf(s, project); calls.feeds.readDispatch = async () => {}; t.after(() => calls.dispose());
   calls.dispatch(start()); calls.refresh(start().id); await calls.work;
   alive = false; calls.refresh(start().id); await calls.work;
@@ -57,12 +55,11 @@ test('F20 a normal end arriving after the first dead-PID observation wins over i
 
 test('an ended helper with a reused live PID retires when its run board is gone', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const source = require('node:fs').readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const s = { terminalId: 't', projectId: 'p' }, project = { id: 'p', path: '/synthetic' };
   const context = { AgentCalls: class extends AgentCalls { static alive() { return true; } }, path, os: { homedir: () => '/synthetic' },
-    sessions: new Map([['t', s]]), scheduleState() {}, send() {}, require: () => ({ locateTeam: async () => ({ board: '/gone' }) }),
+    sessions: new Map([['t', s]]), scheduleState() {}, send() {}, loadTeamLocator: () => ({ locateTeam: async () => ({ board: '/gone' }) }),
     fs: { statSync() { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } } };
-  vm.createContext(context); vm.runInContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function resolveIntervention(')), context);
+  Object.assign(context, createDispatchIntake(context));
   const calls = context.callsOf(s, project); calls.feeds.readDispatch = async () => {}; t.after(() => calls.dispose());
   const launch = start(123); calls.dispatch(launch);
   calls.dispatch({ type: 'dispatch-end', id: launch.id, reason: 'exit', exitCode: 0, model: 'gpt-test', outputTokens: null, activeMs: null });

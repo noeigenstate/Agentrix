@@ -1,3 +1,5 @@
+const { registerAppWorkspace } = require('../electron/app/application-ipc.cjs');
+const { createUsageHost } = require('../electron/features/agents/usage-host.cjs');
 const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -6,7 +8,6 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const vm = require('node:vm');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { accountLaunch, accountEnvironment } = require('../integration/codex-account-scope.cjs');
 const { CodexAccountUsage, readCodexAccount, usageScope, accountResult, configScope, accountConfigScope } = require('../electron/features/agents/codex-account-usage.cjs');
@@ -464,24 +465,14 @@ test('project-open preflight proves the official default and never reads remote,
   assert.ok([...service.entries.values()].every(entry => entry.value?.resets == null));
 });
 
-function mainUsage(service, env = {}, shellPathReady = Promise.resolve()) {
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const functions = main.slice(main.indexOf('function startUsage('), main.indexOf('let claudeAccountTimer ='));
-  const notes = main.slice(main.indexOf('function noteSettings('), main.indexOf('// A skill step names the skill;'));
+function mainUsage(service, env = {}) {
   const sessions = new Map(), store = { projects: [] };
-  return { main, sessions, store, ...vm.runInNewContext(`${functions}\n${notes}\n({ startUsage, stopUsageAccount, noteSettings })`, {
-    UsageMeter, codexAccounts: service, sessions, store, shellPathReady, quitting: false, process: { env },
-    createTerminalEnvironment: require('../electron/terminal-env.cjs').createTerminalEnvironment,
-    withoutAppImage: require('../electron/zsh-terminal.cjs').withoutAppImage,
-    callsOf: () => null, scheduleState() {}, scheduleUsageRollover() {}, localClaudeMeters: () => [], disposeClaudeAccounts() {},
-    codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '', refreshClaudeAccounts() {},
+  return { sessions, store, ...createUsageHost({
+    UsageMeter, codexAccounts: service, sessions, store, quitting: false, process: { env },
+    callsOf: () => null, scheduleState() {}, claudeAccounts: { setActive() {} },
+    codexProvider: async () => id => id, claudeProvider: async () => 'Anthropic', claudeConfigDir: () => '',
     agentSettings: previous => previous,
   }) };
-}
-
-function startupChecks(main) {
-  const start = main.indexOf('    if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();');
-  return main.slice(main.indexOf('\n', start) + 1, main.indexOf('  }).catch(error => {', start));
 }
 
 test('main project-open handover shows loading or the cached answer immediately and rebinds to real session metadata', async t => {
@@ -519,11 +510,19 @@ test('main project-open handover shows loading or the cached answer immediately 
 });
 
 test('opening and restoring background projects never starts account checks', () => {
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.doesNotMatch(startupChecks(main), /openProject|checkProjectAccount/);
-  const wiring = main.slice(main.indexOf('  registerWorkspaceIpc({'), main.indexOf('  filesIpc ='));
-  assert.doesNotMatch(wiring, /openProject|checkProjectAccount/);
-  assert.match(wiring, /projectAccounts.close\(id\)/);
+  let workspace;
+  const project = { id: 'p', kind: 'local' }, calls = [];
+  const forbidden = () => assert.fail('opening a project must not query account usage');
+  registerAppWorkspace({ registerWorkspaceIpc: options => { workspace = options; }, fs,
+    store: { add: () => ({ project }), remove: id => calls.push(['store', id]) },
+    projectAccounts: { close: id => calls.push(['native', id]), read: forbidden },
+    codexAccounts: { closeProject: id => calls.push(['codex', id]), openProject: forbidden },
+    clearDispatchAccount: id => calls.push(['dispatch', id]), projectImageAuto: { enqueue: () => {} },
+  }, () => {});
+  assert.equal(workspace.addProject('fixture').project, project);
+  assert.deepEqual(calls, []);
+  workspace.removeProject('p');
+  assert.deepEqual(calls, [['native', 'p'], ['codex', 'p'], ['dispatch', 'p'], ['store', 'p']]);
 });
 
 test('main lifecycle follows recorded provider, replaces sessions safely and never uses local queries for SSH/Claude', async t => {

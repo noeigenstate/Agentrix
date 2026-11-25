@@ -1,11 +1,9 @@
+const path = require('node:path');
+const { createWindowHost } = require('../electron/app/window-host.cjs');
 const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const ts = require('typescript');
 const { buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
 const { registerWindowLifecycle } = require('../electron/app/window-events.cjs');
 const DEFAULT_SHORTCUTS = require('../electron/shortcuts.json');
@@ -77,38 +75,21 @@ test('all menu labels use existing English vocabulary', () => {
   for (const menu of menus) for (const item of menu.submenu) if (item.label) assert.doesNotMatch(item.label, /[一-鿿]/);
 });
 
-const filename = path.join(__dirname, '../electron/main.cjs');
-const source = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const functions = new Map(source.statements.filter(ts.isFunctionDeclaration).map(node => [node.name.text, node]));
-function optionCallback(callee, name) {
-  let callback;
-  function visit(node) {
-    if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && node.expression.getText(source) === callee) {
-      const property = node.arguments[0].properties.find(property => property.name?.getText(source) === name);
-      callback = property?.initializer || property?.name;
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(source);
-  assert.ok(callback, `${callee}.${name}`);
-  return callback.getText(source);
-}
-
 function mainFixture(platform = 'darwin') {
   const menus = [], messages = [], handlers = new Map(), calls = { quit: 0, close: 0, show: 0, tray: 0, broadcast: 0, updates: 0 };
   const store = { settings: cleanSettings(), projects: [], updateSettings(patch) { this.settings = cleanSettings({ ...this.settings, ...patch }); } };
   const update = { status: 'idle' };
-  const context = vm.createContext({ buildMacMenuTemplate, menuUpdateReady: false,
+  const context = {
     store, t: (text, values) => translate(store.settings.language, text, values), app: { name: 'Agentrix' },
     process: { platform }, Menu: { buildFromTemplate: items => items, setApplicationMenu: menu => menus.push(menu) },
     send: (...args) => messages.push(args),
-    window: { close: () => calls.close++ }, tray: undefined, dashboardWindow: null, labWindow: null, desktopGlassActive: false, windowZoom: undefined, macTitlebar: null,
+    window: { close: () => calls.close++, isDestroyed: () => false, isMinimized: () => false, show: () => calls.show++, focus() {} },
+    tray: { isDestroyed: () => false, setContextMenu: () => calls.tray++ }, dashboardWindow: null, labWindow: null, desktopGlassActive: false, windowZoom: undefined, macTitlebar: null,
     updateManager: { getState: () => update }, updatesIpc: { onStateChange: () => calls.updates++ },
-    showWindow: () => calls.show++, requestQuit: async () => { calls.quit++; }, report: assert.fail,
-    trayMenu: () => calls.tray++,
-  });
-  vm.runInContext(['macMenu', 'rebuildMacMenu', 'updateStoreSettings', 'updateIndicators'].map(name => functions.get(name).getText(source)).join('\n'), context);
-  const onUpdate = vm.runInContext(`(${optionCallback('UpdateManager', 'onChange')})`, context);
+    requestQuit: async () => { calls.quit++; }, report: assert.fail,
+  };
+  Object.assign(context, createWindowHost(context));
+  const onUpdate = context.updateListener();
   registerWorkspaceIpc({ handle: (name, handler) => handlers.set(name, handler), getSettings: () => store.settings,
     updateStoreSettings: context.updateStoreSettings, broadcast: () => calls.broadcast++, chooseVoiceModel() {} });
   return { context, store, update, onUpdate, menus, messages, handlers, calls };
@@ -147,7 +128,6 @@ test('every menu command shows a hidden window before dispatch', () => {
     isDestroyed: () => false, isMinimized: () => false,
     show: () => { visible = true; order.push('show'); }, focus: () => order.push('focus'),
   };
-  context.showWindow = vm.runInContext(`(${functions.get('showWindow').getText(source)})`, context);
   const send = context.send;
   context.send = (channel, command) => {
     assert.equal(visible, true, command);
@@ -164,7 +144,6 @@ test('every menu command shows a hidden window before dispatch', () => {
 });
 
 for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} keeps titles owned by main and blank only in macOS fullscreen`, () => {
-  assert.equal(optionCallback('registerWindowLifecycle', 'updateIndicators'), 'updateIndicators');
   const { context, store, messages } = mainFixture(platform);
   const titles = [], images = [], flashes = [];
   let fullscreen = false;
@@ -174,9 +153,11 @@ for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} keeps tit
   });
   context.window = window;
   context.tray = { isDestroyed: () => false, setImage: image => images.push(image), setToolTip() {} };
-  context.trayImage = name => name;
-  const register = vm.runInContext(`(${registerWindowLifecycle.toString()})`, context);
-  register({ window, send: context.send, updateIndicators: context.updateIndicators });
+  context.nativeImage = { createFromPath: filename => ({ resize: () => path.basename(filename), filename }) };
+  context.root = path.resolve(__dirname, '..');
+  context.path = path;
+  context.tray.setImage = image => images.push(typeof image === 'string' ? image : path.basename(image.filename));
+  registerWindowLifecycle({ window, platform, send: context.send, updateIndicators: context.updateIndicators });
   const setPageTitle = title => {
     let prevented = false;
     window.emit('page-title-updated', { preventDefault: () => { prevented = true; } }, title, true);
@@ -215,8 +196,7 @@ for (const platform of ['darwin', 'win32', 'linux']) test(`${platform} close hid
     webContents: new EventEmitter(), isDestroyed: () => false, isFullScreen: () => fullscreen, hide: () => order.push('hide'),
     setFullScreen: value => { order.push(`fullscreen:${value}`); fullscreen = value; window.emit('leave-full-screen'); },
   });
-  const register = vm.runInContext(`(${registerWindowLifecycle.toString()})`, vm.createContext({ process: { platform } }));
-  register({ window, getSettings: () => ({ closeToTray: true }), isQuitting: () => false, hasTray: () => true,
+  registerWindowLifecycle({ window, platform, getSettings: () => ({ closeToTray: true }), isQuitting: () => false, hasTray: () => true,
     send() {}, updateIndicators() {}, requestQuit: assert.fail });
   let prevented = false;
   window.emit('close', { preventDefault: () => { prevented = true; } });

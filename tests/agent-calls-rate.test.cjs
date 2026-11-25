@@ -1,3 +1,5 @@
+const { createUsageHost } = require('../electron/features/agents/usage-host.cjs');
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -107,13 +109,15 @@ test('a group with no readable member has no rate, and one with only waiting mem
   assert.deepEqual(calls.snapshot().find(group => group.model === 'haiku').rate, emptyRate(false), 'a group whose only member waits waits');
 });
 
-// main.cjs's followClaude and its text to the end of startUsage, with stand-ins for what lies outside them.
-function mainSlice(names) {
-  const source = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+// Compose call tracking with the activity adapter and the session usage meter.
+function activityHost(names) {
   const context = vm.createContext({ path, os, fs: syncFs, AgentCalls, UsageMeter, scheduleState() {}, scheduleUsageRollover() {}, send() {},
     createInterventions: () => ({}), prepareReading: async () => {}, TranscriptTail: class { constructor(filename) { this.filename = filename; } },
-    monitorActivity: read => ({ poll: read, stop() {} }), stopUsageAccount() {}, claudeProvider: async () => null, refreshClaudeAccounts() {}, bindRemoteClaudeAccount() {}, ...names });
-  vm.runInContext(source.slice(source.indexOf('// Workspace broadcasts'), source.indexOf('async function resetTerminalCodex(')), context);
+    monitorActivity: read => ({ poll: read, stop() {} }), claudeProvider: async () => null, watchRemoteClaudeAccount: () => null,
+    store: { projects: [] }, claudeAccounts: { setActive() {} }, claudeConfigDir: () => '', ...names });
+  Object.assign(context, createDispatchIntake(context));
+  const usage = createUsageHost(context);
+  Object.assign(context, { startUsage: usage.startUsage, usageHistory: usage.usageHistory });
   defineMain(context, 'followClaude');
   return context;
 }
@@ -122,7 +126,7 @@ test('a transcript bound before the meter exists keeps its sub-agents folder thr
   // Synthetic absolute paths on every platform; nothing is read from them.
   const home = path.resolve('/synthetic-claude'), file = path.join(home, 'projects', 'project', 'session.jsonl');
   const s = { terminalId: 't', agent: 'claude', cliActive: true, recordRun() {} }, project = { id: 'p', kind: 'local', path: path.resolve('/synthetic-project') };
-  const context = mainSlice({ sessions: new Map([['t', s]]), claudeConfigDir: () => home });
+  const context = activityHost({ sessions: new Map([['t', s]]), claudeConfigDir: () => home });
   context.followClaude(project, s, { sessionId: 'session', transcriptPath: file });
   const folder = path.join(home, 'projects', 'project', 'session', 'subagents');
   assert.equal(s.calls?.folder, folder, 'the hook binds the folder although no meter exists yet');
@@ -221,7 +225,7 @@ test('over SSH the poll asks for the running sub-agents and counts their records
     // A copy made here: what main builds belongs to the script context.
     terminal: { request: async (op, args) => { requests.push([op, JSON.parse(JSON.stringify(args))]); return answers.shift(); } } };
   const project = { id: 'p', kind: 'ssh', path: '/srv/project' }, file = '/srv/claude/projects/-srv-project/session.jsonl';
-  const context = mainSlice({ sessions: new Map([['t', s]]), claudeConfigDir: () => assert.fail('SSH reads no local folder'),
+  const context = activityHost({ sessions: new Map([['t', s]]), claudeConfigDir: () => assert.fail('SSH reads no local folder'),
     noteSettings: (session, _agent, record) => session.usage?.apply(record), claudeConversation() {}, describeActions() {}, claudeRecord: () => [] });
   context.startUsage(project, s, { cwd: project.path }); t.after(() => s.calls.dispose());
   context.followClaude(project, s, { sessionId: 'session', transcriptPath: file, sentAt: 900 });

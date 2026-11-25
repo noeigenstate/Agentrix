@@ -1,3 +1,4 @@
+const { createModelProbes } = require('../electron/features/agents/usage-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,7 +11,6 @@ const { probeCodex, probeClaude } = require('../electron/features/skills/model-p
 const { createRpc } = require('../electron/features/codex-app-server/index.cjs');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
-const vm = require('node:vm');
 
 const deferred = () => {
   let resolve, reject;
@@ -127,21 +127,15 @@ test('unchanged catalog rows persist freshness across restart without publishing
 
 test('main uses a neutral probe folder and still lists keyed models after SDK startup fails', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neutral-probe-')); t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const begin = source.indexOf('    const probeDirectory ='), end = source.indexOf('    const liveModels', begin);
-  const context = vm.createContext({ path, fs, app: { getPath: () => dataDir }, root: 'resources/app.asar' });
-  vm.runInContext(source.slice(begin, end), context);
-  const directory = vm.runInContext('probeDirectory', context);
-  assert.ok(fs.statSync(directory).isDirectory()); assert.deepEqual(fs.readdirSync(directory), []);
   let listed = 0, cwd;
-  Object.assign(context, { liveModels: async () => null, agents: { getState: () => ({ claude: { installed: true } }) },
+  const { probeDirectory: directory, modelProbes } = createModelProbes({ path, fs, app: { getPath: () => dataDir },
+    seatModelRuntimes: { claude: new Set() }, agents: { getState: () => ({ claude: { installed: true } }) },
     claudeRuntime: { credentials: { read: () => 'synthetic-injected' } }, createSdkLoader: () => () => {},
     resolveClaudeExecutable: async () => 'injected', claudeLocator: {}, process: { env: {} }, apiEnvironment: env => env,
     probeClaude: async input => { cwd = input.options.cwd; throw Error('sdk-failure'); },
     listModels: async () => { listed++; return { models: ['claude-new'] }; }, netRequest: () => () => {}, electronNet: {} });
-  const start = source.indexOf('claude: async () => {', source.indexOf('modelProbes:'));
-  const finish = source.indexOf('\n        },', start);
-  const rows = await vm.runInContext(`(${source.slice(start + 'claude: '.length, finish)}})()`, context);
+  assert.ok(fs.statSync(directory).isDirectory()); assert.deepEqual(fs.readdirSync(directory), []);
+  const rows = await modelProbes.claude();
   assert.equal(cwd, directory); assert.equal(listed, 1); assert.equal(rows[0].model, 'claude-new');
 });
 

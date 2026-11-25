@@ -1,15 +1,14 @@
+const { createWindowHost, createTranslator } = require('../electron/app/window-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
-const vm = require('node:vm');
 const path = require('node:path');
 const { rendererLoader } = require('./helpers/hook-harness.cjs');
 const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
 const ts = require('typescript');
 const { WorkspaceStore, cleanSettings } = require('../electron/state.cjs');
 const { translate } = require('../electron/i18n.cjs');
-const { buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
 
 const root = path.join(__dirname, '..');
 const invalid = [undefined, null, '', 'fr', 'zh-CN', 'ZH', false, 0, {}, []];
@@ -93,34 +92,27 @@ test('backend translation before settings and for invalid language uses English;
 
 // Execute the real main-process menu and notification builders with inert native APIs.
 test('native menus and completion notifications follow default English and explicit Chinese', () => {
-  const filename = path.join(root, 'electron/main.cjs'), text = fs.readFileSync(filename, 'utf8');
-  const source = ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const functions = source.statements.filter(node => ts.isFunctionDeclaration(node)
-    && ['macMenu', 'trayMenu', 'notifyCompletion'].includes(node.name?.text)).map(node => node.getText(source));
-  assert.equal(functions.length, 3);
-  const translator = source.statements.find(node => ts.isVariableStatement(node)
-    && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 't'));
-  assert.ok(translator);
   let trayItems, notification;
   class Notification {
     static isSupported() { return true; }
     constructor(options) { notification = options; }
     on() {} show() {}
   }
-  const context = vm.createContext({ translate, store: undefined, app: { name: 'Agentrix' }, path, root,
-    buildMacMenuTemplate, updateManager: undefined,
+  const context = { store: undefined, app: { name: 'Agentrix' }, path, root,
+    updateManager: undefined,
     Menu: { buildFromTemplate: items => items }, Notification, window: { isFocused: () => true },
-    tray: { isDestroyed: () => false, setContextMenu: items => { trayItems = items; } } });
-  vm.runInContext(`${translator.getText(source)}\n${functions.join('\n')}`, context);
+    tray: { isDestroyed: () => false, setContextMenu: items => { trayItems = items; } } };
+  context.t = createTranslator(() => context.store);
+  const { macMenu, trayMenu, notifyCompletion } = createWindowHost(context);
   // No store yet: native fallbacks already use English.
-  assert.equal(vm.runInContext('macMenu()', context)[0].submenu[0].label, 'About Agentrix');
+  assert.equal(macMenu()[0].submenu[0].label, 'About Agentrix');
   for (const language of [undefined, 'fr', 'en', 'zh']) {
     context.store = { settings: { language, notifications: true, sound: false } };
     const chinese = language === 'zh';
-    const menu = vm.runInContext('macMenu()', context);
+    const menu = macMenu();
     assert.equal(menu.length, 1);
     assert.equal(menu[0].submenu[3].label, chinese ? '设置…' : 'Settings…');
-    vm.runInContext('trayMenu(); notifyCompletion({ id: "test", name: "Demo" })', context);
+    trayMenu(); notifyCompletion({ id: 'test', name: 'Demo' });
     assert.equal(trayItems[0].label, chinese ? '打开 Agentrix' : 'Open Agentrix');
     assert.equal(notification.title, translate(language, '{name} · 本轮已完成', { name: 'Demo' }));
     assert.equal(notification.body, translate(language, '这一轮任务已结束，点击查看终端。'));

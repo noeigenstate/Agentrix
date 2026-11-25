@@ -1,3 +1,4 @@
+const { registerAgentLaunch } = require('../electron/app/application-ipc.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
@@ -6,7 +7,6 @@ const { createRouter } = require('../electron/features/native-session/router.cjs
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { adapterOf, legacyRestoreAgent } = require('../electron/features/cli-adapters/registry.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 test('legacy codexView is ignored without rewriting preferences; later saves omit it and new patches reject it', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-codex-setting-')), file = path.join(directory, 'settings.json');
@@ -46,7 +46,7 @@ test('the launcher sends every local and SSH Codex mode to app-server', async ()
   const context = { adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, handle: (name, value) => handlers.set(name, value), findProject: () => ({ kind }), launchPlans: new Map(), restorePlans: new Map(),
     nativeSessions: { start: async (id, options) => calls.push([id, options]), history: async () => ({ codex: { id: 'same-thread' } }) }, folderOf: () => '/synthetic', folderHistory: async () => ({ codex: { id: 'same-thread' } }),
     store: { findTerminal: () => ({ record: { restore: saved } }), setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
-  vm.createContext(context); vm.runInContext(main.slice(main.indexOf("  handle('agent:launch',"), main.indexOf('  registerNativeIpc({ handle });')), context);
+  registerAgentLaunch(context, context.handle);
   for (const mode of ['new', 'continue']) await handlers.get('agent:launch')('t', 'codex', mode);
   assert.equal(calls.length, 2); assert.equal(calls[1][1].resume, true);
   // Folder lookup and same-thread persistence belong to router.start (r13-history.test.cjs).

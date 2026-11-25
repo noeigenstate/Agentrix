@@ -1,27 +1,25 @@
+const { createPublicState, terminalUsage } = require('../electron/app/public-state.cjs');
+const { registerCallFile, registerAppTerminal } = require('../electron/app/application-ipc.cjs');
 const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
-const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 test('callFile IPC requires the app sender and unwraps the bound local call result in preload', async () => {
   const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
   const handlers = new Map(), files = [], sessions = new Map();
   const webContents = { mainFrame: { url: 'agentrix://app/index.html' } }, sender = { sender: webContents, senderFrame: webContents.mainFrame };
   const { handle } = createIpcAdapter({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, getWindow: () => ({ webContents }), t: text => text });
-  const start = source.indexOf("handle('agents:callFile'");
-  assert.ok(start >= 0);
-  vm.runInNewContext(source.slice(start, source.indexOf('registerSshIpc(', start)), {
+  registerCallFile({
     handle, sessions, store: { findTerminal: id => id === 'local' || id === 'ssh' ? { project: { kind: id } } : null },
     AgentCalls: { forTerminal: (scope, id) => {
       assert.equal(scope, sessions); assert.equal(id, 'local');
       return { callFile: (callId, kind) => { files.push([callId, kind]); return { ok: true, text: 'brief text', truncated: false }; } };
     } },
-  });
+  }, handle);
   const run = handlers.get('agents:callFile'), id = 'dispatch:11111111-1111-4111-8111-111111111111';
   await assert.rejects(run({}, 'local', id, 'brief'), /Rejected IPC sender/);
   let bridge;
@@ -53,9 +51,7 @@ test('G2 real main structured events populate the same terminal agentUsage field
     round: { input: 50, cachedInput: 2, cacheWrite: 3, output: 4, reasoning: null } }));
   const s = main.sessions.get('t');
   // The usage main builds for the row, then the agentUsage field it publishes from it.
-  const start = source.indexOf('const usage = s?.nativeStructured'), published = source.indexOf('agentUsage: ', start) + 'agentUsage: '.length;
-  const expression = `${source.slice(start, source.indexOf(';', start) + 1)} ${source.slice(published, source.indexOf('\n', published)).trim().replace(/,$/, '')}`;
-  const usage = vm.runInNewContext(expression, { s, dispatchedOnly() { throw new Error('not a terminal fallback'); } });
+  const usage = terminalUsage(s, () => assert.fail('not a terminal fallback'));
   assert.deepEqual(usage.context, { used: 88, window: 234567 }); assert.deepEqual(usage.round, { input: 55, cached: 2, output: 4 });
   assert.deepEqual(usage.total, { input: 130, cached: 20, output: 5 });
   main.structuredEvent('t', event('usage.updated', { input: null, cachedInput: null, cacheWrite: null, output: null, contextWindow: null }));
@@ -134,7 +130,7 @@ function historyReader({ project, spec, restore = {} }) {
     folderHistory: async folder => { folders.push(folder); return { claude: { id: 'claude-latest' }, codex: null }; },
     codexFactory: { history: async lookup => { lookups.push(lookup); return { id: 'codex-latest' }; } } };
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function findProject('), source.indexOf('function publicState(')), context);
+  Object.assign(context, createPublicState(context));
   const { readHistory } = createNativeHost(context).nativeRouterOptions(null, null, context.codexFactory);
   return { read: readHistory, folders, lookups };
 }
@@ -172,8 +168,7 @@ test('the raw view a native session replaced reaches no PTY: its replies are dro
   for (const name of ['handle', 'listen', 'findProject', 'startTerminal', 'confirmTerminalClose', 'disposeTerminal', 'broadcast', 'applyActivity', 'pollAfterSubmission', 'send']) context[name] = () => assert.fail(name);
   vm.createContext(context);
   context.structuredEvent = createShellEvents(context).structuredEvent;
-  const registration = source.indexOf('terminalInput = registerTerminalIpc(');
-  vm.runInContext(source.slice(registration, source.indexOf('registerClipboardIpc(', registration)), context);
+  registerAppTerminal(context, context);
   const reports = [], listeners = new Map(), webContents = { mainFrame: { url: 'agentrix://app/index.html' } };
   registerTerminalIpc({ ...wiring, ...createIpcAdapter({ ipcMain: { handle() {}, on: (name, run) => listeners.set(name, run) },
     getWindow: () => ({ webContents }), t: text => text, report: error => reports.push(String(error?.message || error)) }) });

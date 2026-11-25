@@ -1,22 +1,20 @@
+const { createSessionPresentation } = require('../electron/app/session-presentation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { conversationBatchDelay, pollAfterSubmission } = require('../electron/conversation-timing.cjs');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 
 let sequence = 0;
 const change = (role, id = `e${++sequence}`, text = '') => ({ entry: { id, role, text } });
 
 function publisher() {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const packets = [], session = { terminalId: 'terminal', conversation: { list: [], loading: false, snapshot() { return this.list; } } };
   const context = vm.createContext({
     sessions: new Map([['terminal', session]]), readingHistory: { summary: () => null }, conversationBatchDelay, setTimeout, clearTimeout,
     send: (channel, packet) => packets.push({ channel, packet }),
   });
-  vm.runInContext(source.slice(source.indexOf('function publishConversation('), source.indexOf('// A skill step')), context);
-  return { session, packets, publish: value => context.publishConversation(session, value) };
+  const { publishConversation } = createSessionPresentation(context);
+  return { session, packets, publish: value => publishConversation(session, value) };
 }
 
 test('the main process delivers a user-only conversation batch after 30 ms', t => {

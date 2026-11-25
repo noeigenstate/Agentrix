@@ -1,3 +1,5 @@
+const { createProjectPreviews, autoProjectImages } = require('../electron/app/project-previews.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
 const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -174,12 +176,11 @@ test('the secured preload API saves then broadcasts and returns rejected mutatio
 
 test('public state themes SVG pictures without changing their canonical storage or terminal state', t => {
   const { store, project, file } = fixture(t);
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const context = vm.createContext({ restorePlans: new Map(), readingHistory: { summary: () => null }, store, projectSvgForTheme, sessions: new Map(), startupErrors: new Map(), dispatchedOnly: () => null,
     terminalIds: p => [p.id], shownTerminalIds: p => [p.id], getBranch: () => 'main', t: text => text,
     localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },
     app: { getVersion: () => '1' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null, macTitlebar: null });
-  vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
+  Object.assign(context, createPublicState(context));
   const before = JSON.parse(JSON.stringify(context.publicState()));
   assert.equal(Object.hasOwn(before.projects[0], 'image'), false);
   store.setProjectImage(project.id, webp);
@@ -202,13 +203,12 @@ test('public state themes SVG pictures without changing their canonical storage 
 });
 
 test('candidate previews use the requested theme and automatic selection keeps canonical SVGs', async () => {
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const context = vm.createContext({ projectSvgForTheme, PROJECT_IMAGE_LIMITS: { candidates: 6 }, thumbnailProjectImage: () => {},
     listProjectImageCandidates: async (folder, thumbnail, limits) => {
       assert.equal(folder, 'project'); assert.equal(typeof thumbnail, 'function'); assert.equal(limits.candidates, 1);
       return { candidates: [{ path: 'icon.svg', source: 'icon', image: svg }, { path: 'logo.png', source: 'icon', image: png }] };
     } });
-  vm.runInContext(main.slice(main.indexOf('async function projectImageCandidates('), main.indexOf('setThumbnailer(')), context);
+  Object.assign(context, createProjectPreviews(context));
   const light = await context.projectImageCandidates('project', 1, 'light');
   assert.equal(light.candidates[0].image, projectSvgForTheme(svg, 'light'));
   assert.equal(light.candidates[1].image, png);
@@ -224,8 +224,11 @@ test('an automatic picture is stored canonical: a themed copy is rejected, and t
   store.setProjectImage(project.id, svg, 'auto');
   assert.equal(store.projects[0].image, svg);
   // main.cjs asks for automatic candidates without a theme, so what it saves is the canonical SVG.
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.match(main, /listCandidates: folder => projectImageCandidates\(folder, 1\),/);
+  const candidates = [];
+  const list = autoProjectImages({ store, createProjectImageAuto: options => options.listCandidates,
+    projectImageCandidates: (...args) => candidates.push(args) });
+  list(project.path);
+  assert.deepEqual(candidates, [[project.path, 1]]);
 });
 
 

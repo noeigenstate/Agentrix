@@ -1611,8 +1611,6 @@ test('the native view writes to no terminal, never expands a project, and reache
 
 test('interventions have no planner relay sender or mounted renderer listener', () => {
   assert.equal(fs.existsSync(path.join(src, 'features/agents/parent-relay.ts')), false);
-  const main = fs.readFileSync(path.join(src, '../electron/main.cjs'), 'utf8');
-  assert.doesNotMatch(main, /sendParentPrompt|webContents\.send\('agents:relay'/);
   assert.deepEqual(identifiers('src/App.tsx', ['startParentRelay']), []);
 });
 

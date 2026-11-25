@@ -1,3 +1,4 @@
+const { createCodexServices } = require('../electron/features/agents/usage-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -622,17 +623,25 @@ test('the terminal, the helper and native mode get the same file', async () => {
   assert.equal(await locateCodex({ ...windowsEnv({ PATH: 'D:\\Elsewhere' }), ...terminal }, asWindows), found.file);
   assert.equal(await locateCodex(windowsEnv({ PATH: 'D:\\Elsewhere' }), asWindows), 'D:\\Elsewhere\\codex.exe', 'untold, the helper searches');
   // Native mode, the account reads and the usage inputs resolve through main's one locator, to its file.
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.match(source, /const codexExecutable = \(\) => codexLocator\.locate\(\)\.then\(found => found\.file\);/);
-  const codexExecutable = () => main.locate({ env: windowsEnv({ PATH: prefix }), platform: 'win32', arch: 'x64' }).then(found => found.file);
+  let creations = 0, accountOptions;
+  const { codexLocator, codexExecutable, codexAccounts } = createCodexServices({
+    env: { AGENTRIX_DATA_DIR: 'fixture' }, createCodexLocator: options => {
+      creations++;
+      assert.equal(options.scan, null);
+      return { peek: () => found, locate: () => main.locate({ env: windowsEnv({ PATH: prefix }), platform: 'win32', arch: 'x64' }) };
+    },
+    CodexAccountUsage: class { constructor(options) { this.options = options; } }, createProjectAccounts: options => options,
+    adapterOf: () => ({ usage: { accountReader: options => { accountOptions = options; } } }),
+  });
   const host = createNativeHost({ codexExecutable, generatedImages: {} });
   const { resolveExecutable } = host.createCodexProvider(options => options);
   assert.equal(resolveExecutable, codexExecutable);
   assert.equal(await resolveExecutable(), found.file);
-  assert.match(source, /adapterOf\('codex'\)\.usage\.accountReader\(\{ \.\.\.options, resolveExecutable: codexExecutable \}\)/);
-  assert.match(source, /resetClient: \{ rpcFactory: createResetRpc, resolveExecutable: codexExecutable \}/);
-  assert.match(source, /checkClaude, codexExecutable,/, 'host-inputs reads the usage inputs through it');
-  assert.equal((source.match(/createCodexLocator\(/g) ?? []).length, 1, 'main keeps one Codex locator');
+  codexAccounts.options.read({ cwd: 'fixture' });
+  assert.equal(accountOptions.resolveExecutable, codexExecutable);
+  assert.equal(codexAccounts.options.resetClient.resolveExecutable, codexExecutable);
+  assert.equal(told({ kind: 'local' }, codexLocator).AGENTRIX_CODEX_EXECUTABLE, terminal.AGENTRIX_CODEX_EXECUTABLE);
+  assert.equal(creations, 1);
 });
 
 // What the terminal launch tells a project about Codex.

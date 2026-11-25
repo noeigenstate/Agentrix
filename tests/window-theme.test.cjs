@@ -1,32 +1,29 @@
+const { createMainWindow, applyWindowBackdrop } = require('../electron/app/window-startup.cjs');
+const { createWindowHost } = require('../electron/app/window-host.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { desktopGlassOptions } = require('../electron/desktop-glass.cjs');
 const { minWidth, minHeight } = require('../electron/window-zoom.json');
-
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-const windowStart = main.indexOf('    window = new BrowserWindow({');
-const glassStart = main.indexOf('    if (desktopGlassWindow) {', windowStart);
 
 function fixture(t, theme, glass = false) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-window-theme-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'workspace.json'), store = new WorkspaceStore(file);
   store.updateSettings({ theme });
-  const context = vm.createContext({ store: new WorkspaceStore(file), desktopGlassActive: glass, desktopGlassWindow: glass,
+  const context = { store: new WorkspaceStore(file), desktopGlassActive: glass, desktopGlassWindow: glass,
     desktopGlassBackend: 'windows', desktopGlassOptions, minWidth, minHeight, path, root: directory, __dirname: directory, t: text => text,
     process: { platform: 'win32' }, macTitlebar: null, registerMacTitlebar: () => null, send() {}, broadcast() {},
     BrowserWindow: class {
       constructor(options) { this.options = options; this.backgrounds = []; }
       isDestroyed() { return !!this.destroyed; }
       setBackgroundColor(color) { this.backgrounds.push(color); }
-    } });
-  vm.runInContext(main.slice(main.indexOf('function windowBackgroundColor('), main.indexOf('const sessions =')), context);
-  vm.runInContext(main.slice(windowStart, glassStart), context);
+    } };
+  Object.assign(context, createWindowHost(context));
+  context.window = createMainWindow(context);
   return context;
 }
 
@@ -58,19 +55,15 @@ test('active desktop glass keeps transparency and failed glass uses the saved th
   context.desktopGlassActive = false;
   context.runtimeDir = '';
   context.applyDesktopGlass = async () => { throw new Error('Backdrop unavailable'); };
-  const glassEnd = main.indexOf("    if (process.platform === 'win32') window.setAppDetails", glassStart);
-  await vm.runInContext(`(async () => { ${main.slice(glassStart, glassEnd)} })()`, context);
+  await applyWindowBackdrop(context);
   assert.deepEqual(context.window.backgrounds, ['#f8f9fb']);
 });
 
 test('the first launch reads the system theme, treating an unreadable one as light, before macOS overrides it', t => {
   const context = fixture(t, 'mono');
-  const read = nativeTheme => { context.nativeTheme = nativeTheme; return vm.runInContext('systemTheme()', context); };
+  const read = nativeTheme => { context.nativeTheme = nativeTheme; return context.systemTheme(); };
   assert.equal(read({ shouldUseDarkColors: true }), 'dark');
   assert.equal(read({ shouldUseDarkColors: false }), 'light');
   assert.equal(read({}), 'light');
   assert.equal(read({ get shouldUseDarkColors() { throw new Error('No appearance'); } }), 'light');
-  const create = main.indexOf('store = new WorkspaceStore(');
-  assert.match(main.slice(create, main.indexOf('\n', create)), /\{ systemTheme: systemTheme\(\) \}\);\r?$/);
-  assert.ok(create > 0 && create < main.indexOf('    applyNativeTheme();', create));
 });

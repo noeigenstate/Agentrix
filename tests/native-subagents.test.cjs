@@ -1,3 +1,4 @@
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -354,8 +355,7 @@ test('SDK sub-agent callbacks answer before transcript discovery settles', async
 test('the host tracker keeps native rows through terminal folder aliases and drive-letter case changes', t => {
   const f = workspace(t), host = nativeHost(f, null), project = { kind: 'local', path: f.cwd };
   Object.assign(host.context, { fs, os, AgentCalls, sameDirectory, claudeConfigDir: () => f.home, send() {} });
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('function callsOf('), source.indexOf('// An owner intervention')), host.context);
+  Object.assign(host.context, createDispatchIntake(host.context));
   host.s.nativeStructured = false;
   const calls = host.context.callsOf(host.s, project); t.after(() => calls.dispose());
   host.s.nativeStructured = true;
@@ -414,7 +414,6 @@ test('native retirement clears its child rows and keeps dispatched workers', t =
   assert.equal(calls.calls.size, 2);
   host.context.createNativeUsage = () => ({ apply() {} });
   host.context.store.setRestore = () => {};
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   host.context.structuredEvent = createShellEvents(host.context).structuredEvent;
   host.context.structuredEvent('terminal', { type: 'session.state', runtimeSessionId: 'native-run', providerSessionId: f.parentId, payload: { state: 'stopped' } });
   assert.deepEqual([...calls.calls.keys()], ['dispatched-worker']);

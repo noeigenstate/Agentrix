@@ -1,3 +1,5 @@
+const { removeProject } = require('../electron/app/application-ipc.cjs');
+const { createUsageHost, createCliChecks } = require('../electron/features/agents/usage-host.cjs');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 // A planner in a terminal (no native Codex session) dispatches Codex workers on app-server: the pane's Codex section takes
@@ -63,19 +65,19 @@ async function dispatchCodex(t, env, { control = true } = {}) {
   for (let n = 0; !events.some(event => event.type === 'dispatch-end') && n < 200; n++) await new Promise(resolve => setTimeout(resolve, 10));
   // Anything the helper still had in flight arrives now or never.
   await new Promise(resolve => setTimeout(resolve, 200));
-  return { events, accountKey };
+  return { events, accountKey, bootstrap };
 }
 
 // main.cjs's own event handler, usage readers and native-session assembly; a planner Claude in a terminal and no Codex
 // session. projectAccount is what the project's own account read retained (null: it gave nothing, as reported).
 // locate: main's team lookup (default: refuses); giving one also makes the control channel the real one, so a worker's registration
 // runs main's own resolver. root is the project's folder. claudeAccount is the app-wide Claude account reading.
-async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, root, claudeAccount = null } = {}) {
+async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, root, bootstrapFile, claudeAccount = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-main-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const forbidden = () => assert.fail('usage read must not start an account poll, CLI session, SDK or network request');
   const project = { id: 'p', kind, path: root }, calls = new AgentCalls(), sent = []; t.after(() => calls.dispose());
-  const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', cliActive: true, status: 'codex',
+  const planner = { terminalId: 't', projectId: 'p', bootstrapFile, sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', cliActive: true, status: 'codex',
     activitySince: Date.now(), usage: { agent: 'claude', limits: [] } };
   const { adapterOf, legacyRestoreAgent } = require('../electron/features/cli-adapters/registry.cjs');
   const context = { path, structuredClone, sessions: new Map([['t', planner]]), claudeAccounts: { account: claudeAccount },
@@ -90,8 +92,6 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
       ? options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden })
       : () => ({ create: forbidden }) } }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
-    // main's own checkClaude (read below) runs over this stand-in for the locator's check.
-    inspectClaude: () => context.inspectClaudeExecutable(),
     netRequest: () => forbidden, electronNet: {},
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send: (channel, data) => { sent.push([channel, data]); }, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},
@@ -104,32 +104,31 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   };
   // Main's worker terminals: no terminal lead here starts one.
   context.workerTerminals = null;
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
   context.onEvent = createShellEvents(context).onEvent;
   context.structuredEvent = createShellEvents(context).structuredEvent;
-  vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
-  const check = source.indexOf('function checkClaude(');
-  vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
+  context.localClaudeMeters = createUsageHost(context).localClaudeMeters;
+  const { checkClaude } = createCliChecks({ ...context, claudeLocator: { peek: () => null }, get claudeRuntime() { return context.claudeRuntime; } });
+  context.checkClaude = checkClaude;
   defineMain(context, 'acceptDispatchEvent', 'bindDispatchInbox', 'disposeDispatchInbox', 'readNativeConnections', 'liveHost', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
     'readNativeUsageInputs', 'connectionSpec', 'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal',
     'retireTerminal', 'activateNative');
   const nativeHost = createNativeHost(context);
   // The workspace's project removal, as main registers it.
-  const removeProject = vm.runInContext(`(${/removeProject: (id => \{[^\n]*\}),/.exec(source)[1]})`, context);
   await nativeHost.initializeNativeSessions();
   t.after(() => { context.disposeDispatchInbox(); context.nativeSessions.close(); if (locate) context.dispatchControl.close(); });
   const handlers = new Map(); context.nativeSessions.register((name, handle) => handlers.set(name, handle));
   // The fallback main registers when native sessions failed to start: its usage still has to carry what dispatched workers report.
   const unavailable = new Map(); nativeHost.registerUnavailableNative((name, handle) => unavailable.set(name, handle));
-  return { context, removeProject, sent, fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
+  return { context, removeProject: id => removeProject(context, id), sent,
+    sweepDispatch: () => context.bindDispatchInbox(planner, project).sweep(), fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
     fallbackClaude: async () => (await unavailable.get('native:usage')('p')).agents.claude,
     controlAddress: () => context.controlAddress, held: () => new Map(['p'].map(id => [id, context.dispatchReading(id, null, Infinity)]).filter(([, payload]) => payload)),
     usage: async () => { await context.bindDispatchInbox(planner, project).work; return (await handlers.get('native:usage')('p')).agents.codex; } };
 }
 
 test('a dispatched Codex worker reports its app-server account and quota between its start and end, and the pane shows them without a native session', async t => {
-  const { events, accountKey } = await dispatchCodex(t, { SYNTHETIC_CODEX_ACCOUNT: JSON.stringify(first) });
+  const { events, accountKey, bootstrap } = await dispatchCodex(t, { SYNTHETIC_CODEX_ACCOUNT: JSON.stringify(first) });
   const types = events.map(event => event.type), reports = events.filter(event => event.type === 'dispatch-account');
   assert.ok(reports.length > 0, `the helper reported no account: ${types.join(', ')}`);
   assert.ok(types.indexOf('dispatch-account') > types.indexOf('dispatch-start'), 'reports follow the start');
@@ -139,9 +138,11 @@ test('a dispatched Codex worker reports its app-server account and quota between
   assert.equal(sent.connection.scopeId, accountScopeId(first, accountKey), 'the worker\'s account has the name main\'s key gives it');
   assert.equal(sent.limits.limitsById.codex.primary.usedPercent, 25);
   assert.ok(!JSON.stringify(events).includes(first.email), 'the account identity never leaves the helper');
-  const { context, usage } = await mainAssembly(t);
+  const { context, usage, sweepDispatch } = await mainAssembly(t, { bootstrapFile: bootstrap });
   assert.equal((await usage()).connection.kind, 'unknown', 'without a report the section is 未知, as reported');
   for (const event of events) context.onEvent(event);
+  // The pipe can coalesce wakes. The same inbox that runs in main replays the complete signed sequence.
+  await sweepDispatch();
   // The pane reads while the worker runs; what it read last stays after the worker ended.
   const codex = await usage();
   assert.equal(context.nativeSessions.has('t'), false, 'no native session is involved');

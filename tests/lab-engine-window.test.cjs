@@ -1,6 +1,6 @@
+const { openMainWindow, loadMainWindow } = require('../electron/app/window-startup.cjs');
 const { loadPreload, loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/lab-isolation.cjs');
-const vm = require('node:vm');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -79,12 +79,8 @@ test('importing and wiring the lab before the first window never loads the engin
 });
 
 async function mainStartup(t, engineFactory) {
-  const main = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = main.indexOf('    window = new BrowserWindow({');
-  const end = main.indexOf('    for (const project of store.projects) projectImageAuto.enqueue(project);', start);
-  assert.ok(start > main.indexOf('app.whenReady()') && end > start);
   const created = [], ipcMain = new Ipc(), noop = () => {};
-  const context = vm.createContext({ path, root: '/fixture/app', __dirname: '/fixture/app/electron', integrationDir: '/fixture/integration',
+  const context = { path, root: '/fixture/app', __dirname: '/fixture/app/electron', integrationDir: '/fixture/integration',
     app: { getPath: () => '/unused' }, process: { platform: 'darwin' }, minWidth: 820, minHeight: 560,
     store: { projects: [], settings: { theme: 'dark', language: 'zh', uiZoom: 100, shortcuts: {} } },
     t: value => value, windowBackgroundColor: () => '#181818', desktopGlassWindow: false,
@@ -101,9 +97,10 @@ async function mainStartup(t, engineFactory) {
     Menu: { setApplicationMenu: noop }, clipboard: {}, previewResources: {}, pictureFrom: noop,
     quitting: false, requestQuit: noop, report: noop, updateIndicators: noop, attentionTimer: null, clearTimeout,
     tray: null, Tray: class extends EventEmitter { setToolTip() {} }, trayImage: noop, trayMenu: noop,
-    showWindow: noop, macMenu: noop, captureBranch: noop,
-  });
-  await vm.runInContext(`(async () => { ${main.slice(start, end)} })()`, context);
+    showWindow: noop, macMenu: noop, captureBranch: noop, applyNativeTheme: noop,
+  };
+  await openMainWindow(context);
+  await loadMainWindow(context);
   t.after(() => context.labWindow.dispose());
   return { context, created, ipcMain };
 }

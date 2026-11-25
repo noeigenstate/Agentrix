@@ -1,3 +1,4 @@
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -17,7 +18,6 @@ const { timeoutScale } = require('../scripts/wait.mjs');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve)); };
 const draft = { version: 1, text: '', images: [], undelivered: [] };
 async function fixture(t, { native = false, ssh = false, apiOnly = false } = {}) {
@@ -42,7 +42,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   vm.createContext(context);
   defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'activateNative', 'writeBootstrap',
     'bindDispatchInbox', 'disposeDispatchInbox');
-  vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), context);
+  Object.assign(context, createDispatchIntake(context));
   host.terminal = { write() {} };
   const lifecycle = createTerminalLifecycle(context);
   lifecycle.bindTerminalInput(host);

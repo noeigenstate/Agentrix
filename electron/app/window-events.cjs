@@ -57,7 +57,7 @@ function registerWindowContents({ window, Menu, clipboard, previewResources, pic
   contents.session.setPermissionCheckHandler((source, permission, _origin, details) => allowPlayerFullscreen(source, permission, details) || permission === 'media' && isAppFrame(source, details) && details.mediaType === 'audio');
 }
 
-function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, requestQuit, report, send, updateIndicators, clearAttention }) {
+function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, requestQuit, report, send, updateIndicators, clearAttention, platform = process.platform }) {
   // Native fullscreen can temporarily mark a visible window as occluded.
   // Keep its live terminals and zoom painting; throttle only after hiding it.
   for (const event of ['hide', 'minimize']) window.on(event, () => window.webContents.setBackgroundThrottling(true));
@@ -80,7 +80,7 @@ function registerWindowLifecycle({ window, getSettings, isQuitting, hasTray, req
     event.preventDefault();
     if (!getSettings().closeToTray || !hasTray()) requestQuit().catch(report);
     // A window hidden in macOS full screen leaves its Space black until the Dock reopens it, so leave full screen first.
-    else if (process.platform === 'darwin' && window.isFullScreen()) {
+    else if (platform === 'darwin' && window.isFullScreen()) {
       window.once('leave-full-screen', () => { if (!window.isDestroyed()) window.hide(); });
       window.setFullScreen(false);
     } else window.hide();

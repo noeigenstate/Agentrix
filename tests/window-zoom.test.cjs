@@ -1,8 +1,8 @@
+const { createWindowHost } = require('../electron/app/window-host.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 const { autoUiZoom, zoomMinimumSize, registerWindowZoom } = require('../electron/app/window-zoom.cjs');
 const { cleanSettings } = require('../electron/state.cjs');
@@ -197,9 +197,8 @@ test('settings IPC applies sanitized zoom before its single workspace broadcast 
   const store = { projects: [], get settings() { return state.settings; }, updateSettings: patch => { state.settings = cleanSettings({ ...state.settings, ...patch }); } };
   const context = vm.createContext({ store, window, windowZoom: controller, macTitlebar: null, desktopGlassActive: false, desktopGlassWindow: false, desktopGlassBackend: null,
     process: { platform: 'win32', env: {} }, app: { getVersion: () => '1.0.0' } });
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(main.slice(main.indexOf('function updateStoreSettings('), main.indexOf('const sessions =')), context);
-  vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
+  Object.assign(context, createWindowHost(context));
+  Object.assign(context, createPublicState(context));
   const handlers = new Map();
   registerWorkspaceIpc({ handle: (name, handler) => handlers.set(name, handler), publicState: context.publicState, getSettings: () => store.settings,
     updateStoreSettings: context.updateStoreSettings, broadcast, chooseVoiceModel: () => {} });

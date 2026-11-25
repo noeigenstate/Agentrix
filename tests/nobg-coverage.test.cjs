@@ -1,3 +1,4 @@
+const { createWindowHost } = require('../electron/app/window-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,7 +12,6 @@ const { writeBootstrap, updateBootstrapBackground, removeBootstrap } = require('
 const { shimWords } = require('../integration/shims/intercept.cjs');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const root = path.join(__dirname, '..'), variable = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS';
-const main = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8');
 function temporary(t) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-nobg-'));
   t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
@@ -88,8 +88,7 @@ test('Settings changes refresh existing local and SSH terminal launch policy', (
     sessions: new Map([['local', { bootstrapFile: 'fixture' }], ['ssh', { terminal: remote }]]),
     updateBootstrapBackground: (file, allow) => refreshed.push([file, allow]), RemoteConnection: Object,
     process: { platform: 'win32' }, report: error => { throw error; } };
-  const text = main.slice(main.indexOf('function updateStoreSettings('), main.indexOf('\nconst sessions ='));
-  vm.runInNewContext(text, context);
+  Object.assign(context, createWindowHost(context));
   context.updateStoreSettings({ claudeBackgroundTasks: true });
   context.updateStoreSettings({ claudeBackgroundTasks: false });
   assert.deepEqual(refreshed, [['fixture', true], ['ssh', true], ['fixture', false], ['ssh', false]]);
@@ -101,7 +100,7 @@ test('a failed bootstrap refresh is reported without unused session flags', asyn
   let update;
   const context = { store: { settings, updateSettings: patch => Object.assign(settings, patch) }, sessions: new Map([['fixture', session]]),
     updateBootstrapBackground: () => { update = Promise.reject(failure); return update; }, RemoteConnection: Object, process: { platform: 'win32' }, report: error => reports.push(error) };
-  vm.runInNewContext(main.slice(main.indexOf('function updateStoreSettings('), main.indexOf('\nconst sessions =')), context);
+  Object.assign(context, createWindowHost(context));
   context.updateStoreSettings({ claudeBackgroundTasks: true });
   await assert.rejects(update, /synthetic lock/);
   assert.equal(Object.hasOwn(session, 'backgroundPolicyPending'), false);

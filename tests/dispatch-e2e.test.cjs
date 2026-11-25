@@ -8,7 +8,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
-const ts = require('typescript');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
@@ -17,7 +16,7 @@ const { argumentsOf, run, runDetached, startDetached } = require('../integration
 const { createRoleTools } = require('../integration/role-tools.cjs');
 const { intercept } = require('../integration/shims/intercept.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
-const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
+const { createDispatchIntake, reportDispatchRefusal } = require('../electron/features/agents/dispatch-intake.cjs');
 const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
@@ -140,10 +139,6 @@ test('roles from a Windows terminal bootstrap appear under the lead project and 
   }
 });
 
-const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const functions = names => ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map(node => node.getText(ast)).join('\n');
-
 function mainFixture(t, { native = true, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-e2e-'));
   const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [], warnings = [];
@@ -158,7 +153,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
     writeBootstrap: ({ file, ...value }) => fs.writeFileSync(file, JSON.stringify(value)),
     removeBootstrap: require('../electron/features/terminal-events/bootstrap-file.cjs').removeBootstrap,
     scheduleState() {}, broadcast() {}, send() {}, report: value => errors.push(String(value?.message || value)),
-    console: { warn: (_message, code, id) => warnings.push({ code, id }) },
+    dispatchRefused: value => reportDispatchRefusal(value, { warn: (_message, code, id) => warnings.push({ code, id }) }),
     dashboard: { run() {} }, createNativeUsage: () => ({ apply() {} }), nativeSessions: { forget: async () => {}, tokenRate: () => null },
     PromptQueue: class { reset() {} }, CompletionWork: class { reset() {} }, ActionLog: class {}, ConversationLog: class {},
     readingHistory: { close() {} }, syncDashboardLive() {}, endSkillSession() {}, skills: { endSession() {}, delivery: () => null }, stopUsageAccount() {},
@@ -167,14 +162,9 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
       if (name === './features/team/team-locate.cjs') return { locateTeam };
       throw new Error(`Unexpected main dependency: ${name}`);
     } });
-  vm.runInContext(functions(['callsOf', 'dispatchedOnly']), context);
   Object.assign(context, createTerminalLifecycle(context), createShellEvents(context), createDispatchIntake(context), { nativeSpec: createHostInputs(context).nativeSpec });
   const bind = context.bindDispatchInbox;
   context.bindDispatchInbox = (...args) => { binds++; return bind(...args); };
-  const host = ast.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(value => value.name.getText(ast) === 'host'));
-  const initializer = host.declarationList.declarations.find(value => value.name.getText(ast) === 'host').initializer;
-  const reporting = initializer.properties.find(value => value.name?.getText(ast) === 'dispatchRefused');
-  if (reporting?.initializer) context.dispatchRefused = vm.runInContext(`(${reporting.initializer.getText(ast)})`, context);
   function start(key = 'synthetic-old-key', runtimeSessionId = randomUUID()) {
     const spec = context.nativeSpec('terminal', 'claude', false);
     Object.assign(spec, { sessionKey: key, controlCapability: 'synthetic-capability' });

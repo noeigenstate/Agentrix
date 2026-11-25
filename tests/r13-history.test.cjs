@@ -1,3 +1,4 @@
+const { registerAgentLaunch } = require('../electron/app/application-ipc.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test'), assert = require('node:assert/strict');
@@ -6,14 +7,13 @@ const { spawn } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 test('R1 R7 launcher mount reads saved SSH identity without any RemoteConnection; local history needs no native runtime', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   for (const kind of ['ssh', 'local']) for (const threadId of [null, 'saved-thread']) {
     let handler, connections = 0, reads = 0;
-    const context = { handle(name, fn) { assert.equal(name, 'agent:history'); handler = fn; },
+    const context = { handle(name, fn) { if (name === 'agent:history') handler = fn; },
       findProject: () => ({ kind }), store: { findTerminal: () => ({ record: { restore: { threadId } } }) },
       folderOf: () => '/local', folderHistory: async () => { reads++; return { claude: { id: 'local-claude' }, codex: null }; },
       nativeSessions: kind === 'ssh' ? { history() { connections++; throw new Error('RemoteConnection created during mount'); } } : null };
-    require('node:vm').runInNewContext(source.slice(source.indexOf("  handle('agent:history'"), source.indexOf("  handle('agent:launch'")), context);
+    registerAgentLaunch(context, context.handle);
     const history = await handler('terminal');
     assert.equal(connections, 0);
     if (kind === 'ssh') { assert.equal(reads, 0); assert.equal(history.codex?.id || null, threadId); assert.equal(history.claude, null); }
@@ -21,11 +21,11 @@ test('R1 R7 launcher mount reads saved SSH identity without any RemoteConnection
   }
 });
 test('R1 clicking continue defers unknown SSH history to router.start and retains the resume request', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'); let handler, options;
-  const context = { adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, handle(_name, fn) { handler = fn; }, findProject: () => ({ kind: 'ssh' }),
+  let handler, options;
+  const context = { adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, handle(name, fn) { if (name === 'agent:launch') handler = fn; }, findProject: () => ({ kind: 'ssh' }),
     launchPlans: new Map(), restorePlans: new Map(), broadcast() {},
     nativeSessions: { history() { assert.fail('launch must let start own lookup and cancellation'); }, async start(_id, value) { options = value; } } };
-  require('node:vm').runInNewContext(source.slice(source.indexOf("  handle('agent:launch'"), source.indexOf('  registerNativeIpc({ handle });')), context);
+  registerAgentLaunch(context, context.handle);
   await handler('t', 'codex', 'continue'); assert.equal(options.resume, true);
   await handler('t', 'codex', 'new'); assert.equal(options.resume, false);
 });

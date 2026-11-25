@@ -24,6 +24,7 @@ const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.
 // through it too, so a later round can replace one of them without editing the rest. A closure a call leaves behind
 // (the transcript tail's and monitor's callbacks) keeps the members that call read.
 function createClaudeActivity(deps) {
+  const { Date = globalThis.Date, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout } = deps;
   // Publication observes an existing tracker, including the host retained during a switch; it never creates one.
   function dispatchOf(s) {
     while (s.switchPreviousHost) s = s.switchPreviousHost;

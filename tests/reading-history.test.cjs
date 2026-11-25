@@ -1,3 +1,4 @@
+const { createSessionPresentation } = require('../electron/app/session-presentation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -203,16 +204,15 @@ test('queue IDs agree between a full live log and a page that omits earlier enqu
 });
 
 test('all main-process binding requests derive the same launched cwd and account home', async () => {
-  const vm = require('node:vm'), main = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8'), calls = [];
+  const calls = [];
   const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
   const session = { agentCwd: 'C:\\project\\subfolder', codexHome: 'C:\\isolated-codex' };
-  const context = vm.createContext({ sessions: new Map([['terminal', session]]), store: { findTerminal: () => ({ record: { restore: { cwd: 'C:\\project\\old-subfolder' } } }) },
+  const { prepareReading } = createSessionPresentation({ sessions: new Map([['terminal', session]]), store: { findTerminal: () => ({ record: { restore: { cwd: 'C:\\project\\old-subfolder' } } }) },
     findProject: () => ({ kind: 'local', path: 'C:\\project' }), readingHistory: { bind: (_id, source) => calls.push(source) },
     adapterOf: id => id === 'claude' ? { transcript: { ...adapterOf(id).transcript, home: () => 'C:\\isolated-claude' } } : adapterOf(id) });
-  vm.runInContext(main.slice(main.indexOf('function prepareReading('), main.indexOf('const { handoffFile', main.indexOf('function prepareReading('))), context);
-  context.prepareReading('terminal', { agent: 'claude', threadId: 'thread' });
-  context.prepareReading('terminal', { agent: 'claude', threadId: 'thread', cwd: 'C:\\project' });
-  context.prepareReading('terminal', { agent: 'codex', threadId: 'thread' });
+  prepareReading('terminal', { agent: 'claude', threadId: 'thread' });
+  prepareReading('terminal', { agent: 'claude', threadId: 'thread', cwd: 'C:\\project' });
+  prepareReading('terminal', { agent: 'codex', threadId: 'thread' });
   assert.ok(calls.every(source => source.cwd === session.agentCwd));
   assert.deepEqual(calls.map(source => source.home), ['C:\\isolated-claude', 'C:\\isolated-claude', session.codexHome]);
 });

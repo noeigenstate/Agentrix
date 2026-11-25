@@ -1,3 +1,4 @@
+const { registerQuit, startEventServer, startHookServer, workerParent } = require('../electron/app/process-lifecycle.cjs');
 const { ts, syntax, nodes } = require('./helpers/source-syntax.cjs');
 // A terminal lead's Claude worker in a hidden terminal (electron/features/worker-terminals/BOUNDARY.md): a fake PTY stands
 // in for the CLI, the test plays its hooks and writes its transcript, and the real dispatch helper runs against main's
@@ -8,7 +9,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { createHmac, randomUUID } = require('node:crypto');
 const { run, runDetached, detachedRuns } = require('../integration/dispatch.cjs');
@@ -452,8 +452,7 @@ test("billing follows the lead's mode and no client identity is set", async t =>
   }
   // A terminal that left Claude terminal mode since registration (a switch to a native session, another agent) hands no
   // worker its environment: main's own parent lookup, run as main declares it.
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), sessions = new Map();
-  const parentOf = vm.runInNewContext(`(${/parent: (run => \{[^\n]*\}),/.exec(main)[1]})`, { sessions });
+  const sessions = new Map(), parentOf = run => workerParent(sessions, run);
   const session = { usageEnv: { PATH: '' }, sessionKey: 'k', bootstrapFile: 'b', agent: 'claude' };
   for (const [value, expected] of [[session, true], [{ ...session, nativeStructured: true }, false], [{ ...session, agent: 'codex' }, false], [{ ...session, usageEnv: null }, false]]) {
     sessions.set('terminal', value); assert.equal(!!parentOf({ projectId: 'terminal' }), expected, JSON.stringify(value));
@@ -1066,30 +1065,20 @@ test('cmd worker launch disables delayed expansion for exclamation marks in path
 });
 
 test('quit waits for worker terminal tree shutdown before asking Electron to quit again', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = source.indexOf("app.on('before-quit', event => {");
-  const end = source.indexOf("app.on('window-all-closed'", start);
-  let beforeQuit, release, recordDrains, recordQuit, drains, quit = 0, prevented = 0, closed = 0;
+  let beforeQuit, release, recordQuit, quit = 0, prevented = 0, closed = 0;
   const pending = new Promise(resolve => { release = resolve; });
-  const drainsRegistered = new Promise(resolve => { recordDrains = resolve; });
   const quitCalled = new Promise(resolve => { recordQuit = resolve; });
   const dashboardDrain = Promise.resolve();
-  const context = { app: { on: (_name, fn) => { beforeQuit = fn; }, quit: () => { quit++; recordQuit(); } }, process: { platform: 'win32' },
-    Promise: { allSettled: values => {
-      if (values.includes(dashboardDrain)) { drains = values; recordDrains(); }
-      return Promise.allSettled(values);
-    } },
-    quitCleaned: false, quitting: true, window: null, nativeSessions: null, claudeRuntime: null, runtimeDir: null,
-    dashboard: { waitForQuit: () => dashboardDrain }, dashboardWindow: null, labWindow: null, voiceManager: null, fileOperations: null,
-    skills: null, updateManager: null, sshAuth: null, eventServer: null, hookServer: null, dispatchControl: null, tray: null,
+  let waitingForWorker = false;
+  const workerDrain = { then(resolve, reject) { waitingForWorker = true; return pending.then(resolve, reject); } };
+  registerQuit({ app: { on: (_name, fn) => { beforeQuit = fn; }, quit: () => { quit++; recordQuit(); } }, platform: 'win32',
+    quitting: true, dashboard: { waitForQuit: () => dashboardDrain },
     projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} },
-    workerTerminals: { closeAll: () => { closed++; return pending; } }, sessions: new Map(),
-    disposeDispatchInbox() {}, disposeClaudeAccounts() {}, cleanupAskpass() {}, clearTimeout() {},
-    attentionTimer: null, usageRolloverTimer: null, stateTimer: null };
-  vm.runInNewContext(source.slice(start, end), context);
+    workerTerminals: { closeAll: () => { closed++; return workerDrain; } }, sessions: new Map(),
+    disposeDispatchInbox() {}, disposeClaudeAccounts() {}, cleanupAskpass() {} });
   beforeQuit({ preventDefault: () => { prevented++; } });
-  await drainsRegistered;
-  assert.ok(drains.includes(pending), 'the quit drain includes worker tree shutdown');
+  await dashboardDrain;
+  assert.equal(waitingForWorker, true, 'the quit drain includes worker tree shutdown');
   assert.equal(closed, 1); assert.equal(prevented, 1); assert.equal(quit, 0, 'taskkill/PTY exit is still outstanding');
   release();
   await quitCalled;
@@ -1211,10 +1200,22 @@ test("a worker's hooks never reach a project terminal or its completion", async 
   declare('run-2');
   assert.equal(calls.snapshot().flatMap(group => group.items).find(item => item.id === 'dispatch:run-2').awaiting, 'owner');
 
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.match(main, /keyOf: id => workerTerminals\.keyOf\(id\) \?\? sessions\.get\(id\)\?\.hooks\?\.key/);
-  assert.match(main, /deliver: event => workerTerminals\.hook\(event\) \|\| claudeHook\(event\)/);
-  assert.match(main, /createEventServer\(event => workerTerminals\.event\(event\) \|\| onEvent\(event\)\)/);
+  const workerOnly = { terminalId: 'worker' }, parentOnly = { terminalId: 'parent' }, delivered = [];
+  const workerTerminals = { keyOf: id => id === 'worker' ? 'worker-key' : undefined,
+    hook: event => event === workerOnly, event: event => event === workerOnly };
+  const sessions = new Map([['worker', { hooks: { key: 'shadowed' } }], ['parent', { hooks: { key: 'parent-key' } }]]);
+  const takeModeNote = () => {};
+  const hooks = await startHookServer({ createHookServer: async options => options, createHookIngest: options => options,
+    workerTerminals, sessions, claudeHook: event => delivered.push(event), takeModeNote });
+  assert.equal(hooks.keyOf('worker'), 'worker-key');
+  assert.equal(hooks.keyOf('parent'), 'parent-key');
+  assert.equal(hooks.noteOf, takeModeNote);
+  hooks.deliver(workerOnly);
+  hooks.deliver(parentOnly);
+  const onEvent = startEventServer({ createEventServer: callback => callback, workerTerminals, onEvent: event => delivered.push(event) });
+  onEvent(workerOnly);
+  onEvent(parentOnly);
+  assert.deepEqual(delivered, [parentOnly, parentOnly]);
   const worker = syntax('electron/features/worker-terminals/worker-terminals.cjs');
   const forbidden = new Set(['notifyCompletion', 'expectCompletion', 'applyActivity', 'claudeActivity', 'setRestore']);
   const references = nodes(worker, node => ts.isIdentifier(node) && forbidden.has(node.text)

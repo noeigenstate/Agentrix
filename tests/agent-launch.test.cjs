@@ -1,3 +1,6 @@
+const { registerAgentLaunch } = require('../electron/app/application-ipc.cjs');
+const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -141,19 +144,20 @@ test('a Claude resume takes the lead seat even before folder history resolves it
 });
 
 test('the seat catalog reuses models already read by the Codex model menu without making a request', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  assert.doesNotMatch(source, /require\(['"]\.\/features\/skills\/model-(?:catalog|probe)\.cjs['"]\)/);
-  const codex = source.indexOf('  const codex = { create(spec, emit) {');
-  const start = source.indexOf('    return typeof skills', codex), end = source.indexOf('\n  } };', start);
-  assert.ok(start >= 0 && end > start);
   let reads = 0;
   const rows = [{ value: 'gpt-menu-model', efforts: ['low', 'high'] }], cache = new Map();
   const { SkillsStore } = require('../electron/features/skills/store.cjs');
   const runtime = { models: async () => { reads++; return rows; }, close: async () => {} };
   const skills = { trackModelRuntime: SkillsStore.prototype.trackModelRuntime,
     observeModels: (family, values) => { assert.equal(family, 'codex'); for (const row of values) cache.set(row.value, row); } };
-  const context = vm.createContext({ runtime, skills, spec: { kind: 'local' }, seatModelRuntimes: { codex: new Set() } });
-  assert.equal(vm.runInContext(`(function () {${source.slice(start, end)} })()`, context), runtime);
+  let codex;
+  const deps = { skills, path, app: { getPath: () => '/fixture' }, seatModelRuntimes: { codex: new Set() }, generatedImages: {},
+    adapterOf: family => ({ native: { load: () => family === 'codex' ? () => ({ create: () => runtime }) : () => ({ create() {} }) } }),
+    loadDispatchControl: () => ({ createDispatchControl: () => ({ listen: async () => ({ address: 'fixture' }) }) }),
+    loadTeamLocator: () => ({}), loadDispatchRegistration: () => ({}), createSdkLoader() {}, netRequest() {},
+    checkClaude: async () => {}, createNativeSessions: options => { codex = options.codex; return { getSettings() {} }; }, registerClaudeWorker() {} };
+  await createNativeHost(deps).initializeNativeSessions();
+  assert.equal(codex.create({ kind: 'local' }), runtime);
   assert.equal(reads, 0); assert.equal(cache.size, 0);
   assert.equal(await runtime.models(), rows); assert.equal(reads, 1); assert.equal(cache.get('gpt-menu-model'), rows[0]);
   await runtime.close();
@@ -185,7 +189,6 @@ test('folder history reports each agent separately and survives one of them fail
 });
 
 test('public state reserves the reading surface during agent startup and releases it on success, error or exit', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const session = { sessionId: 'session', status: 'starting', agentStarting: true, promptQueue: { list: () => [] } };
   const context = vm.createContext({ restorePlans: new Map(), readingHistory: { summary: () => null }, dispatchedOnly: () => null,
     store: { projects: [{ id: 'project', name: 'Project' }], settings: {} }, sessions: new Map([['project', session]]), startupErrors: new Map(),
@@ -193,7 +196,7 @@ test('public state reserves the reading surface during agent startup and release
     localShell: () => ({ kind: 'powershell' }), process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } },
     app: { getVersion: () => 'test' }, desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null, macTitlebar: null,
   });
-  vm.runInContext(source.slice(source.indexOf('function publicState('), source.indexOf('function terminalIds(')), context);
+  Object.assign(context, createPublicState(context));
   const terminal = () => context.publicState().projects[0].terminals[0];
   assert.equal(terminal().agentStarting, true);
   session.status = 'shell'; assert.equal(terminal().agentStarting, true, 'the first shell prompt still belongs to the pending agent launch');
@@ -204,13 +207,12 @@ test('public state reserves the reading surface during agent startup and release
 });
 
 test('agent:launch refuses the removed native mode without starting or replacing a session, and sends Codex to app-server', async () => {
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = {}, starts = [], deleted = [];
+  const handlers = {}, starts = [], deleted = [];
   const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
     adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf,
     launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: () => assert.fail('no Codex TUI'),
     store: { findTerminal: () => ({ record: {} }) }, nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
-  const start = main.indexOf("  handle('agent:launch'");
-  vm.runInContext(main.slice(start, main.indexOf('  registerNativeIpc(', start)), context);
+  registerAgentLaunch(context, context.handle);
   for (const agent of ['claude', 'codex']) await assert.rejects(handlers['agent:launch']('fixture', agent, 'native'), /Unsupported agent session mode/);
   assert.deepEqual(starts, []); assert.deepEqual(deleted, []);
   assert.equal(await handlers['agent:launch']('fixture', 'codex', 'new'), true);

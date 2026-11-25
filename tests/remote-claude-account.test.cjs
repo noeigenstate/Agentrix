@@ -1,6 +1,6 @@
+const { createUsageHost } = require('../electron/features/agents/usage-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { RemoteConnection } = require('../electron/remote-connection.cjs');
@@ -101,15 +101,13 @@ test('remote request cancellation, timeout and close release pending slots and i
 });
 
 test('SSH Claude startUsage binds only the remote channel and quota scopes separate hosts from local accounts', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const body = source.slice(source.indexOf('function startUsage('), source.indexOf('\nfunction stopUsageAccount('));
   const project = { id: 'p', kind: 'ssh', path: '/srv/project', ssh: { host: 'one', configFile: '/fixture/ssh' } };
   const session = { agent: 'claude', terminalId: 't', cliActive: true, activityClockOffset: 60000, terminal: {}, quotas: [], recordQuota(provider, limits) { this.quotas.push({ provider, limits }); } };
   let binding;
-  const context = { UsageMeter, sessions: new Map([['t', session]]), stopUsageAccount() {}, callsOf: () => null,
+  const context = { UsageMeter, sessions: new Map([['t', session]]), store: { projects: [] }, callsOf: () => null,
     scheduleState() {}, scheduleUsageRollover() {}, watchRemoteClaudeAccount(remote, changed, options) { binding = { remote, changed, options }; return { dispose() {} }; },
     claudeProvider() { assert.fail('remote Claude cannot inspect local provider settings'); }, refreshClaudeAccounts() { assert.fail('remote Claude cannot inspect local credentials'); } };
-  vm.runInNewContext(body + '\nstartUsage(project, session, {});', { ...context, project, session });
+  createUsageHost(context).startUsage(project, session, {});
   assert.equal(binding.remote, session.terminal); assert.ok(binding.options.current());
   const localAt = Date.now(), account = remoteClaudeResult(ready(41, localAt - 60000)).account;
   binding.changed(account);
@@ -131,7 +129,7 @@ test('SSH Claude attention events show the waiting notice without rearming compl
     sessions: new Map([['t', session]]),
     broadcast() { broadcasts++; }, store: { expectCompletion() { assert.fail('attention cannot rearm completion'); } },
     applyActivity() { assert.fail('attention cannot change round state'); }, followClaude() { assert.fail('attention cannot rebind the transcript'); } }, 'publishCliState', 'claudeActivity');
-  vm.runInContext('claudeActivity(project, session, event);', context);
+  context.claudeActivity(context.project, context.session, context.event);
   assert.equal(session.needsInput.message, event.message); assert.equal(session.codexActivity, 'complete'); assert.equal(broadcasts, 1);
 });
 

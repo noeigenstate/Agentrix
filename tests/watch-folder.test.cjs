@@ -1,10 +1,10 @@
+const { watchClaudeAccountFolders } = require('../electron/features/agents/usage-host.cjs');
 const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function watcherFs(realpath = directory => directory, existsSync = () => true) {
@@ -29,11 +29,8 @@ function sessionFiles(watched) {
 }
 
 function accountWatcher(watched, files, queue) {
-  const filename = require.resolve('../electron/main.cjs'), source = fs.readFileSync(filename, 'utf8');
   const watchers = new Map();
-  const watch = vm.runInNewContext(source.slice(source.indexOf('function watchClaudeAccounts()'), source.indexOf('async function refreshClaudeAccounts()')) + '\nwatchClaudeAccounts;', {
-    fs: watched, path, claudeAccountWatchers: watchers, claudeAccountFiles: files, queueClaudeAccounts: queue,
-  }, { filename });
+  const watch = () => watchClaudeAccountFolders({ fs: watched, path, claudeAccountFiles: files, queueClaudeAccounts: queue }, watchers);
   return { watch, watchers };
 }
 

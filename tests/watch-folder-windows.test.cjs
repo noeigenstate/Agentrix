@@ -53,12 +53,10 @@ async function liveAliasWatchers() {
     await eventually(async () => (await rolloutFiles(directory)).some(file => file.filename === second));
     assert.equal(watched.length, 2, 'a recreated folder gets a fresh native watcher');
 
-    const filename = process.argv[2], source = fs.readFileSync(filename, 'utf8');
+    const { watchClaudeAccountFolders } = require(process.argv[2]);
     const file = path.join(root, '.claude.json'), accountIndex = watched.length; let events = 0;
     fs.writeFileSync(file, '{}');
-    const watch = vm.runInNewContext(source.slice(source.indexOf('function watchClaudeAccounts()'), source.indexOf('async function refreshClaudeAccounts()')) + '\nwatchClaudeAccounts;', {
-      fs, path, claudeAccountWatchers: watchers, claudeAccountFiles: () => [file], queueClaudeAccounts: () => ++events,
-    }, { filename });
+    const watch = () => watchClaudeAccountFolders({ fs, path, claudeAccountFiles: () => [file], queueClaudeAccounts: () => ++events }, watchers);
     watch(); watch();
     assert.equal(watched.length, accountIndex + 1, 'account terminals share one watcher');
     assert.equal(watched[accountIndex].filename, fs.realpathSync.native(root));
@@ -117,7 +115,7 @@ test('native watchers follow real Windows 8.3 aliases without changing caller-vi
   }
   assert.match(path.basename(alias), /~/, 'COM ShortPath must provide an 8.3 alias or the unchanged long leaf');
   const child = spawnSync(process.execPath, ['-e', `(${liveAliasWatchers.toString()})().catch(error => { console.error(error); process.exitCode = 1; });`,
-    require.resolve('../electron/session-files.cjs'), require.resolve('../electron/main.cjs'), require.resolve('../electron/codex-activity.cjs'), alias, String(timeoutScale)], {
+    require.resolve('../electron/session-files.cjs'), require.resolve('../electron/features/agents/usage-host.cjs'), require.resolve('../electron/codex-activity.cjs'), alias, String(timeoutScale)], {
     encoding: 'utf8', windowsHide: true, timeout: 45000 * timeoutScale,
   });
   assert.ifError(child.error);

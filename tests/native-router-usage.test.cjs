@@ -1,3 +1,4 @@
+const { createUsageHost, createCliChecks } = require('../electron/features/agents/usage-host.cjs');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 require('./fixtures/team-isolation.cjs');
@@ -119,8 +120,6 @@ test('real main assembly reports terminal-only Claude subscription usage without
       ? options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden })
       : () => ({ create: forbidden }) } }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
-    // main's own checkClaude (read below) runs over this stand-in for the locator's check.
-    inspectClaude: () => context.inspectClaudeExecutable(),
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     safeStorage,
@@ -132,12 +131,11 @@ test('real main assembly reports terminal-only Claude subscription usage without
   };
   // Main's worker terminals: no terminal lead here starts one.
   context.workerTerminals = null;
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
   context.structuredEvent = createShellEvents(context).structuredEvent;
-  vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
-  const check = source.indexOf('function checkClaude(');
-  vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
+  context.localClaudeMeters = createUsageHost(context).localClaudeMeters;
+  const { checkClaude } = createCliChecks({ ...context, claudeLocator: { peek: () => null }, get claudeRuntime() { return context.claudeRuntime; } });
+  context.checkClaude = checkClaude;
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
   defineMain(context, 'readNativeConnections', 'liveHost', 'dispatchReading', 'readNativeSubscriptionLimits', 'readNativeUsageInputs', 'connectionSpec',
     'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'retireTerminal', 'activateNative');

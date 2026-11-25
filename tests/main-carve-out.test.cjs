@@ -1,12 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const ts = require('typescript');
+const { ts, syntax, nodes } = require('./helpers/source-syntax.cjs');
 
 const root = path.join(__dirname, '..');
-const main = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf8');
-const tree = ts.createSourceFile('main.cjs', main, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const tree = syntax('electron/main.cjs');
 const modules = {
   'electron/app/terminal-lifecycle.cjs': 'createTerminalLifecycle',
   'electron/features/terminal-events/shell-events.cjs': 'createShellEvents',
@@ -77,4 +75,64 @@ test('main.cjs only wires the terminal activity, bootstrap, switch host, host in
   })(tree);
   assert.deepEqual(declared, [], 'the carved functions live only in their modules');
   assert.deepEqual(misplaced, [], 'bootstrap, dispatch intake and native environment stay in their own modules');
+});
+
+test('main wires workspace creation before overriding the native theme', () => {
+  const workspace = nodes(tree, node => ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'WorkspaceStore')[0];
+  const [location, options] = workspace.arguments;
+  assert.ok(location);
+  assert.ok(options.properties.some(property => ts.isPropertyAssignment(property) && property.name.text === 'systemTheme' &&
+    ts.isCallExpression(property.initializer) && property.initializer.expression.text === 'systemTheme'));
+  const [open] = nodes(tree, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'openMainWindow');
+  assert.ok(open && workspace.pos < open.pos);
+});
+
+test('main assembly has no sender for intervention relay messages', () => {
+  for (const file of ['electron/main.cjs', 'electron/app/application-ipc.cjs']) {
+    const forbidden = nodes(syntax(file), node => ts.isIdentifier(node) && node.text === 'sendParentPrompt' ||
+      ts.isStringLiteral(node) && node.text === 'agents:relay');
+    assert.deepEqual(forbidden, [], file);
+  }
+});
+
+test('window startup hands the application indicator callback to the lifecycle registrar', () => {
+  const [registration] = nodes(syntax('electron/app/window-startup.cjs'),
+    node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'registerWindowLifecycle');
+  assert.ok(registration.arguments[0].properties.some(property =>
+    ts.isShorthandPropertyAssignment(property) && property.name.text === 'updateIndicators'));
+});
+
+test('main starts both first looks and the restore waits through firstLooksSettled', () => {
+  const calls = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) calls.push(node.expression.text);
+    ts.forEachChild(node, visit);
+  }
+  visit(tree);
+  const restoreAt = calls.indexOf('restoreTerminals');
+  assert.ok(calls.includes('checkCodex') && calls.indexOf('checkCodex') < restoreAt);
+  assert.equal(calls[restoreAt - 1], 'firstLooksSettled');
+});
+
+test('startup and restoration do not request an account read for background projects', () => {
+  const ready = nodes(tree, node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === 'whenReady')[0];
+  assert.ok(ready, 'main registers the ready callback');
+  const callback = ready.parent.parent.arguments[0];
+  const accountRequests = new Set(['openProject', 'checkProjectAccount']);
+  assert.deepEqual(nodes(callback, node => ts.isIdentifier(node) && accountRequests.has(node.text)), []);
+});
+
+test('main lets the skills store own the model catalog and its provider probes', () => {
+  const directLoads = nodes(tree, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+    node.expression.text === 'require' && ts.isStringLiteral(node.arguments[0]));
+  const internal = new Set(['./features/skills/model-catalog.cjs', './features/skills/model-probe.cjs']);
+  assert.deepEqual(directLoads.filter(node => internal.has(node.arguments[0].text)), []);
+});
+
+test('main supplies the workspace registrar to the application IPC assembly', () => {
+  const [registration] = nodes(tree, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+    node.expression.text === 'registerApplicationIpc');
+  assert.ok(registration.arguments[0].properties.some(property =>
+    ts.isShorthandPropertyAssignment(property) && property.name.text === 'registerWorkspaceIpc'));
 });

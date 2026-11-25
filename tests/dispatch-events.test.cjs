@@ -1,3 +1,4 @@
+const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
@@ -6,7 +7,6 @@ const { randomUUID } = require('node:crypto');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { acceptDispatch, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
-const { defineMain } = require('./helpers/main-modules.cjs');
 
 const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
 
@@ -287,16 +287,15 @@ test('transcript re-reads preserve dispatched workers and their expiry; the next
 
 test('the real event server and main handler authenticate dispatch without touching parent activity and broadcast changes', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), net = require('node:net');
+  const net = require('node:net');
   const { createEventServer } = require('../electron/events.cjs');
   let broadcasts = 0;
   const calls = new AgentCalls({ changed: () => broadcasts++ }); t.after(() => calls.reset());
   const s = { terminalId: 'terminal', projectId: 'owner-project', sessionKey: 'test-key', calls, codexActivity: 'complete' };
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const context = defineMain({
+  const context = {
     sessions: new Map([['terminal', s]]), store: { projects: [{ id: 'owner-project' }] }, broadcast: () => broadcasts++, callsOf: session => session.calls,
-    require: name => require(path.join(__dirname, '../electron', name)),
-  }, 'acceptDispatchEvent');
+  };
+  Object.assign(context, createDispatchIntake(context));
   const handler = createShellEvents(context).onEvent;
   const server = await createEventServer(handler); t.after(() => server.close());
   const send = event => new Promise((resolve, reject) => {
@@ -318,11 +317,9 @@ test('the real event server and main handler authenticate dispatch without touch
 });
 
 test('dispatched workers belong to the terminal session: shown without an agent and kept when the agent restarts', t => {
-  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const { callsOf, dispatchedOnly } = vm.runInNewContext(source.slice(source.indexOf('function callsOf('), source.indexOf('function startUsage('))
-    + '\n({ callsOf, dispatchedOnly });', { AgentCalls, createInterventions: require('../electron/features/agents/interventions.cjs').createInterventions, scheduleState: () => {}, path, os: require('node:os'),
-      claudeConfigDir: () => path.join(require('node:os').tmpdir(), 'no-claude'), sessions: new Map(), send: () => {}, dashboardWindow: null });
+  const path = require('node:path'), os = require('node:os');
+  const { callsOf, dispatchedOnly } = createDispatchIntake({ AgentCalls, scheduleState() {}, os,
+    claudeConfigDir: () => path.join(os.tmpdir(), 'no-claude'), sessions: new Map(), send() {} });
   const s = { terminalId: 'terminal', sessionKey: 'test-key' }, project = { kind: 'local' };
   assert.equal(dispatchedOnly(s), null, 'no rows, no pane data');
   const launch = start();

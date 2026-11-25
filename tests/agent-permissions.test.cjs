@@ -1,6 +1,7 @@
+const { createUsageHost } = require('../electron/features/agents/usage-host.cjs');
+const { createPublicState } = require('../electron/app/public-state.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { spawn } = require('node:child_process');
@@ -10,7 +11,6 @@ const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
-const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 // Exercise the actual event handlers without opening Electron or the user's terminals.
 function handlers() {
   const project = { id: 'p', completionArmed: false }, session = { terminalId: 't', projectId: 'p', sessionId: 'pty', sessionKey: 'key', cliActive: true, agent: 'claude', codexActivity: 'working', promptQueue: { reset() {} }, submissions: { reset() {} }, approval: new (require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard)('pty') };
@@ -27,7 +27,7 @@ function handlers() {
   });
   // onEvent owns account-query cleanup on real agent/shell exit. Include that
   // legitimate dependency, with an observable subscription instead of a PTY.
-  vm.runInContext(main.slice(main.indexOf('function stopUsageAccount('), main.indexOf('let claudeAccountTimer =')), context);
+  context.stopUsageAccount = createUsageHost(context).stopUsageAccount;
   defineMain(context, 'publishCliState', 'claudeActivity', 'acceptDispatchEvent');
   Object.assign(context, createShellEvents(context));
   context.launchPlans = new Map();
@@ -176,8 +176,8 @@ test('terminal commands IPC selects the session agent, defaults to Claude and ex
 
 test('terminals show in the order they were dragged into; a new one comes last and a stale order is refused', () => {
   const project = { id: 'p', terminals: [{ id: 'a' }, { id: 'b' }], terminalOrder: ['b', 'gone', 'p'] }, saved = [];
-  const context = vm.createContext({ sessions: new Map([['p', {}]]), findProject: () => project, store: { setTerminalOrder: (id, ids) => saved.push([id, ids]) } });
-  vm.runInContext(main.slice(main.indexOf('function terminalIds('), main.indexOf('function disposeProjectTerminals(')), context);
+  const context = vm.createContext({ sessions: new Map([['p', {}]]), store: { findTerminal: () => ({ project }), setTerminalOrder: (id, ids) => saved.push([id, ids]) } });
+  Object.assign(context, createPublicState(context));
   assert.deepEqual([...context.shownTerminalIds(project)], ['b', 'p', 'a'], 'dragged ones first, in that order; the rest as opened');
   context.reorderTerminals('p', ['a', 'p', 'b']);
   assert.deepEqual(saved, [['p', ['a', 'p', 'b']]]);
@@ -187,12 +187,12 @@ test('terminals show in the order they were dragged into; a new one comes last a
 test('public state exposes waiting messages and null for terminals without a notice', () => {
   const context = vm.createContext({
     restorePlans: new Map(), readingHistory: { summary: () => null },
-    dispatchedOnly: () => null, store: { projects: [{ id: 'p' }], settings: { language: 'zh' } }, sessions: new Map([['waiting', { needsInput: { message: 'Approve tool' } }]]),
+    dispatchedOnly: () => null, store: { projects: [{ id: 'waiting', terminals: [{ id: 'stopped' }] }], settings: { language: 'zh' } }, sessions: new Map([['waiting', { needsInput: { message: 'Approve tool' } }]]),
     terminalIds: () => ['waiting', 'stopped'], shownTerminalIds: () => ['waiting', 'stopped'], getBranch: () => undefined, startupErrors: new Map(), t: text => text, localShell: () => ({ kind: 'powershell' }),
     process: { platform: 'win32', env: { AGENTRIX_DATA_DIR: 'isolated' } }, app: { getVersion: () => '1' },
     desktopGlassBackend: null, desktopGlassWindow: false, desktopGlassActive: false, windowZoom: null, macTitlebar: null,
   });
-  vm.runInContext(main.slice(main.indexOf('function publicState('), main.indexOf('function terminalIds(')), context);
+  Object.assign(context, createPublicState(context));
   const terminals = context.publicState().projects[0].terminals;
   assert.equal(terminals[0].needsInput, 'Approve tool'); assert.equal(terminals[1].needsInput, null);
   const session = context.sessions.get('waiting'), scope = { key: 'preview', agent: 'claude', threadId: 'saved' };

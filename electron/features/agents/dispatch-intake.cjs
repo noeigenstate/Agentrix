@@ -95,7 +95,70 @@ function createDispatchIntake(deps) {
   }
   function clearDispatchAccount(projectId) { dispatchAccounts.delete(projectId); }
 
-  return { acceptDispatchEvent, dispatchReading, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox };
+  // The called models belong to the terminal session, so workers dispatched from a plain shell, or before the agent
+  // restarts, stay visible; the agent's usage meter shares them while it runs.
+  function callsOf(s, project) {
+    if (s.switchPreviousHost) return callsOf(s.switchPreviousHost, project);
+    const { AgentCalls, sessions, scheduleState, send, os, claudeConfigDir, sameDirectory, fs: files = fs } = deps;
+    const id = s.terminalId;
+    const calls = s.calls || AgentCalls.forTerminal(sessions, id, () => {
+      const helperPids = new WeakMap(), current = () => sessions.get(id);
+      return new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
+        roles: () => (current()?.remoteConnection || current()?.terminal)?.appliedRouting?.roles ?? deps.skills?.sessionRoles?.(project.id) ?? null,
+        dispatchAlive: async call => {
+          if (project.kind === 'ssh') return null;
+          let pid = call.helperPid || helperPids.get(call);
+          if (!pid || call.done) {
+            try {
+              const team = await deps.loadTeamLocator().locateTeam(project.path);
+              if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
+              const file = path.join(team.board, call.key + '.json');
+              if (files.statSync(file).size > 65536) return null;
+              const { readBoard } = require('../team/inbox.cjs');
+              const entry = readBoard(files.readFileSync(file, 'utf8'));
+              if (entry?.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd)) return null;
+              pid = entry.pid; helperPids.set(call, pid);
+            } catch (error) { return call.done && error.code === 'ENOENT' ? false : null; }
+          }
+          return AgentCalls.alive(pid);
+        },
+        codexHome: () => current()?.codexHome || current()?.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
+        claudeHome: () => current()?.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
+        feedChanged: event => { if (current()?.calls === calls) send('terminal:subagent-feed', { terminalId: id, ...event }); } });
+    });
+    if (s.nativeStructured && calls.setFolder === AgentCalls.prototype.setFolder) {
+      const setFolder = calls.setFolder.bind(calls);
+      // Keep this guard when the native tracker returns to a terminal host, including trackers retained from an earlier terminal.
+      calls.setFolder = folder => { if (!sameDirectory(folder, calls.folder)) setFolder(folder); };
+    }
+    return s.calls = calls;
+  }
+  // An owner intervention's target, from the call the terminal's own tracker holds: never from the renderer. The planner
+  // binding is the terminal session together with its CLI conversation, so a replaced conversation is never written to.
+  function resolveIntervention(terminalId, callId) {
+    const { sessions, store } = deps;
+    const s = sessions.get(terminalId), project = store.findTerminal(terminalId)?.project, call = s?.calls?.byId(callId);
+    if (!s?.sessionId || !project || !call) return null;
+    return { terminalId, callId, parentSessionId: `${s.plannerSessionId || s.sessionId}:${s.claudeSessionId || s.rootThreadId || s.reportedThreadId || ''}`,
+      confirmed: !call.unconfirmed, done: !!call.done, title: call.title, route: call.dispatch ? 'dispatch' : 'parent', projectPath: project.path,
+      ...(call.dispatch ? { local: project.kind !== 'ssh', runId: callId.slice('dispatch:'.length), cwd: call.cwd } : {}) };
+  }
+  // The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
+  function syncDashboardLive() {
+    deps.dashboardWindow?.live([...deps.sessions.values()].flatMap(s => (s.calls?.running() ?? []).map(call => ({ ...call, project: s.projectId ?? null }))));
+  }
+  function dispatchedOnly(s) {
+    const calls = s?.calls?.snapshot(null) || [];
+    return calls.length ? { provider: null, context: null, round: null, total: null, limits: [], calls } : null;
+  }
+
+  return { acceptDispatchEvent, dispatchReading, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox,
+    callsOf, dispatchedOnly, resolveIntervention, syncDashboardLive };
+
 }
 
-module.exports = { createDispatchIntake };
+function reportDispatchRefusal({ code, id }, logger = console) {
+  logger.warn('Dispatch event refused:', code, id || '');
+}
+
+module.exports = { createDispatchIntake, reportDispatchRefusal };

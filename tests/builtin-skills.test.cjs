@@ -1,3 +1,4 @@
+const { createSessionPresentation } = require('../electron/app/session-presentation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -410,12 +411,11 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} first run is cl
   const sessions = new Map([['one', { projectId: project.id, terminalId: 'one', sessionId: 'first', cliActive: true, skillNoteFile: 'one.txt' }],
     ['two', { projectId: project.id, terminalId: 'two', sessionId: 'second', cliActive: true, skillNoteFile: 'two.txt' }],
     ['idle', { projectId: projects[1].id, terminalId: 'idle', sessionId: 'idle', skillNoteFile: 'idle.txt' }]]), written = new Map();
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const refresh = vm.runInNewContext('(' + main.slice(main.indexOf('function refreshSkillNotes()'), main.indexOf('// Workspace broadcasts')) + ')', {
+  const { refreshSkillNotes } = createSessionPresentation({
     sessions, store: { projects }, skills: store, startupNoteFields, path, integrationDir: '/synthetic/integration',
     handoffFile: () => null, READING_NOTE: 'Read.', writeFileAtomic: (file, text) => written.set(file, text),
   });
-  refresh();
+  refreshSkillNotes();
   assert.equal(written.has('one.txt'), false); assert.equal(written.has('two.txt'), false);
   assert.ok(written.has('idle.txt'));
   assert.ok(note(start(store, project, 'first')).includes(firstInstruction(file, trigger)), 'the first agent keeps its original instruction');
@@ -462,11 +462,10 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} skills omitted 
 for (const trigger of ['always', 'first-open']) test(`simultaneous launches claim ${trigger} first run once and the production launch boundary separates agents in one shell`, async t => {
   const { store, projects, root } = fixture(t, dirs => firstRunSkill(dirs, trigger));
   const project = projects[0], id = 'builtin:code-standard';
-  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let serial = 0;
   const context = vm.createContext({ skills: store, randomUUID: () => `agent-${++serial}`, path, startupNoteFields, READING_NOTE: 'Read.',
     handoffFile: () => null, writeFileAtomic: put, report: error => { throw error; } });
-  vm.runInContext(main.slice(main.indexOf('function startSkillSession('), main.indexOf('// Wrappers reread idle')), context);
+  Object.assign(context, createSessionPresentation(context));
   const shell = terminalId => ({ projectId: project.id, terminalId, sessionId: terminalId, agent: 'codex', skillNoteFile: path.join(root, `${terminalId}.txt`) });
   const first = shell('one'), second = shell('two');
   context.startSkillSession(project, first, 0, false);
