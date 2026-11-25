@@ -458,6 +458,7 @@ const BOOTSTRAP_LIMIT = 256 * 1024;
 // The planner is told once per helper process, on run()'s output, that Agentrix did not receive its events: the worker
 // runs on regardless.
 let undeliveredNoted = false;
+const PIPE_WAKE_TIMEOUT_MS = 2000;
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
 function eventSink(filename, notice) {
   let bootstrap, outbox, sending = false;
@@ -474,7 +475,9 @@ function eventSink(filename, notice) {
     const event = queue.shift(), socket = net.connect(address);
     // A socket write is only a wake. Main's signed disk acknowledgment is the delivery proof.
     let failure = null, written = false;
-    socket.setTimeout(250, () => { failure ??= 'timeout'; socket.destroy(); });
+    // The wake is only a nudge (the disk records are the delivery), so a slow pipe on a busy machine is given time
+    // before the planner is told: at 250 ms a slow Windows runner reported "not delivered" for a pipe that was listening.
+    socket.setTimeout(PIPE_WAKE_TIMEOUT_MS, () => { failure ??= 'timeout'; socket.destroy(); });
     socket.on('error', error => { failure ??= error.code || 'socket_error'; socket.destroy(); });
     socket.once('close', () => {
       if (!written) undelivered(failure || 'closed');
