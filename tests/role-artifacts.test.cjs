@@ -81,7 +81,8 @@ test('Codex puts the result MCP in the read-only worker thread configuration', a
     const config = rows.find(row => row.method === 'thread/start').params;
     assert.equal(config.sandbox, 'read-only');
     assert.equal(config.approvalPolicy, 'never');
-    assert.deepEqual(config.config.mcp_servers, { agentrix_role: roleServer });
+    // With approvals off Codex refuses unapproved MCP calls, so finish_role alone is pre-approved.
+    assert.deepEqual(config.config.mcp_servers, { agentrix_role: { ...roleServer, tools: { finish_role: { approval_mode: 'approve' } } } });
   } finally { await runtime.close(); }
 });
 
