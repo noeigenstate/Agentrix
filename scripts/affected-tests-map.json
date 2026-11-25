@@ -405,7 +405,7 @@
     "electron/events.cjs": {
       "targets": [],
       "reason": "Socket address helper loads only Node path and os builtins.",
-      "digest": "d2ecb9a463fd55b521033953afa201fde17f4553194849a7c9948bd43d6ddb66"
+      "digest": "4af7b480a0627897640088fd67f35ca7de02ffe694dc4996784d1012bbf8197d"
     },
     "electron/features/lab/process.cjs": {
       "targets": [
@@ -448,7 +448,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "02f1730cd625d5609a85100bec96b8d9cb0ae1420de008ccf428ae9412df19f2",
+      "digest": "4d27b989b559dfec7c4819ec09441fb2b1bb511e8bfbd1895e336f6fd996a3d7",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -459,6 +459,7 @@
         "electron/features/team/team.cjs",
         "electron/features/team/inbox.cjs",
         "electron/features/dashboard/records-routing.cjs",
+        "electron/features/skills/session.cjs",
         "electron/features/skills/worker-proposals.cjs",
         "electron/features/skills/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",

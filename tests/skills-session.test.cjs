@@ -6,11 +6,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { once } = require('node:events');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { startupNote, startupNoteFields } = require('../electron/features/agents/handoff.cjs');
 const { READING_NOTE } = require('../electron/features/agents/reading-note.cjs');
-const { digest, deliveryMarker, readDelivery, sessionContext } = require('../electron/features/skills/session.cjs');
+const { digest, deliveryMarker, readDelivery, sessionContext: deliverSessionContext } = require('../electron/features/skills/session.cjs');
+const sessionContext = (hook, note) => deliverSessionContext(hook, note, () => {});
 const receiptFixture = require('./fixtures/skill-receipts/lifecycle.json');
 const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
 
@@ -42,23 +44,23 @@ async function fixture(t, routingNote = () => '') {
 test('startup/resume deduplicate CLI session plus content fingerprint, compact/clear always deliver', async t => {
   const f = await fixture(t), first = f.note('terminal-first');
   const context = source => sessionContext({ session_id: 'cli-session', source }, first);
-  assert.equal(context('startup').hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(first).instructions}`);
-  assert.equal(context('resume'), null);
-  assert.equal(context('startup'), null);
-  assert.ok(context('compact')); assert.ok(context('clear')); assert.equal(context('resume'), null);
+  assert.equal((await context('startup')).hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(first).instructions}`);
+  assert.equal(await context('resume'), null);
+  assert.equal(await context('startup'), null);
+  assert.ok(await context('compact')); assert.ok(await context('clear')); assert.equal(await context('resume'), null);
   const second = f.note('terminal-second');
   assert.equal(f.delivery('terminal-first').fingerprint, f.delivery('terminal-second').fingerprint, 'terminal-specific paths do not change content identity');
-  assert.equal(sessionContext({ session_id: 'cli-session', source: 'resume' }, second), null);
-  assert.ok(sessionContext({ session_id: 'different-cli', source: 'startup' }, second));
+  assert.equal(await sessionContext({ session_id: 'cli-session', source: 'resume' }, second), null);
+  assert.ok(await sessionContext({ session_id: 'different-cli', source: 'startup' }, second));
   await f.store.save('user:sample', { ...f.draft, text: 'Changed body, same description.' });
   const changed = f.note('terminal-third');
   assert.notEqual(readDelivery(changed).fingerprint, readDelivery(first).fingerprint);
-  assert.ok(sessionContext({ session_id: 'cli-session', source: 'resume' }, changed));
-  assert.ok(sessionContext({ session_id: 'cli-session', source: 'compact' }, changed));
+  assert.ok(await sessionContext({ session_id: 'cli-session', source: 'resume' }, changed));
+  assert.ok(await sessionContext({ session_id: 'cli-session', source: 'compact' }, changed));
   await f.store.save('user:sample', f.draft);
-  assert.ok(sessionContext({ session_id: 'cli-session', source: 'resume' }, f.note('reverted')), 'compaction invalidates receipts for previous manifests too');
-  assert.equal(sessionContext({ session_id: '../../escape', source: 'startup' }, changed), null);
-  assert.equal(sessionContext({ session_id: 'cli-session', source: 'unexpected' }, changed), null);
+  assert.ok(await sessionContext({ session_id: 'cli-session', source: 'resume' }, f.note('reverted')), 'compaction invalidates receipts for previous manifests too');
+  assert.equal(await sessionContext({ session_id: '../../escape', source: 'startup' }, changed), null);
+  assert.equal(await sessionContext({ session_id: 'cli-session', source: 'unexpected' }, changed), null);
 });
 
 test('local Claude and Codex launches receive plain replies before every task in later sessions too', async t => {
@@ -68,9 +70,9 @@ test('local Claude and Codex launches receive plain replies before every task in
   fs.copyFileSync(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), file);
   f.store.list();
   const instruction = `Before any task, read and follow ${file.replace(/\\/g, '/')}`;
-  const first = sessionContext({ session_id: 'first-claude', source: 'startup' }, f.note('first-claude'));
+  const first = await sessionContext({ session_id: 'first-claude', source: 'startup' }, f.note('first-claude'));
   assert.ok(first.hookSpecificOutput.additionalContext.includes(`${instruction}; this is its first run in this project.`));
-  const later = sessionContext({ session_id: 'later-claude', source: 'startup' }, f.note('later-claude'));
+  const later = await sessionContext({ session_id: 'later-claude', source: 'startup' }, f.note('later-claude'));
   assert.ok(later.hookSpecificOutput.additionalContext.includes(`${instruction}.`));
   const codex = f.store.delivery(f.project, false, 'codex', { agent: 'codex', started: true });
   assert.ok(fs.readFileSync(codex.manifest, 'utf8').includes(`${instruction}.`));
@@ -120,7 +122,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
   assert.equal(fs.readFileSync(launch.sessionManifest, 'utf8'), launchBytes);
   for (const source of ['compact', 'clear']) {
-    const context = sessionContext({ session_id: 'running-cli', source }, original).hookSpecificOutput.additionalContext;
+    const context = (await sessionContext({ session_id: 'running-cli', source }, original)).hookSpecificOutput.additionalContext;
     assert.ok(context.includes(file.replace(/\\/g, '/')));
   }
   const nextNote = f.note('next'), next = f.delivery('next');
@@ -137,7 +139,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   assert.deepEqual(saveResearcher('opus'), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'opus');
   for (const source of ['compact', 'clear']) {
-    const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
+    const context = (await sessionContext({ session_id: 'next-cli', source }, nextNote)).hookSpecificOutput.additionalContext;
     assert.ok(context.includes(rendered.path.replace(/\\/g, '/')));
     assert.match(fs.readFileSync(rendered.path, 'utf8'), /\| researcher \|.*\| haiku · high \|/);
   }
@@ -195,8 +197,8 @@ test('startup prunes unused and 30-day-old snapshots and receipts while keeping 
   const folder = path.dirname(live.manifest), now = Date.now(), old = new Date(now - 31 * 24 * 60 * 60 * 1000);
   const expired = f.delivery('expired');
   for (const file of [expired.sessionManifest, `${expired.sessionManifest}.json`]) fs.utimesSync(file, old, old);
-  sessionContext({ session_id: 'old-cli', source: 'startup' }, f.note('receipt'));
-  sessionContext({ session_id: 'recent-cli', source: 'startup' }, f.note('receipt'));
+  await sessionContext({ session_id: 'old-cli', source: 'startup' }, f.note('receipt'));
+  await sessionContext({ session_id: 'recent-cli', source: 'startup' }, f.note('receipt'));
   const oldReceiptFolder = path.join(folder, 'receipts/claude', digest('old-cli').slice(0, 32));
   const oldReceipt = path.join(oldReceiptFolder, fs.readdirSync(oldReceiptFolder)[0]); fs.utimesSync(oldReceipt, old, old);
   f.store.pruneDeliveryFiles(now);
@@ -243,7 +245,7 @@ test('shared receipt lifecycle fixture matches Node SessionStart delivery and ev
     notes[name] = `Note. ${deliveryMarker({ manifest, fingerprint })}`;
   }
   for (const step of receiptFixture.steps) {
-    const result = sessionContext({ session_id: step.session, source: step.source }, notes[step.key]);
+    const result = await sessionContext({ session_id: step.session, source: step.source }, notes[step.key]);
     assert.equal(Boolean(result), step.deliver, JSON.stringify(step));
     if (result) assert.equal(result.hookSpecificOutput.additionalContext, 'Agentrix skill instructions:\nShared instructions.');
     assert.deepEqual(receiptPaths(path.join(folder, 'receipts/claude')), expectedReceipts(step));
@@ -260,12 +262,12 @@ test('first-open launch snapshots stay correct when later sessions rewrite the c
   assert.equal(first.skills[0].trigger, 'auto'); assert.equal(first.skills[0].firstOpenRun, true);
   assert.equal(first.skills[0].firstRun, true); assert.equal(second.skills[0].firstRun, false);
   assert.doesNotMatch(fs.readFileSync(first.manifest, 'utf8'), /this is its first run/);
-  const firstContext = sessionContext({ session_id: 'first-cli', source: 'startup' }, firstNote);
+  const firstContext = await sessionContext({ session_id: 'first-cli', source: 'startup' }, firstNote);
   assert.match(firstContext.hookSpecificOutput.additionalContext, /this is its first run/);
-  const secondContext = sessionContext({ session_id: 'second-cli', source: 'startup' }, secondNote);
+  const secondContext = await sessionContext({ session_id: 'second-cli', source: 'startup' }, secondNote);
   assert.doesNotMatch(secondContext.hookSpecificOutput.additionalContext, /this is its first run/);
-  assert.equal(sessionContext({ session_id: 'first-cli', source: 'resume' }, firstNote), null);
-  assert.equal(sessionContext({ session_id: 'second-cli', source: 'resume' }, secondNote), null);
+  assert.equal(await sessionContext({ session_id: 'first-cli', source: 'resume' }, firstNote), null);
+  assert.equal(await sessionContext({ session_id: 'second-cli', source: 'resume' }, secondNote), null);
 });
 
 test('routing discards first-run claims while other built-ins keep them through migration, resume and restart', async t => {
@@ -338,11 +340,11 @@ test('routing discards first-run claims while other built-ins keep them through 
       const instructions = readDelivery(note).instructions;
       assert.match(instructions, /Before any task, read and follow [^;]+\/code-standard\/SKILL\.md\./);
       assert.doesNotMatch(instructions, /this is its first run in this project/);
-      const context = sessionContext({ session_id: cliId, source }, note);
+      const context = await sessionContext({ session_id: cliId, source }, note);
       if (source === 'resume' && phase === 'restarted') assert.equal(context, null, 'the unchanged delivery was already received');
       else assert.equal(context.hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${instructions}`);
       for (const hookSource of ['compact', 'clear']) {
-        const { additionalContext } = sessionContext({ session_id: cliId, source: hookSource }, note).hookSpecificOutput;
+        const { additionalContext } = (await sessionContext({ session_id: cliId, source: hookSource }, note)).hookSpecificOutput;
         assert.doesNotMatch(additionalContext, /this is its first run in this project/);
       }
       store.endSession(current.id, launchId);
@@ -358,23 +360,23 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} live Claude ses
   f.store.setOptions('user:sample', { trigger });
   const first = f.note('live-first'), second = f.note('live-second');
   const initial = readDelivery(first).instructions;
-  assert.match(sessionContext({ session_id: 'first-cli', source: 'startup' }, first).hookSpecificOutput.additionalContext, /this is its first run/);
-  assert.doesNotMatch(sessionContext({ session_id: 'second-cli', source: 'startup' }, second).hookSpecificOutput.additionalContext, /this is its first run/);
+  assert.match((await sessionContext({ session_id: 'first-cli', source: 'startup' }, first)).hookSpecificOutput.additionalContext, /this is its first run/);
+  assert.doesNotMatch((await sessionContext({ session_id: 'second-cli', source: 'startup' }, second)).hookSpecificOutput.additionalContext, /this is its first run/);
   await f.store.save('user:sample', { ...f.draft, description: 'Updated live instructions.' });
   for (const source of ['compact', 'clear']) for (const [note, id] of [[first, 'first-cli'], [second, 'second-cli']]) {
-    const context = sessionContext({ session_id: id, source }, note).hookSpecificOutput.additionalContext;
+    const context = (await sessionContext({ session_id: id, source }, note)).hookSpecificOutput.additionalContext;
     assert.equal(context.includes('this is its first run'), id === 'first-cli');
-    assert.equal(sessionContext({ session_id: id, source: 'resume' }, note), null);
+    assert.equal(await sessionContext({ session_id: id, source: 'resume' }, note), null);
   }
   assert.equal(readDelivery(first).instructions, initial, 'the original launch snapshot is immutable');
   assert.equal(f.store.options['user:sample'].firstOpenedProjects[f.project.id], 'live-first');
   f.store.setOptions('user:sample', { trigger: 'auto', firstOpenRun: false });
   for (const [note, id] of [[first, 'first-cli'], [second, 'second-cli']]) {
-    const context = sessionContext({ session_id: id, source: 'compact' }, note).hookSpecificOutput.additionalContext;
+    const context = (await sessionContext({ session_id: id, source: 'compact' }, note)).hookSpecificOutput.additionalContext;
     assert.match(context, /Updated live instructions/); assert.doesNotMatch(context, /this is its first run/);
   }
   f.store.setOptions('user:sample', { enabled: false });
-  const disabled = sessionContext({ session_id: 'first-cli', source: 'compact' }, first).hookSpecificOutput.additionalContext;
+  const disabled = (await sessionContext({ session_id: 'first-cli', source: 'compact' }, first)).hookSpecificOutput.additionalContext;
   assert.doesNotMatch(disabled, /Updated live instructions/);
   const metadata = JSON.parse(fs.readFileSync(`${readDelivery(first).manifest}.json`, 'utf8'));
   assert.match(path.basename(metadata.current), /^[a-f0-9]{32}-[a-f0-9]{32}\.md$/);
@@ -386,25 +388,25 @@ test('a claiming session keeps its pending first-run review across compact and s
   await f.store.save('user:sample', { ...f.draft, description: 'On its first run, change nothing until the user agrees.' });
   f.store.setOptions('user:sample', { trigger: 'always' });
   const first = f.note('claimant');
-  sessionContext({ session_id: 'claimant-cli', source: 'startup' }, first);
+  await sessionContext({ session_id: 'claimant-cli', source: 'startup' }, first);
   f.store.close();
   const reopened = new SkillsStore({ dataDir: f.store.dataDir, builtinDir: f.store.builtinDir, getProjects: () => [f.project] });
   t.after(() => reopened.close());
   await reopened.save('user:sample', { ...f.draft, description: 'On its first run, change nothing until the user agrees. Updated review.' });
   const later = startupNote('Read.', null, null, reopened.delivery(f.project, false, 'later', { agent: 'claude', started: true }));
   for (const source of ['compact', 'clear']) {
-    const context = sessionContext({ session_id: 'claimant-cli', source }, first).hookSpecificOutput.additionalContext;
+    const context = (await sessionContext({ session_id: 'claimant-cli', source }, first)).hookSpecificOutput.additionalContext;
     assert.match(context, /this is its first run/);
-    assert.doesNotMatch(sessionContext({ session_id: 'later-cli', source }, later).hookSpecificOutput.additionalContext, /this is its first run/);
+    assert.doesNotMatch((await sessionContext({ session_id: 'later-cli', source }, later)).hookSpecificOutput.additionalContext, /this is its first run/);
   }
   assert.equal(reopened.options['user:sample'].firstOpenedProjects[f.project.id], 'claimant');
   reopened.setOptions('user:sample', { trigger: 'auto' });
-  assert.doesNotMatch(sessionContext({ session_id: 'claimant-cli', source: 'compact' }, first).hookSpecificOutput.additionalContext, /this is its first run/);
+  assert.doesNotMatch((await sessionContext({ session_id: 'claimant-cli', source: 'compact' }, first)).hookSpecificOutput.additionalContext, /this is its first run/);
 });
 
 test('live current snapshots survive watcher recreation, refresh external edits, and stop updating after session end', async t => {
   const f = await fixture(t), note = f.note('live');
-  sessionContext({ session_id: 'cli', source: 'startup' }, note);
+  await sessionContext({ session_id: 'cli', source: 'startup' }, note);
   const metadata = JSON.parse(fs.readFileSync(`${readDelivery(note).manifest}.json`, 'utf8'));
   f.store.close();
   const reopened = new SkillsStore({ dataDir: f.store.dataDir, builtinDir: f.store.builtinDir, getProjects: () => [f.project] });
@@ -412,7 +414,7 @@ test('live current snapshots survive watcher recreation, refresh external edits,
   const file = reopened.entry('user:sample').path;
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Use when testing 中文说明.', 'External update.'));
   reopened.refresh();
-  assert.match(sessionContext({ session_id: 'cli', source: 'compact' }, note).hookSpecificOutput.additionalContext, /External update/);
+  assert.match((await sessionContext({ session_id: 'cli', source: 'compact' }, note)).hookSpecificOutput.additionalContext, /External update/);
   reopened.endSession(f.project.id, 'live');
   const settled = fs.readFileSync(metadata.current, 'utf8');
   await reopened.save('user:sample', { ...f.draft, description: 'After session end.' });
@@ -451,6 +453,41 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
   assert.equal(notify.stdout, '');
   const simultaneous = await Promise.all([1, 2].map(() => hookProcess(process.execPath, [...args, 'session'], { session_id: 'concurrent-cli', source: 'startup' }, noteFile)));
   assert.equal(simultaneous.filter(result => result.stdout).length, 1, 'concurrent hook processes share the exclusive receipt');
+});
+
+test('Node SessionStart retries on resume when stdout was closed before delivery', async t => {
+  const f = await fixture(t), note = f.note('broken-output'), noteFile = path.join(f.root, 'note.txt');
+  fs.writeFileSync(noteFile, note);
+  const hook = path.join(__dirname, '../integration/agent-event.cjs');
+  const address = process.platform === 'win32' ? '\\\\.\\pipe\\absent-agentrix-skill' : path.join(f.root, 'absent.sock');
+  const args = [hook, 'claude-hook', address, 'project', 'key', 'session', noteFile];
+  const payload = { session_id: 'broken-output-cli', source: 'startup' };
+  const failed = spawn(process.execPath, args, { env: dispatchEnvironment(), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  const closed = once(failed, 'close');
+  failed.stdout.destroy();
+  failed.stdin.end(JSON.stringify(payload));
+  assert.deepEqual(await closed, [0, null]);
+  const receiptFolder = path.join(path.dirname(readDelivery(note).manifest), 'receipts/claude', digest(payload.session_id).slice(0, 32));
+  assert.deepEqual(fs.readdirSync(receiptFolder), []);
+  const resumed = await hookProcess(process.execPath, args, { ...payload, source: 'resume' }, noteFile);
+  assert.equal(JSON.parse(resumed.stdout).hookSpecificOutput.additionalContext, readDelivery(note).context);
+  assert.deepEqual(fs.readdirSync(receiptFolder), [readDelivery(note).fingerprint.slice(0, 32)]);
+});
+
+test('Node SessionStart recovers an interrupted writer without a delivery receipt', async t => {
+  const f = await fixture(t), note = f.note('interrupted-output'), hook = { session_id: 'interrupted-output-cli', source: 'startup' };
+  const probe = `const { sessionContext } = require(process.argv[1]);
+    void sessionContext(JSON.parse(process.argv[2]), process.argv[3], () => new Promise(() => {}));`;
+  const child = spawn(process.execPath, ['-e', probe, require.resolve('../electron/features/skills/session.cjs'), JSON.stringify(hook), note],
+    { env: dispatchEnvironment(), windowsHide: true, stdio: 'ignore' });
+  assert.deepEqual(await once(child, 'close'), [0, null]);
+  const delivery = readDelivery(note);
+  const receiptFolder = path.join(path.dirname(delivery.manifest), 'receipts/claude', digest(hook.session_id).slice(0, 32));
+  assert.deepEqual(fs.readdirSync(receiptFolder), [`${delivery.fingerprint.slice(0, 32)}.node-pending`]);
+  const contexts = [];
+  await deliverSessionContext({ ...hook, source: 'resume' }, note, output => contexts.push(output.hookSpecificOutput.additionalContext));
+  assert.deepEqual(contexts, [delivery.context]);
+  assert.deepEqual(fs.readdirSync(receiptFolder), [delivery.fingerprint.slice(0, 32)]);
 });
 
 test('SessionStart reports a missing manifest and delivers it when the session resumes', async t => {
@@ -547,7 +584,7 @@ claude --resume fixture '继续'`;
 test('PowerShell and Node share receipts and force a delivery after compact/clear', { skip: process.platform !== 'win32' }, async t => {
   const f = await fixture(t), noteFile = path.join(f.root, 'note.txt'), note = f.note('powershell');
   fs.writeFileSync(noteFile, note);
-  sessionContext({ session_id: 'same-cli', source: 'startup' }, note);
+  await sessionContext({ session_id: 'same-cli', source: 'startup' }, note);
   const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, '../integration/claude-hook.ps1'),
     '-PipeName', 'absent-agentrix-skill-test', '-ProjectId', 'project', '-SessionKey', 'key', '-Kind', 'session'];
@@ -557,7 +594,7 @@ test('PowerShell and Node share receipts and force a delivery after compact/clea
     const result = await hookProcess(powershell, args, { session_id: 'same-cli', source }, noteFile);
     assert.equal(result.stderr, ''); assert.equal(result.code, 0);
     assert.equal(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${readDelivery(note).instructions}`);
-    assert.equal(sessionContext({ session_id: 'same-cli', source: 'resume' }, note), null);
+    assert.equal(await sessionContext({ session_id: 'same-cli', source: 'resume' }, note), null);
   }
 });
 
@@ -575,7 +612,7 @@ test('PowerShell compact/clear reads updated per-session instructions and keeps 
     assert.equal(result.stderr, ''); assert.equal(result.code, 0);
     const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
     assert.match(context, /this is its first run/);
-    assert.equal(sessionContext({ session_id: 'ps-cli', source: 'resume' }, note), null);
+    assert.equal(await sessionContext({ session_id: 'ps-cli', source: 'resume' }, note), null);
   }
   f.store.setOptions('user:sample', { firstOpenRun: false });
   const updated = await hookProcess(powershell, args, { session_id: 'ps-cli', source: 'compact' }, noteFile);

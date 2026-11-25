@@ -33,7 +33,10 @@ async function createEventServer(onEvent, { dispatchControl } = {}) {
           return;
         }
         const { value } = readEnvelope(event, { channel: 'local event pipe' });
-        if (typeof value.projectId === 'string' && typeof value.sessionKey === 'string' && typeof value.type === 'string') onEvent(value);
+        if (typeof value.projectId === 'string' && typeof value.sessionKey === 'string' && typeof value.type === 'string') {
+          onEvent(value);
+          if (value.type === 'agent-started') return socket.end('\x01');
+        }
       } catch { /* Invalid messages never affect a terminal. */ }
       socket.end();
     });

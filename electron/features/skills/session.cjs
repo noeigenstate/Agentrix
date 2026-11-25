@@ -1,7 +1,7 @@
 // Shared with the plain-Node shell hook and dispatch runtime. No Electron or account files.
 const fs = require('node:fs');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const MARKER = / Agentrix skill delivery: ([a-f0-9]{64}):([A-Za-z0-9_-]+)\./;
@@ -71,9 +71,7 @@ function receiptPath(delivery, sessionId) {
   const folder = path.join(providerFolder, digest(sessionId).slice(0, RECEIPT));
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
   if (fs.lstatSync(folder).isSymbolicLink()) throw new Error('Invalid skill receipt folder');
-  const receipt = path.join(folder, delivery.fingerprint.slice(0, RECEIPT));
-  try { if (fs.lstatSync(receipt).isSymbolicLink()) throw new Error('Invalid skill receipt'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  return receipt;
+  return path.join(folder, delivery.fingerprint.slice(0, RECEIPT));
 }
 
 function forgetReceipts(receipt) {
@@ -81,17 +79,57 @@ function forgetReceipts(receipt) {
   for (const file of fs.readdirSync(folder)) if (/^[a-f0-9]{32}$/.test(file)) fs.rmSync(path.join(folder, file), { force: true });
 }
 
-function sessionContext(hook, note) {
+function clearDeadClaim(lock) {
+  try {
+    if (!fs.lstatSync(lock).isDirectory()) return;
+    const [owner] = fs.readdirSync(lock);
+    if (owner) {
+      const pid = /^(\d+)-[\da-f-]{36}$/.exec(owner)?.[1];
+      if (!pid) return;
+      try { process.kill(Number(pid), 0); return; }
+      catch (error) { if (error.code !== 'ESRCH') return; }
+      fs.unlinkSync(path.join(lock, owner));
+    }
+    fs.rmdirSync(lock);
+  } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+}
+
+function claimReceipt(receipt) {
+  const lock = `${receipt}.node-pending`, owner = `${process.pid}-${randomUUID()}`;
+  const temporary = fs.mkdtempSync(path.join(path.dirname(receipt), '.node-pending-'));
+  try {
+    fs.writeFileSync(path.join(temporary, owner), '', { flag: 'wx' });
+    clearDeadClaim(lock);
+    // An atomic rename installs a populated lock directory. Competing hooks cannot replace it.
+    try { fs.renameSync(temporary, lock); }
+    catch (error) {
+      if (['EEXIST', 'ENOTEMPTY', 'ENOTDIR', 'EPERM', 'EACCES'].includes(error.code) && fs.existsSync(lock)) return null;
+      throw error;
+    }
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+  return () => { fs.unlinkSync(path.join(lock, owner)); clearDeadClaim(lock); };
+}
+
+async function sessionContext(hook, note, write) {
   if (!/^[\w-]{1,160}$/.test(hook?.session_id || '') || !['startup', 'resume', 'compact', 'clear'].includes(hook.source)) return null;
   let delivery = readDelivery(note);
   if (!delivery) return null;
   const receipt = receiptPath(delivery, hook.session_id);
   const force = hook.source === 'compact' || hook.source === 'clear';
   if (force) delivery = currentDelivery(delivery);
-  if (force) forgetReceipts(receipt);
-  try { fs.closeSync(fs.openSync(receipt, force ? 'w' : 'wx', 0o600)); }
-  catch (error) { if (error.code === 'EEXIST') return null; throw error; }
-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: delivery.context } };
+  const release = claimReceipt(receipt);
+  if (!release) return null;
+  try {
+    const existing = fs.lstatSync(receipt, { throwIfNoEntry: false });
+    if (existing?.isSymbolicLink()) throw new Error('Invalid skill receipt');
+    if (existing && !force) return null;
+    const output = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: delivery.context } };
+    if (force) forgetReceipts(receipt);
+    await write(output);
+    try { fs.closeSync(fs.openSync(receipt, force ? 'w' : 'wx', 0o600)); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    return output;
+  } finally { release(); }
 }
 
 module.exports = { digest, deliveryMarker, readDelivery, sessionContext, assertUserSkillName, skillFrontMatter: { MAX_BYTES, frontMatter } };

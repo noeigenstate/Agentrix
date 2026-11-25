@@ -21,6 +21,7 @@ const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(
 const { projectTeam, recordFindings } = require(path.join(runtime, 'features/team/team.cjs'));
 const { RunInbox, runId, validText, readBoard } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
+const { plainReply, skillFrontMatter } = require(path.join(runtime, 'features/skills/session.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment, elevatedSetupMessage, readiness } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/sandbox-refresh.cjs'));
@@ -50,9 +51,17 @@ const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-
   'features/cli-adapters/workers.cjs', 'features/cli-adapters/manifests/worker.cjs',
   'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
 const runtimeFiles = () => {
-  return { ...Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
-    'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'), ...shimRuntimeFiles() };
+  const files = Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+  // Packaging and SSH already carry this module. Keep the document alongside its parser without adding a file.
+  if (plainReply === undefined) files['features/skills/session.cjs'] += `\nmodule.exports.plainReply = ${JSON.stringify(plainReplyInstructions())};\n`;
+  return { ...files, 'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'), ...shimRuntimeFiles() };
 };
+
+function plainReplyInstructions() {
+  if (plainReply !== undefined) return plainReply;
+  const source = fs.readFileSync(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), 'utf8');
+  return skillFrontMatter.frontMatter(source).body.trim();
+}
 
 const START_TIMEOUT = 30000;
 const localWindowsCodex = (agent, env, platform = process.platform) => workerOf(agent)?.localWindows?.(env, platform) === true;
@@ -303,6 +312,7 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
     + 'Shared or managed files are report-only because their author is unknown.');
   if (options.ledger || team || options.small) parts.push('# Handing back\n\nRecord the facts, decisions and pitfalls the next worker must know in finish_role.findings '
     + '(file:line where it helps). They are added to the shared context.');
+  parts.push(plainReplyInstructions());
   return Buffer.concat([Buffer.from(parts.join('\n\n') + '\n\n# Task\n\n'), brief]);
 }
 

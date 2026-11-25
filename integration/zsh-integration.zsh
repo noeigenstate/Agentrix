@@ -130,7 +130,7 @@ __pg_send() {
   __pg_program codex && codex=true
   __pg_program claude && claude=true
   if [[ $1 == agent-started ]]; then
-    # Wait for the main process to finish the launch note before the CLI reads it.
+    # The helper waits for the launch-note acknowledgment, or for an older server to close.
     ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "v=1" "type=$1" "sequence=$__pg_sequence" "agent=${3:-codex}" \
       "socket=$__pg_socket" "projectId=$__pg_project" "sessionKey=$__pg_key" "exitCode=${2:-0}" "codexAvailable=$codex" "claudeAvailable=$claude" \
       "codexHome=${CODEX_HOME:-$HOME/.codex}" "cwd=$PWD" "command=${4:-}" "accountLaunch=${5:-}" "args=${6-}" </dev/null >/dev/null 2>&1

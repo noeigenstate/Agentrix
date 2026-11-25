@@ -18,7 +18,7 @@ const { createRoleArtifacts, sweepRoleArtifacts, RETENTION } = require('../integ
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { dispatchDirectory, validDispatch, readEnvelope, WIRE_FIELDS } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
-const { digest, deliveryMarker } = require('../electron/features/skills/session.cjs');
+const { digest, deliveryMarker, skillFrontMatter } = require('../electron/features/skills/session.cjs');
 
 const helper = path.resolve(__dirname, '../integration/dispatch.cjs');
 const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
@@ -1153,10 +1153,12 @@ test('small role briefs trim context by permission and preserve the default byte
   const team = { context: (_id, _before, { small }) => [...(small ? [] : ['# Project memory\n\nMemory.']), '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
   const render = (options, currentTeam = team) => briefOf({ cwd, ...options }, Buffer.from('Inspect src/a.js.'), currentTeam, { repo });
   const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
-  // Pin the default brief with the shared escalation rules omitted.
-  const withoutEscalationRules = options => render(options).toString()
+  const plainReply = skillFrontMatter.frontMatter(await fs.readFile(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), 'utf8')).body.trim();
+  // Pin the rest of the default brief without the shared rules.
+  const withoutSharedRules = options => render(options).toString()
+    .replace(`\n\n${plainReply}\n\n# Task`, '\n\n# Task')
     .replace(/^- Skip a named skill.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
-  assert.deepEqual([read, write].map(options => createHash('sha256').update(withoutEscalationRules(options)).digest('hex')),
+  assert.deepEqual([read, write].map(options => createHash('sha256').update(withoutSharedRules(options)).digest('hex')),
     ['a4e77c0de3024b2799ec935ad5de6a43acf5b9606ee4d36172b1718ed7107765', '058e67881f8d5b2371fe75614d689dc797ce3fcccc273b3cda62596bf13b501f']);
 
   const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };

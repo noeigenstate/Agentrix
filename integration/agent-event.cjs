@@ -20,10 +20,12 @@ const { readEnvelope, WIRE_FIELDS } = require(path.join(runtime, 'features/agent
 function send(socket, event) {
   return new Promise(resolve => {
     const connection = net.connect(socket);
-    const done = () => { clearTimeout(deadline); connection.destroy(); resolve(); };
-    const deadline = setTimeout(done, event.type === 'agent-started' ? 1500 : 750);
-    connection.on('error', done);
-    connection.on('close', done);
+    const waitsForAck = event.type === 'agent-started';
+    const done = (acknowledged = false) => { clearTimeout(deadline); connection.destroy(); resolve(acknowledged); };
+    const deadline = setTimeout(done, waitsForAck ? 1500 : 750);
+    connection.on('error', () => done());
+    connection.on('close', () => done());
+    if (waitsForAck) connection.on('data', bytes => { if (bytes[0] === 1) done(true); });
     connection.on('connect', () => connection.end(JSON.stringify(event) + '\n'));
   });
 }
@@ -45,7 +47,15 @@ function hookTrace(kind, stage) {
 }
 
 function writeOutput(output) {
-  return new Promise(resolve => process.stdout.write(JSON.stringify(output) + '\n', resolve));
+  const line = JSON.stringify(output) + '\n', stdout = process.stdout;
+  return new Promise((resolve, reject) => {
+    stdout.once('error', reject);
+    stdout.write(line, error => {
+      if (error) { reject(error); return; }
+      stdout.off('error', reject);
+      resolve();
+    });
+  });
 }
 
 function readInput(limit = 4 * 1024 * 1024) {
@@ -208,12 +218,15 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
     return;
   }
   if (action === 'claude-hook' && argument === 'session') {
+    let outputStarted = false;
     try {
       const noteFile = rest[0] || process.env.AGENTRIX_READING_NOTE_FILE;
-      const context = noteFile && sessionContext(JSON.parse(input), fs.readFileSync(noteFile, 'utf8'));
-      if (context) await writeOutput(context);
+      if (noteFile) await sessionContext(JSON.parse(input), fs.readFileSync(noteFile, 'utf8'), context => {
+        outputStarted = true;
+        return writeOutput(context);
+      });
     } catch {
-      await writeOutput({ systemMessage: 'Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。' });
+      if (!outputStarted) await writeOutput({ systemMessage: 'Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。' });
     }
   }
   const event = action === 'codex-notify' ? codexEvent(argument, projectId, sessionKey)

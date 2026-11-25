@@ -111,6 +111,7 @@ __pg_send() {
   local codex=false claude=false __pg_words __pg_alias_env
   __pg_program codex && codex=true
   __pg_program claude && claude=true
+  # For agent-started the helper waits for the launch-note acknowledgment, or for an older server to close.
   ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "v=1" "type=$1" "sequence=$__pg_sequence" "agent=${3:-codex}" \
     "socket=$__pg_socket" "projectId=$__pg_project" "sessionKey=$__pg_key" "exitCode=${2:-0}" "codexAvailable=$codex" "claudeAvailable=$claude" \
     "codexHome=${CODEX_HOME:-$HOME/.codex}" "cwd=$PWD" "command=${4:-}" "accountLaunch=${5:-}" "args=${6-}" </dev/null >/dev/null 2>&1

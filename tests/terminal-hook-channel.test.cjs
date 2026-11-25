@@ -161,6 +161,32 @@ $bare = claude hello
 });
 
 for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zsh', zsh, 'zsh-integration.zsh']]) {
+  test(`the ${kind} Claude wrapper reads the note prepared for its own launch`, { skip: !shell || !fs.existsSync(shell), timeout: 25000 }, async t => {
+    const directory = folder(t), bin = path.join(directory, 'bin'), capture = path.join(directory, 'args.txt');
+    const bootstrap = path.join(directory, 'terminal.json'), note = `${bootstrap}.launch-note`;
+    fs.mkdirSync(bin);
+    fs.writeFileSync(bootstrap, JSON.stringify({ format: 'agentrix.bootstrap', version: 1 }));
+    fs.writeFileSync(note, 'Previous note');
+    fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', { mode: 0o755 });
+    const starts = [];
+    const server = await createEventServer(event => {
+      if (event.type !== 'agent-started') return;
+      starts.push([event.agent, event.projectId, event.sessionKey]);
+      fs.writeFileSync(note, 'Note for this launch');
+    });
+    t.after(() => server.close());
+    const slash = file => file.replaceAll('\\', '/');
+    const shellBin = slash(bin).replace(/^([A-Z]):/i, (_, drive) => `/${drive.toLowerCase()}`);
+    const env = { ...dispatchEnvironment(), HOME: slash(directory), ZDOTDIR: slash(directory), AGENTRIX_USER_ZDOTDIR: slash(directory),
+      CAPTURE: slash(capture), TEST_BIN: shellBin, MSYS2_ARG_CONV_EXCL: '*', AGENTRIX_BOOTSTRAP: slash(bootstrap),
+      AGENTRIX_NODE: slash(process.execPath), AGENTRIX_EVENT_HELPER: slash(path.join(integration, 'agent-event.cjs')),
+      AGENTRIX_SOCKET: server.address, AGENTRIX_PROJECT_ID: 'fixture', AGENTRIX_SESSION_KEY: 'test-key' };
+    await exec(shell, ['-c', 'export PATH="$TEST_BIN:/usr/bin:/bin"; source "$1" zshrc; claude hello', '_', slash(path.join(integration, file))],
+      { cwd: directory, env, windowsHide: true, timeout: 20000 });
+    assert.deepEqual(starts, [['claude', 'fixture', 'test-key']]);
+    assert.deepEqual(fs.readFileSync(capture, 'utf8').trimEnd().split(/\r?\n/), ['--append-system-prompt', 'Note for this launch', 'hello']);
+  });
+
   test(`the ${kind} claude wrapper passes the HTTP settings, or with a proxy set since the start the fallback, and reports it, and with none passes no --settings`, { skip: process.platform === 'win32' || !shell || !fs.existsSync(shell), timeout: 60000 }, async t => {
     const directory = folder(t), bin = path.join(directory, 'bin'), home = path.join(directory, 'home'), capture = path.join(directory, 'capture');
     for (const name of [bin, home, capture]) fs.mkdirSync(name);

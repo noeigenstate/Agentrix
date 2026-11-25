@@ -6,12 +6,38 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { builtinModules } = require('node:module');
-const { runtimeFiles, dispatchCompanions } = require('../integration/dispatch.cjs');
+const { briefOf, runtimeFiles, dispatchCompanions } = require('../integration/dispatch.cjs');
+const { skillFrontMatter } = require('../electron/features/skills/session.cjs');
 const { readKeyValue } = require('../electron/features/agents/dispatch-events.cjs');
 
 const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const requires = source => [...source.matchAll(/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g)].map(match => match[1]);
+
+test('local and SSH layouts give both providers the shipped plain replies body in every brief size', t => {
+  const install = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agx-dispatch-carried-'));
+  t.after(() => fs.rmSync(install, { recursive: true, force: true }));
+  const cwd = path.join(install, 'project'), remoteHelper = path.join(install, 'dispatch.cjs');
+  fs.mkdirSync(cwd);
+  fs.writeFileSync(remoteHelper, read('integration/dispatch.cjs'));
+  const carried = runtimeFiles();
+  for (const [name, content] of Object.entries(carried)) {
+    const target = path.join(install, 'electron', name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+  const remote = require(remoteHelper);
+  const body = skillFrontMatter.frontMatter(read('resources/skills/plain-reply/SKILL.md')).body.trim();
+  const task = Buffer.from('用户的任务。');
+  assert.deepEqual(remote.runtimeFiles(), carried);
+  for (const render of [briefOf, remote.briefOf]) for (const agent of ['claude', 'codex']) for (const small of [false, true]) {
+    const [rules, prompt] = render({ agent, cwd, allow: [], small }, task).toString('utf8').split('\n\n# Task\n\n');
+    assert.equal(prompt, task.toString('utf8'));
+    assert.ok(rules.endsWith(`\n\n${body}`));
+    assert.equal(rules.split(body).length, 2);
+    assert.match(rules, /# Standing rules/);
+  }
+});
 
 test('the carried intercept runtime includes the six launchers in a CJS envelope', async t => {
   const carried = runtimeFiles();
