@@ -207,7 +207,7 @@ function TeamCallRow({ row, roles, info, now, labels, heading, model }: {
   return <li className="agent-team-call">
     {item.viewable
       ? <button type="button" className="agent-team-row" title={title}
-          onClick={() => openSplit(terminalId, item.id, { brief: item.brief, log: item.log })}>{cells}</button>
+          onClick={() => openSplit(terminalId, item.id)}>{cells}</button>
       : <div className="agent-team-row" title={title}>{cells}</div>}
     {late && <div className="activity-call-notice" role="status">
       <span>{t('已到 15 秒未确认，可能没有启动')}</span>

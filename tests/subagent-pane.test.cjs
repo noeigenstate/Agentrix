@@ -201,15 +201,11 @@ const paneProps = (patch = {}) => ({ terminalId: 't1', callId: 'dispatch:a', pro
 const paneMarkup = (state, patch, react) => renderToStaticMarkup(React.createElement(paneLoader(state, react), paneProps(patch)));
 const ok = (patch, status = 'ok') => ({ feed: feed(3, patch), status, error: null });
 
-test('the worker session offers the recorded brief and log as closed disclosures', () => zh(() => {
-  const terminalId = 't-artifacts', callId = 'dispatch:artifacts', store = splits();
-  store.openSplit(terminalId, callId, { brief: true, log: true });
-  try {
-    const html = paneMarkup(ok({ id: callId }), { terminalId, callId });
-    assert.match(html, /<details class="subagent-artifact"><summary>简报<\/summary><\/details>/);
-    assert.match(html, /<details class="subagent-artifact"><summary>日志<\/summary><\/details>/);
-    assert.doesNotMatch(paneMarkup(ok({ id: callId }), { terminalId: 't-unrelated', callId }), /subagent-artifacts/);
-  } finally { store.closeSplit(terminalId, callId); }
+test('the worker conversation follows the header without brief or log disclosures', () => zh(() => {
+  const view = paneLoader(ok({}))(paneProps());
+  const sections = React.Children.toArray(view.props.children);
+  assert.deepEqual(sections.slice(0, 2).map(node => node.props.className), ['subagent-head', 'subagent-main']);
+  assert.equal(elements(view).some(node => node.type === 'details' || node.type === 'summary'), false);
 }));
 
 test('the view names the task first, then the model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
@@ -522,10 +518,10 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
   assert.equal(unavailable.props.onClick, undefined);
   const html = renderToStaticMarkup(rows[0]);
   assert.match(html, /data-state="awaiting" role="img" aria-label="等待你确认"/);
-  assert.doesNotMatch(html, /agent-team-details|本次调用没有简报或日志|>打开工作会话</);
+  assert.doesNotMatch(html, /agent-team-details|>打开工作会话</);
   open.props.onClick();
   open.props.onClick();
-  assert.deepEqual(store.getSplits(), [{ terminalId, callId, artifacts: { brief: true, log: true } }]);
+  assert.deepEqual(store.getSplits(), [{ terminalId, callId }]);
 });
 
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------

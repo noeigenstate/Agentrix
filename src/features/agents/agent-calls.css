@@ -29,11 +29,3 @@ button.agent-team-row:focus-visible { outline: 2px solid var(--focus-ring); outl
 .agent-team-model { flex-shrink: 2; }
 .agent-team-line [data-routing-verdict] { margin-inline-start: auto; white-space: nowrap; }
 .agent-team-line [data-routing-verdict="mismatch"] { color: var(--danger); }
-.subagent-artifacts { flex: none; padding: 4px 16px; border-bottom: 1px solid var(--divider); font-size: 12px; }
-.subagent-artifact summary { width: fit-content; padding: 2px; cursor: pointer; }
-.subagent-artifact summary:focus-visible { outline: 2px solid var(--focus-ring); }
-.subagent-artifact p { margin: 4px 0; }
-.subagent-artifact pre {
-  margin: 4px 0; padding: 8px; max-height: min(160px, 16vh); overflow: auto;
-  white-space: pre-wrap; overflow-wrap: anywhere; background: var(--flow-inset); border-radius: 8px;
-}

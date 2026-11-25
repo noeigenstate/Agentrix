@@ -3,8 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { AgentCall, ProjectTerminal, Result, SubagentFeed, SubagentFeedEvent } from '../../shared/types';
 
-type CallArtifacts = Pick<AgentCall['items'][number], 'brief' | 'log'>;
-export type SubagentSplit = { terminalId: string; callId: string; artifacts?: CallArtifacts };
+export type SubagentSplit = { terminalId: string; callId: string };
 
 // The feed each view last read, so a view opened again shows it at once; dropped when the view closes or its terminal goes.
 const lastFeeds = new Map<string, SubagentFeed>();
@@ -120,15 +119,10 @@ export const waitMore = (terminalId: string, callId: string, now = Date.now()) =
 export const noticeShown = (terminalId: string, item: RowItem, now: number) => item.state === 'starting' && item.notice === 'unconfirmed' && now >= (waited.get(noticeKey(terminalId, item.id)) ?? 0);
 
 // A terminal has one view beside its conversation, at any width: opening another sub-agent replaces it (and drops the feed kept for it).
-export function openSplit(terminalId: string, callId: string, artifacts?: CallArtifacts) {
-  const existing = splits.find(item => same(item, terminalId, callId));
-  const hasArtifacts = artifacts?.brief || artifacts?.log;
-  if (existing) {
-    if (hasArtifacts && !existing.artifacts) publish(splits.map(item => item === existing ? { ...item, artifacts } : item));
-    return;
-  }
+export function openSplit(terminalId: string, callId: string) {
+  if (isSplitOpen(splits, terminalId, callId)) return;
   for (const replaced of splitsOf(splits, terminalId)) lastFeeds.delete(feedKey(terminalId, replaced.callId));
-  publish([...splits.filter(item => item.terminalId !== terminalId), { terminalId, callId, ...(hasArtifacts && { artifacts }) }]);
+  publish([...splits.filter(item => item.terminalId !== terminalId), { terminalId, callId }]);
 }
 export function closeSplit(terminalId: string, callId: string) {
   lastFeeds.delete(feedKey(terminalId, callId));
