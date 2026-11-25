@@ -23,9 +23,11 @@ const elements = node => !node || typeof node !== 'object' ? []
 
 // A TerminalPane with a stand-in xterm and preload, recording what reaches the program, the screen and the clipboard.
 function paneHarness(t, agentrix = {}) {
-  const calls = [], screen = [];
+  const calls = [], screen = [], listeners = new Map();
   let terminal;
-  const node = parentElement => ({ parentElement, clientWidth: 800, clientHeight: 400, dataset: {}, addEventListener: noop, removeEventListener: noop, setAttribute: noop, removeAttribute: noop, contains: () => false, closest: () => null, focus: noop });
+  const node = parentElement => ({ parentElement, clientWidth: 800, clientHeight: 400, dataset: {},
+    addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name),
+    setAttribute: noop, removeAttribute: noop, contains: () => false, closest: () => null, focus: noop });
   const host = node(null), observer = class { observe() {} disconnect() {} };
   const restore = setGlobals({
     document: { body: node(null), activeElement: null, documentElement: { dataset: {} } },
@@ -53,6 +55,7 @@ function paneHarness(t, agentrix = {}) {
   }
   const harness = hookHarness('src/features/terminal/TerminalPane.tsx', {
     'react/jsx-runtime': { ...jsx, jsx: (type, props) => { if (props.className === 'terminal-host') props.ref.current = host; return jsx.jsx(type, props); } },
+    'react-dom': { createPortal: element => element },
     '@xterm/xterm': { Terminal }, '@xterm/xterm/css/xterm.css': {},
     './terminal-popup': { registerReadingTerminal: () => noop }, './terminal-fit': { fitTerminal: noop },
     './terminal-links': { createTerminalLinkProvider: noop }, './terminal-styling': { styleTerminal: () => disposable },
@@ -60,11 +63,15 @@ function paneHarness(t, agentrix = {}) {
     './terminal-renderer': { gpuRenderer: () => ({ set: noop, dispose: noop }), setTerminalWeight: noop, terminalRenderer: () => 'dom', useTerminalRenderer: () => 'dom' },
     './terminal-font': { terminalFontFamily: () => 'monospace' },
     './terminal-screen': { registerScreen: () => noop, setQueueCount: noop, setScreenAgent: noop, writeScreen: (id, data) => screen.push(data) },
-    './i18n': { t: text => text }, './platform': { isMac: false, isWindows: false },
+    './i18n': { t: text => text }, './platform': {
+      isMac: !!agentrix.mac, isWindows: false, commandShortcut: key => agentrix.mac ? '⌘' + key : 'Ctrl+' + key,
+    },
   });
   t.after(() => { harness.dispose(); restore(); });
-  harness.render('TerminalPane', { id: 'terminal', sessionId: 'session', fontSize: 14, focused: true, onError: assert.fail, onOpenLink: noop });
-  return { calls, screen, terminal };
+  const render = () => harness.render('TerminalPane', { id: 'terminal', sessionId: 'session', fontSize: 14,
+    focused: true, agent: agentrix.agent, remote: agentrix.remote, onError: assert.fail, onOpenLink: agentrix.openLink ?? noop }).result;
+  render();
+  return { calls, screen, terminal, render, gesture: (name, event) => listeners.get(name)?.(event) };
 }
 
 function keydown(key, code, modifiers = {}) {
@@ -101,14 +108,30 @@ test('terminal output applies in sequence order: the attach snapshot, then newer
   assert.deepEqual(screen, ['snapshot', 'six', 'again-7']);
 });
 
-test('programs may write the clipboard through OSC 52, but a read request never sends the clipboard to the program', async t => {
-  const { calls, terminal } = paneHarness(t);
-  const osc = terminal.osc.get(52);
-  assert.equal(osc('c;' + Buffer.from('copied text').toString('base64')), true);
-  assert.equal(osc('c;?'), true);
-  assert.equal(osc('c;not base64!'), true);
-  await flush();
-  assert.deepEqual(calls.filter(call => typeof call !== 'string' || call === 'read-clipboard'), [['copy', 'copied text']]);
+test('OSC 52 requires a recent gesture and shows a receipt', async t => {
+  let now = 10;
+  t.mock.method(performance, 'now', () => now);
+  const { calls, terminal, render, gesture } = paneHarness(t, { agent: 'codex' });
+  const osc = terminal.osc.get(52), text = 'c;' + Buffer.from('copied text').toString('base64');
+  const copies = () => calls.filter(call => typeof call !== 'string' || call === 'read-clipboard');
+  assert.equal(osc(text), true);
+  gesture('keydown', { isTrusted: false }); osc(text);
+  gesture('pointerdown', { isTrusted: true }); now += 3001; osc(text);
+  assert.deepEqual(copies(), []);
+  gesture('keydown', { isTrusted: true });
+  for (const blocked of ['c;?', 'c;not base64!', 'c;' + Buffer.alloc(65537).toString('base64')]) osc(blocked);
+  assert.deepEqual(copies(), []);
+  osc(text); osc(text);
+  await Promise.resolve();
+  assert.deepEqual(copies(), [['copy', 'copied text']]);
+  assert.equal(elements(render()).find(node => node.props?.role === 'status').props.children, '终端已将文字复制到剪贴板');
+});
+
+test('only web and local file OSC links reach the link opener', t => {
+  const urls = [], { terminal } = paneHarness(t, { openLink: (_, url) => urls.push(url) });
+  const event = { ctrlKey: true, button: 0, preventDefault() {} };
+  for (const url of ['javascript:void(0)', 'custom://fixture', 'https://example.test/path', 'file:///fixture.txt']) terminal.options.linkHandler.activate(event, url);
+  assert.deepEqual(urls, ['https://example.test/path', 'file:///fixture.txt']);
 });
 
 test("typing, selecting or copying in a small card's terminal never expands the project", t => {
@@ -150,4 +173,15 @@ test('native session tests inject a fake CLI and never start the one installed o
     }
     for (const match of text.matchAll(/\bresolveCli\(([^)]*)\)/g)) assert.match(match[1], /,/, `${file}: resolveCli must be given its PATH, not read this machine's`);
   }
+});
+
+test('shortcut labels follow the platform Command and Ctrl keys', t => {
+  const { rendererLoader } = require('./helpers/hook-harness.cjs');
+  const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
+  const navigator = { userAgent: 'Macintosh' };
+  stubGlobals(t, { navigator, document: { documentElement: { dataset: {} } } });
+  const shortcut = () => rendererLoader({})('src/shared/platform.ts').commandShortcut;
+  assert.deepEqual(['C', 'V', 'Shift+C', 'S'].map(shortcut()), ['⌘C', '⌘V', '⌘⇧C', '⌘S']);
+  navigator.userAgent = 'Windows';
+  assert.deepEqual(['C', 'V', 'Shift+A', 'S'].map(shortcut()), ['Ctrl+C', 'Ctrl+V', 'Ctrl+Shift+A', 'Ctrl+S']);
 });

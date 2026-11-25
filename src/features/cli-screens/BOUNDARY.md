@@ -3,6 +3,8 @@
 Reads CLI terminal rows, including input, activity, dialogs and routing picker receipts.
 Wire new facets into the screen registry. A minimal facet supplies input, working and atPrompt.
 Keep provider-name branches, including regex workarounds for the branch guard, in the provider facets.
+Screen reading tries versions above the captured range and falls back to the terminal below it.
+Deleting a picture requires the version observed in the PTY and only uses the recorded release's key sequence.
 
 ## Owns
 
@@ -15,7 +17,6 @@ Keep provider-name branches, including regex workarounds for the branch guard, i
 ## May import
 
 - `electron/features/cli-adapters/**`
-- `src/features/agents/agent-question.ts`
 - `src/shared/**`
 
 ## Invariants

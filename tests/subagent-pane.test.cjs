@@ -885,6 +885,27 @@ test('the worker terminal reads the scrollback then the stream in order, sends k
   } finally { view.restore(); }
 }));
 
+test('a worker terminal retries a snapshot that still names the preceding epoch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const view = workerTerminal();
+  try {
+    await settle();
+    const attach = view.bridge.attachWorkerTerminal;
+    let requests = 0;
+    view.bridge.attachWorkerTerminal = () => ++requests === 1 ? attach() : Promise.resolve({
+      ok: true, value: { epoch: 'new', seq: 1, data: 'snapshot', cols: 80, rows: 24, exited: false },
+    });
+    view.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 'new', seq: 2, data: 'live' });
+    await settle();
+    view.handlers.data('old-key');
+    assert.equal(view.calls.some(call => call[0] === 'keys'), false);
+    t.mock.timers.runAll(); await settle();
+    assert.deepEqual(view.written, ['old', 'snapshot', 'live']);
+    view.handlers.data('new-key');
+    assert.deepEqual(view.calls.at(-1), ['keys', 't1', 'dispatch:a', 'new', 'new-key']);
+  } finally { view.cleanup(); view.restore(); }
+});
+
 test('the worker terminal copies only a selection, never reads the clipboard, and says so when there is no terminal', async () => zh(async () => {
   const key = (view, init) => view.handlers.key({ type: 'keydown', preventDefault() {}, isComposing: false, ...init });
   const plain = workerTerminal();

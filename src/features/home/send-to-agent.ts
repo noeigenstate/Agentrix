@@ -10,7 +10,7 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // What the agent's screen holds now: null while its terminal has none (not drawn yet).
 function look(terminalId: string, agent: Agent) {
   const current = readScreen(terminalId), rows = current?.rows;
-  return rows ? { rows, screen: { ...parseAgentScreen(agent, rows), queued: current.queued } } : null;
+  return rows ? { rows, screen: { ...parseAgentScreen(agent, rows, current.agentVersion), queued: current.queued } } : null;
 }
 
 // Both CLIs queue messages while working if their input is drawn. Dialogs own the keys. Owner sends replace an old
@@ -36,10 +36,11 @@ export async function sendToAgent(terminalId: string, sessionId: string, agent: 
   for (let attempt = 0; attempt < 3; attempt++) {
     await pause(attempt === 0 ? 400 : 700);
     const after = look(terminalId, agent);
+    if (after?.screen.unsupported) return screenError;
     if (preserveDraft && (!after || cliDialogShown(agent, after.rows, after.screen) || !hasCliInput(agent, after.rows, after.screen))) return pastedError;
     const draft = after ? cliInputDraft(agent, after.rows, after.screen) : '';
     if (expired()) return pastedError;
-    if (!sameMessage(text, draft)) {
+    if (!sameMessage(text, draft, agent)) {
       if (preserveDraft && draft) return pastedError;
       if (preserveDraft && !submitted) continue;
       if (preserveDraft || attempt > 0) break;

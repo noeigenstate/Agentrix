@@ -81,7 +81,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
       if (!active) return;
       const found = result.ok ? result.value : { claude: null, codex: null };
       setHistory(found); setMode(current => current ?? (found.claude || found.codex ? 'continue' : 'new'));
-    });
+    }, () => { if (active) setHistory({ claude: null, codex: null }); });
     return () => { active = false; };
   }, [terminalId]);
   const known = !!history && !!(history.claude || history.codex), chosen = mode ?? 'new';

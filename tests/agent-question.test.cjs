@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { choiceIdentity, parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
-const { parseQuestion } = require('../src/features/agents/agent-question.ts');
+const { parseQuestion } = require('../src/features/cli-screens/questions.ts');
 
 // Screens drawn by Claude Code 2.1.294 (AskUserQuestion) and Codex 0.161 (request_user_input in Plan mode).
 const read = name => fs.readFileSync(path.join(__dirname, 'fixtures/questions', name + '.txt'), 'utf8').split('\n');
@@ -12,6 +12,14 @@ const option = (number, label, detail, role, selected = false, checked) =>
   ({ number, label, detail, hotkey: null, selected, role, ...(checked === undefined ? {} : { checked }) });
 const claude = fields => ({ agent: 'claude', tabs: [], position: null, multi: false, submit: null, notes: null, review: null, ...fields });
 const codex = fields => ({ agent: 'codex', tabs: [], position: null, multi: false, submit: null, notes: { open: false, text: '' }, review: null, ...fields });
+
+test('screen questions are disabled below the supported versions for both CLIs', () => {
+  for (const [agent, version] of [['claude', '2.1.292'], ['codex', '0.160.0']]) {
+    const rows = read(agent + '-question');
+    assert.equal(parseAgentScreen(agent, rows, version).choice, null);
+    assert.equal(parseAgentScreen(agent, rows, '99.0.0').choice?.kind, 'question');
+  }
+});
 
 test('every question fixture is recognised', () => {
   for (const file of fs.readdirSync(path.join(__dirname, 'fixtures/questions'))) {
@@ -137,4 +145,31 @@ test('a question keeps its display identity while ticks, typed text and the curs
   assert.notEqual(choiceIdentity(parse('claude-question-tabs')), same[0]);
   assert.notEqual(choiceIdentity(parse('claude-question-review')), same[0]);
   assert.equal(choiceIdentity(parse('codex-question')), choiceIdentity(parse('codex-question-notes')));
+});
+
+test('worker menu classification uses the CLI facet and its version gate', () => {
+  const { parseWorkerMenu } = require('../src/features/agents/worker-menu-screen.ts');
+  const plan = fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-investigation-plan.txt'), 'utf8').split('\n');
+  assert.equal(parseWorkerMenu(plan, 'claude', '2.1.332')?.kind, 'plan');
+  assert.equal(parseWorkerMenu(read('codex-question'), 'codex', '0.170.0')?.kind, 'question');
+  assert.equal(parseWorkerMenu(plan, 'claude', '2.1.292'), null);
+});
+
+test('the worker screen observer disposes escaped terminal instances on exit and unsubscribe', () => {
+  const { observeWorkerMenus } = require('../src/features/agents/worker-menu-screen.ts');
+  const disposed = [];
+  let push, active = true;
+  const stop = observeWorkerMenus({
+    onWorkerScreen(fn) { push = fn; return () => { active = false; }; },
+    reportWorkerMenu() {},
+  }, () => {
+    const number = disposed.length;
+    return { cols: 80, rows: 24, write() {}, dispose() { disposed.push(number); } };
+  });
+  const frame = { seq: 1, cols: 80, rows: 24, data: '' };
+  push({ ...frame, epoch: 'first' });
+  push({ ...frame, epoch: 'first', exited: true });
+  push({ ...frame, epoch: 'second' });
+  stop();
+  assert.deepEqual(disposed, [0, 1]); assert.equal(active, false);
 });

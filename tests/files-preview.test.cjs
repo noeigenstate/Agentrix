@@ -64,6 +64,7 @@ function component(file, name, props, bridge) {
   const original = mod.require.bind(mod);
   mod.require = dependency => dependency === 'react' ? hooks
     : dependency === '@phosphor-icons/react' ? new Proxy({}, { get: () => () => null })
+    : dependency.endsWith('/platform') ? { commandShortcut: key => '⌘' + key }
     : dependency === './CodeEditor' ? { CodeEditor() {}, findConflicts: () => [] }
     : dependency === './editor-commands' || dependency.endsWith('.css') ? {}
     : dependency === './FilePreview' ? { TextContent: function TextContent() {} }
@@ -341,7 +342,10 @@ test('popup ignores stale page/target results, resets targets to page one and cl
 test('single-page and HTML popups keep their handling, Escape closes without bubbling', async t => {
   const ui = popup(); t.after(() => ui.restore()); ui.render();
   ui.reads[0].resolve(preview('<p>hello</p>', 'r1', 'html', 0, 5, 'html')); await ui.settle();
-  assert.equal(pageForm(ui), undefined); assert.match(find(ui, node => node.type === 'iframe').props.src, /html/);
+  assert.equal(pageForm(ui), undefined);
+  const { src, sandbox } = find(ui, node => node.type === 'iframe').props;
+  assert.match(src, /html/);
+  assert.equal(sandbox, 'allow-scripts');
   ui.update({ target: { kind: 'file', projectId: 'p', path: 'short.txt' } });
   ui.reads[1].resolve(preview('short')); await ui.settle(); assert.equal(pageForm(ui), undefined);
   let prevented = false, stopped = false;
@@ -371,4 +375,33 @@ test('popup releases once when a target switches between read and render continu
   await ui.settle(); assert.deepEqual(ui.closed, ['between-continuations']);
   ui.reads[1].resolve(preview('new')); await ui.settle(); ui.dispose();
   assert.deepEqual(ui.closed, ['between-continuations']);
+});
+
+test('inline HTML preview isolates the frame and the unsaved editor describes Command-S on Mac', async t => {
+  const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
+  stubGlobals(t, { requestAnimationFrame: () => 0 });
+  const inline = editor(false, { readFile: async () => preview('<p>preview</p>', 'r1', 'html') });
+  t.after(() => inline.restore());
+  inline.update({ filePath: 'test.html' }); await inline.settle();
+  assert.equal(find(inline, node => node.type === 'iframe').props.sandbox, 'allow-scripts');
+  button(inline, '源码').props.onClick(); await inline.settle();
+  inline.edit('new draft');
+  assert.ok(text(inline).includes('未保存，⌘S 保存'));
+});
+
+test('Markdown removes remote image sources before putting preview markup into the document', () => {
+  const { rendererLoader } = require('./helpers/hook-harness.cjs');
+  const load = rendererLoader({ dompurify: () => ({}), './markdown-emphasis': { markdownEmphasis: {} }, './i18n': { t: text => text } });
+  const saved = global.window;
+  global.window = {};
+  try {
+    const { deferMarkdownImages } = load('src/features/files/MarkdownPreview.tsx');
+    const image = (src, mdImage) => ({ src, dataset: { mdImage }, getAttribute(attr) { return this[attr]; },
+      removeAttribute(attr) { if (attr === 'data-md-image') delete this.dataset.mdImage; else delete this[attr]; } });
+    const images = [image('https://example.test/remote.png'), image('relative.png', 'https://example.test/injected.png'), image('data:image/png;base64,AAAA')];
+    deferMarkdownImages({ querySelectorAll: () => images });
+    assert.deepEqual(images.map(({ src, dataset }) => [src, dataset.mdImage]), [
+      [undefined, 'https://example.test/remote.png'], ['relative.png', undefined], ['data:image/png;base64,AAAA', undefined],
+    ]);
+  } finally { if (saved === undefined) delete global.window; else global.window = saved; }
 });

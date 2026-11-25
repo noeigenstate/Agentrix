@@ -88,7 +88,7 @@ export function FilePopup({ target, onError }: { target: PopupTarget; onError: (
   else if (shown.kind === 'document') body = <div className="file-popup-document"><Suspense fallback={<div className="file-popup-message">{t('正在渲染 Markdown…')}</div>}><MarkdownPreview content={shown.content} baseUrl="about:blank" onOpenLink={openLink} /></Suspense></div>;
   else if (shown.kind === 'picture') body = <Picture url={shown.url} name={fileName} />;
   else if (preview?.kind === 'image') body = <Picture url={preview.url} name={fileName} />;
-  else if (preview?.kind === 'html') body = <iframe className="html-preview-frame" title={t('HTML 页面预览')} src={preview.url} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" />;
+  else if (preview?.kind === 'html') body = <iframe className="html-preview-frame" title={t('HTML 页面预览')} src={preview.url} sandbox="allow-scripts" referrerPolicy="no-referrer" />;
   else if (preview?.kind === 'markdown') body = <div className="file-popup-document"><Suspense fallback={<div className="file-popup-message">{t('正在渲染 Markdown…')}</div>}><MarkdownPreview content={preview.content} baseUrl={preview.url} onOpenLink={openLink} /></Suspense></div>;
   else if (preview?.kind === 'video') body = <div className="file-popup-video"><video src={preview.url} controls autoPlay preload="metadata" playsInline aria-label={t('视频预览')} /></div>;
   else if (preview?.kind === 'text') body = <TextContent key={pageIndex} content={preview.content} />;

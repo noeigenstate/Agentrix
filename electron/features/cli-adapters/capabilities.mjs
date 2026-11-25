@@ -1,4 +1,6 @@
 export const UNSUPPORTED = Object.freeze({
+  screenReading: '请到终端里操作',
+  screenImageRemoval: '请到终端里操作',
   terminal: '此 CLI 在 Agentrix 中不提供交互式终端会话。',
   native: '此 CLI 在 Agentrix 中不提供原生会话。',
   resume: '此 CLI 不支持续接会话。',

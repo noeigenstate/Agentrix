@@ -185,10 +185,12 @@ export function App() {
     document.addEventListener('focusin', remember);
     return () => document.removeEventListener('focusin', remember);
   }, []);
+  const focusProjectRef = useRef(focusProject); focusProjectRef.current = focusProject;
   useEffect(() => {
     if (!api) return;
-    const offState = api.onState(setWorkspace);
-    const offFocus = api.onFocusProject(focusProject);
+    let live = true, pushed = false;
+    const offState = api.onState(state => { pushed = true; setWorkspace(state); });
+    const offFocus = api.onFocusProject(id => focusProjectRef.current(id));
     const offError = api.onError(reportError);
     const offSandboxProgress = api.onSandboxProgress?.(setSandboxProgress);
     const offUpdates = api.onUpdateState(setUpdates);
@@ -200,21 +202,26 @@ export function App() {
     perform(api.getSSHAuth()).then(requests => { if (requests) setSSHAuth(requests); });
     perform(api.getAgents()).then(state => { if (state) setAgents(state); });
     perform(api.getUpdateState()).then(state => { if (state) setUpdates(state); });
-    perform(api.getState()).then(state => { if (state) setWorkspace(state); });
+    perform(api.getState()).then(state => { if (live && !pushed && state) setWorkspace(state); });
     const clock = setInterval(() => setNow(Date.now()), 5000);
     return () => {
+      live = false;
       offState(); offFocus(); offError(); offSandboxProgress?.(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor();
       clearInterval(clock); if (errorTimer.current) clearTimeout(errorTimer.current);
     };
-  }, [focusProject, perform, reportError, allowNavigation]);
+  }, [perform, reportError, allowNavigation]);
   // A card that sends the owner to a settings page (the launcher's incomplete Claude Code) asks with this event.
   useEffect(() => {
     const open = (event: Event) => { const { section, focus } = (event as CustomEvent<{ section: string; focus?: boolean }>).detail; setSettingsSection(section); setSettingsFocus(!!focus); setSettingsOpen(true); };
     window.addEventListener('agentrix:open-settings', open);
     return () => window.removeEventListener('agentrix:open-settings', open);
   }, []);
+  const orphanedFocus = useRef<string | null>(null);
   useEffect(() => {
-    if (focusedId && workspace && !workspace.projects.some(p => p.id === focusedId)) returnToGrid();
+    if (!focusedId || !workspace || workspace.projects.some(p => p.id === focusedId)) { orphanedFocus.current = null; return; }
+    if (orphanedFocus.current === focusedId) return;
+    orphanedFocus.current = focusedId;
+    void returnToGrid();
   }, [workspace, focusedId, returnToGrid]);
   const currentProject = useCallback(() => focusedId || lastProject.current || document.activeElement?.closest<HTMLElement>('[data-project-id]')?.dataset.projectId, [focusedId]);
   // What a shortcut does; the app menu's commands of the same name run it too.

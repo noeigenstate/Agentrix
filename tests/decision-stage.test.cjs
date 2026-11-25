@@ -107,3 +107,55 @@ test('the project list recedes: idle sessions are plain names, only the picked o
 test('the new texts have English translations', () => {
   for (const text of ['描述一个想法，让 Agentrix 帮你实现。', '描述你想构建的功能、修复的问题，或粘贴截图…', '输入需求后按 Enter 开始', '开始 (Enter)', '添加图片']) assert.ok(text in en, text);
 });
+
+test('review titles preserve plain angle-bracket text and both decision kinds use the same default agent', t => {
+  const h = hookHarness('src/features/home/decisions.ts', {
+    './terminal-screen': { subscribeScreen: () => () => {}, bindApproval: () => null },
+    './agent-screen': require('../src/features/agents/agent-screen.ts'),
+    './cli-panel': require('../src/features/reading/cli-panel.ts'),
+    './review-history': { reviewHistory: () => ({ task: '' }) },
+  });
+  t.after(() => h.dispose());
+  const terminal = { id: 't1', title: 'Terminal', sessionId: 's1', cliActive: true, agent: null, needsInput: 'Owner', task: '<Button> 样式修复' };
+  const { decisions } = h.render('useDecisions', [{ id: 'p', name: 'Fixture', unread: true, terminals: [terminal] }]).result;
+  assert.deepEqual(decisions.map(decision => [decision.kind, decision.agent, decision.title]),
+    [['attention', 'codex', ''], ['review', 'codex', '<Button> 样式修复']]);
+});
+
+test('a rejected task history read tells the user the history could not be loaded', async t => {
+  stubGlobals(t, { window: { agentrix: { terminalConversation: async () => { throw new Error('history disconnected'); } } } });
+  const h = hookHarness('src/features/home/SessionLine.tsx', {
+    '@phosphor-icons/react': { ArrowUpRight: () => null },
+    './result-round': { lastRound: () => ({ reply: '' }) }, './time': { relativeTime: () => '' },
+    './inbox-items': { sessionTask: () => 'Existing task' }, './i18n': { t: text => text },
+  });
+  t.after(() => h.dispose());
+  const render = () => elements(h.render('SessionLine', {
+    item: { project: { id: 'p', name: 'Fixture' }, terminal: { id: 't1' } }, now: 0, onOpenProject() {},
+  }).result).find(node => node.props.className === 'session-summary').props.children;
+  render(); await Promise.resolve();
+  assert.equal(render(), '无法加载任务记录');
+});
+
+test('decision screens ignore unchanged draws and release the subscription of a removed terminal', t => {
+  const listeners = new Map();
+  const h = hookHarness('src/features/home/decisions.ts', {
+    './agent-screen': require('../src/features/agents/agent-screen.ts'),
+    './cli-panel': require('../src/features/reading/cli-panel.ts'),
+    './terminal-screen': { subscribeScreen(id, fn) { listeners.set(id, fn); return () => listeners.delete(id); }, bindApproval: choice => choice },
+    './review-history': { reviewHistory: () => ({ task: '' }) },
+  });
+  t.after(() => h.dispose());
+  const projects = [{ id: 'p', name: 'Fixture', terminals: [{ id: 't', sessionId: 's', title: 'Terminal', cliActive: true, agent: 'claude', needsInput: null }] }];
+  const render = () => h.render('useDecisions', projects).result.all;
+  const empty = render();
+  listeners.get('t')({ sessionId: 's', rows: ['ordinary output'], revision: 1 });
+  assert.equal(render(), empty);
+  listeners.get('t')({ sessionId: 's', rows: ['Login successful. Press Enter to continue…'], revision: 2 });
+  const login = render();
+  assert.equal(login[0]?.kind, 'signin');
+  listeners.get('t')({ sessionId: 's', rows: ['Login successful. Press Enter to continue…'], revision: 3 });
+  assert.equal(render(), login);
+  assert.deepEqual(h.render('useDecisions', []).result.all, []);
+  assert.equal(listeners.has('t'), false);
+});

@@ -138,6 +138,17 @@ test('returning to the bottom evicts loaded old pages and re-pages them from a f
   assert.equal(h.render().entries.length, 121);
 });
 
+test('a refreshed page still above the limit does not trigger a refetch on each new record', async t => {
+  const h = pagedHarness(t); h.render();
+  const large = Array.from({ length: 300 }, (_, n) => entry(`block-${n}`));
+  h.requests[0].resolve(page('A', large)); await Promise.resolve(); t.mock.timers.tick(50);
+  const compacting = h.render().compact(); assert.equal(h.requests.length, 2);
+  h.requests[1].resolve(page('A', large)); await compacting;
+  h.packet({ changes: [entry('live')] }); t.mock.timers.tick(50);
+  assert.equal(await h.render().compact(), false);
+  assert.equal(h.requests.length, 2);
+});
+
 test('a failed tail compaction retains loaded history and its earlier cursor', async t => {
   const h = pagedHarness(t); h.render();
   h.requests[0].resolve(page('A', [entry('latest')])); await Promise.resolve(); t.mock.timers.tick(50);

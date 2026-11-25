@@ -10,9 +10,16 @@ import { t } from '../../shared/i18n';
 // and the way into it. Its state is the picked row's own line in the list.
 export function SessionLine({ item, now, onOpenProject }: { item: InboxItem; now: number; onOpenProject: (projectId: string) => void }) {
   const { project, terminal } = item, [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
-    void window.agentrix.terminalConversation(terminal.id).then(result => { if (live) setEntries(result.ok ? result.value : []); });
+    setFailed(false);
+    setEntries([]);
+    const failed = () => { if (live) setFailed(true); };
+    void window.agentrix.terminalConversation(terminal.id).then(result => {
+      if (!result.ok) { failed(); return; }
+      if (live) setEntries(result.value);
+    }, failed);
     return () => { live = false; };
   }, [terminal.id, terminal.lastCompletedAt]);
   const reply = useMemo(() => lastRound(entries).reply, [entries]);
@@ -20,7 +27,7 @@ export function SessionLine({ item, now, onOpenProject }: { item: InboxItem; now
   const summary = (reply || sessionTask(terminal) || '').split('\n').map(line => line.replace(/^[\s#>*-]+/, '').replace(/[*`]/g, '').trim()).find(Boolean) ?? '';
   const done = terminal.lastCompletedAt && t('上次完成 {time}', { time: relativeTime(terminal.lastCompletedAt, now) });
   return <p className="session-line" title={[project.name, done].filter(Boolean).join(' · ')}>
-    <span className="session-summary">{summary || t('这个项目还没有任务记录')}</span>
+    <span className="session-summary">{failed ? t('无法加载任务记录') : summary || t('这个项目还没有任务记录')}</span>
     <button type="button" className="text-button session-open" onClick={() => onOpenProject(project.id)}>{t('打开会话')}<ArrowUpRight size={12} /></button>
   </p>;
 }

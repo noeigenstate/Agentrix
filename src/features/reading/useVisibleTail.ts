@@ -83,7 +83,14 @@ export function useVisibleTail(grouped: readonly ConversationBlock[], conversati
         : prependScrollTop(before.top, before.height, node.scrollHeight);
       if (top !== node.scrollTop) node.scrollTo({ top, behavior: 'instant' });
     };
-    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(adjust);
+    let idle: ReturnType<typeof setTimeout> | undefined, deadline: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      if (!deadline || prepend.current !== pending) return;
+      clearTimeout(idle);
+      idle = setTimeout(pending.cancel, 300);
+    };
+    const layoutChanged = () => { adjust(); settle(); };
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(layoutChanged);
     const observeSizes = () => {
       if (node.firstElementChild) resize?.observe(node.firstElementChild);
       // Watch the prefix as well: an image above and a card below can resize by opposite amounts.
@@ -94,9 +101,10 @@ export function useVisibleTail(grouped: readonly ConversationBlock[], conversati
     };
     // Child-only Markdown commits need compensation before the next animation frame. A content ResizeObserver
     // alone runs after that frame's callbacks, and misses changes above/below the anchor that cancel in total height.
-    const mutations = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { observeSizes(); adjust(); });
+    const mutations = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { observeSizes(); layoutChanged(); });
     const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
     const pending = { adjust, cancel: () => {
+      clearTimeout(idle); clearTimeout(deadline);
       resize?.disconnect(); mutations?.disconnect();
       for (const event of events) node.removeEventListener?.(event, pending.cancel);
       if (prepend.current === pending) prepend.current = null;
@@ -111,8 +119,14 @@ export function useVisibleTail(grouped: readonly ConversationBlock[], conversati
     holdPosition();
     // Release the streaming anchor for this prepend, then save the newly revealed first block.
     previous.current = { conversation, first: undefined };
-    if (remote?.paged) return remote.loadEarlier().then(loaded => { if (loaded === false) pending.cancel(); });
+    const loaded = () => {
+      if (prepend.current !== pending) return;
+      deadline = setTimeout(pending.cancel, 2000);
+      settle();
+    };
+    if (remote?.paged) return remote.loadEarlier().then(result => { if (result === false) pending.cancel(); else loaded(); });
     setPage({ conversation, count: tail.visible.length + VISIBLE_TAIL_PAGE });
+    loaded();
     return Promise.resolve();
   };
   return { ...tail, hasEarlier: tail.earlier > 0 || !!remote?.hasEarlier, showEarlier };

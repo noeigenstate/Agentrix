@@ -15,6 +15,8 @@ export default Object.freeze({
     nativeRejected: ['upgrade', 'mcp-server', 'review', 'cloud', 'fork', 'agents', 'queue'],
   },
   supports: {
+    screenReading: { via: 'screen', verified: ['0.161.0', '0.166.0'] },
+    screenImageRemoval: { via: 'screen', verified: ['0.165.0', '0.165.0'] },
     terminal: { unsupported: UNSUPPORTED.terminal }, native: { via: 'api' }, resume: { via: 'api' }, roleTools: { via: 'api' },
     startupNote: { via: 'api' }, messageNote: { via: 'api' }, liveModel: { via: 'api' }, liveEffort: { via: 'api' }, fast: { via: 'api' },
     ultracode: { unsupported: UNSUPPORTED.ultracode }, permissionChoice: { via: 'api' }, approvals: { via: 'api' },

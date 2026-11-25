@@ -1,18 +1,18 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { signInScreen } = require('../src/features/agents/sign-in-screen.ts');
+const { signInScreen } = require('../src/features/cli-screens/index.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 
 // Screens captured from Claude Code 2.1.296 and Codex 0.162 with empty config folders.
 const claudeArt = ['PS C:\\work\\demo> claude', 'Welcome to Claude Code v2.1.296', '..........................................................', '       █████████                                        *', '.......█ █   █ █..........................................'];
 
 test('Claude\'s sign-in link, wrapped over rows, with its code field', () => {
+  const url = 'https://example.test/authorize?state=' + 'a'.repeat(170);
   const rows = [...claudeArt, '', " Browser didn't open? Use the url below to sign in (c to copy)", '',
-    'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcod',
-    'e%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=d3h2J', 'eQWpfctcWUTUwNPU2&code_challenge_method=S256&state=65Yai_7Pghe1', '', ' Paste code here if prompted >'];
-  assert.deepEqual(signInScreen('claude', rows), {
-    lines: ["Browser didn't open? Use the url below to sign in"],
-    url: 'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=d3h2JeQWpfctcWUTUwNPU2&code_challenge_method=S256&state=65Yai_7Pghe1',
+    ...url.match(/.{1,100}/g), 'Press', '', ' Paste code here if prompted >'];
+  assert.deepEqual(signInScreen('claude', rows, '2.1.296', 100), {
+    lines: ["Browser didn't open? Use the url below to sign in", 'Press'],
+    url,
     code: null, input: 'code', enter: false, cancel: false,
   });
 });
@@ -42,6 +42,8 @@ test('Codex API key field under its mark', () => {
 });
 
 test('an ordinary screen is no sign-in', () => {
+  assert.equal(signInScreen('claude', ['A tool printed Login successful', '  ⎿  Invalid code', 'Press']), null);
+  assert.equal(signInScreen('claude', ['Login successful. Press Enter to continue…'], '2.1.292'), null);
   assert.equal(signInScreen('claude', ['❯ explain https://example.com/a', '  ⎿  Done']), null);
   assert.equal(signInScreen('codex', ['› hello', '• Hi there']), null);
 });

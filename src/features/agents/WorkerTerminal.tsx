@@ -34,14 +34,16 @@ export function WorkerTerminal({ terminalId, callId, name, onError, onUnavailabl
     terminal.open(node);
     if (isWindows) terminal.options.windowsPty = { backend: 'conpty', buildNumber: 21376 };
     const fit = () => { if (!disposed && visible(node)) { try { fitTerminal(terminal); } catch { /* Laid out later. */ } } };
-    const live = () => epoch !== null && !exited && !disposed;
+    const live = () => attached && epoch !== null && !exited && !disposed;
 
-    // A packet of the PTY this view shows, in order. One of another PTY means the worker started over: the snapshot is read again, once for each epoch seen,
-    // so a stream the main process keeps sending can never loop this view.
-    const tried = new Set<string>();
+    // A new epoch may arrive before an older attach resolves. Retain its output and retry until the snapshot catches up.
+    const retired = new Set<string>();
+    let retry: ReturnType<typeof setTimeout> | undefined, wanted: string | undefined, retriesLeft = 0;
     const apply = (packet: { epoch?: string; seq?: number; data?: string; exited?: boolean }) => {
       if (packet.epoch !== epoch) {
-        if (packet.epoch && !tried.has(packet.epoch)) { tried.add(packet.epoch); attached = false; queued = [packet]; void load(); }
+        if (packet.epoch && !packet.exited && !retired.has(packet.epoch)) {
+          wanted = packet.epoch; retriesLeft = 3; attached = false; queued.push(packet); void load();
+        }
         return;
       }
       if (packet.exited) { exited = true; return; }
@@ -78,24 +80,31 @@ export function WorkerTerminal({ terminalId, callId, name, onError, onUnavailabl
       if (disposed) return;
       if (!result.ok) { queued = []; report.current(result.error); gone.current(); return; }
       const snapshot = result.value;
+      if (wanted && snapshot?.epoch !== wanted) {
+        if (retriesLeft-- > 0) retry = setTimeout(() => void load(), 80);
+        else { queued = []; gone.current(); }
+        return;
+      }
       if (!snapshot) { queued = []; gone.current(); return; }
+      wanted = undefined;
       exited = snapshot.exited;
       // The same PTY again changes nothing on the screen; a new one starts it over.
       if (snapshot.epoch !== epoch) {
-        if (epoch !== null) terminal.reset();
+        if (epoch !== null) { retired.add(epoch); terminal.reset(); }
         epoch = snapshot.epoch; lastSeq = snapshot.seq;
         quiet = true; try { terminal.resize(Math.max(2, snapshot.cols), Math.max(2, snapshot.rows)); } finally { quiet = false; }
         if (snapshot.data) terminal.write(snapshot.data);
       }
       attached = true;
       const pending = queued; queued = [];
-      for (const packet of pending) apply(packet);
+      for (const packet of pending) { if (attached) apply(packet); else queued.push(packet); }
       fit();
     }).catch(error => { if (!disposed) { queued = []; report.current(String(error)); gone.current(); } });
     void load();
 
     return () => {
       disposed = true; queued = [];
+      clearTimeout(retry);
       off(); input.dispose(); resized.dispose(); observer.disconnect();
       terminal.dispose();
       bridge.detachWorkerTerminal?.(terminalId, callId);

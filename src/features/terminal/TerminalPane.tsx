@@ -13,7 +13,7 @@ import { terminalFontFamily } from './terminal-font';
 import { receiveScreenPaste, registerScreen, setQueueCount, setScreenAgent, writeScreen } from './terminal-screen';
 import '@xterm/xterm/css/xterm.css';
 import { t } from '../../shared/i18n';
-import { isMac, isWindows } from '../../shared/platform';
+import { commandShortcut, isMac, isWindows } from '../../shared/platform';
 
 // The terminal text weight chosen in Settings, which App writes on the document; 400 when none is chosen.
 const chosenWeight = () => Number(document.documentElement.dataset.terminalWeight) || Number(terminalOptions.fontWeight);
@@ -28,12 +28,15 @@ export function TerminalPane({ id, sessionId, agent = null, agentActive = !!agen
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; selection: string } | null>(null);
+  const [clipboardNotice, setClipboardNotice] = useState(false);
+  const clipboardNoticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const gpu = useRef<ReturnType<typeof gpuRenderer> | null>(null);
   const renderer = useTerminalRenderer();
   const menuRef = useRef<HTMLDivElement>(null);
   const report = useRef(onError);
   report.current = onError;
   const currentAgent = useRef(agent); currentAgent.current = agent;
+  const activeAgent = useRef(agentActive); activeAgent.current = agentActive;
   const openLink = useRef(onOpenLink);
   openLink.current = onOpenLink;
   // Read-only: the screen registry learns which agent runs here and how many messages main holds queued for it.
@@ -98,27 +101,41 @@ export function TerminalPane({ id, sessionId, agent = null, agentActive = !!agen
       // Bundled ConPTY reflows the prompt on resize; the cursor line must follow
       // that reflow too, or later output can overwrite old prompt characters.
       reflowCursorLine: !remote,
-      linkHandler: { activate: activateLink, hover: hoverLink, leave: leaveLink, allowNonHttpProtocols: true },
+      linkHandler: { activate: (event, target) => { if (/^(?:https?|file):\/\//i.test(target)) activateLink(event, target); },
+        hover: hoverLink, leave: leaveLink, allowNonHttpProtocols: true },
       theme: terminalTheme(),
     });
     terminal.open(host.current);
+    setClipboardNotice(false);
     setTerminalWeight(terminal, chosenWeight());
     gpu.current = gpuRenderer(terminal); gpu.current.set(terminalRenderer() === 'gpu');
     // node-pty uses its bundled modern ConPTY, including on Windows 10.
     // 21376 is xterm's capability threshold for VT wrapping and reflow.
     if (!remote && isWindows) terminal.options.windowsPty = { backend: 'conpty', buildNumber: 21376 };
     const links = terminal.registerLinkProvider(createTerminalLinkProvider(terminal, activateLink, hoverLink, leaveLink));
-    // Programs copy through the terminal (OSC 52, as Codex's /copy does): the text goes to the system clipboard.
-    // A request to read the clipboard ("?") is ignored, so nothing on it ever reaches the program.
+    let clipboardGesture = -Infinity;
+    const rememberGesture = (event: Event) => { if (event.isTrusted) clipboardGesture = performance.now(); };
     const clipboardWrites = terminal.parser.registerOscHandler(52, data => {
-      const payload = data.slice(data.indexOf(';') + 1);
-      if (!payload || payload === '?') return true;
+      const separator = data.indexOf(';'), payload = data.slice(separator + 1);
+      if (remote || !currentAgent.current || !activeAgent.current || separator < 0 || !payload || payload === '?'
+        || payload.length > 4 * Math.ceil(64 * 1024 / 3) || performance.now() - clipboardGesture > 3000) return true;
       try {
         const bytes = Uint8Array.from(atob(payload), character => character.charCodeAt(0));
-        void copy(new TextDecoder().decode(bytes));
-      } catch { /* Not base64: nothing to copy. */ }
+        if (bytes.length > 64 * 1024) return true;
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        clipboardGesture = -Infinity;
+        void window.agentrix.copy(text).then(result => {
+          if (disposed) return;
+          if (!result.ok) { report.current(result.error); return; }
+          setClipboardNotice(true);
+          clearTimeout(clipboardNoticeTimer.current);
+          clipboardNoticeTimer.current = setTimeout(() => setClipboardNotice(false), 3000);
+        }, error => { if (!disposed) report.current(String(error)); });
+      } catch { /* Ignore invalid clipboard payloads. */ }
       return true;
     });
+    terminal.element?.addEventListener('pointerdown', rememberGesture, true);
+    terminal.element?.addEventListener('keydown', rememberGesture, true);
     const styling = styleTerminal(terminal);
     const fontObserver = new MutationObserver(records => {
       if (records.some(record => record.attributeName === 'data-terminal-weight')) setTerminalWeight(terminal, chosenWeight());
@@ -221,9 +238,12 @@ export function TerminalPane({ id, sessionId, agent = null, agentActive = !!agen
     const frame = requestAnimationFrame(resize);
     return () => {
       disposed = true; queued = [];
+      clearTimeout(clipboardNoticeTimer.current);
       unsubscribe(); offPaste(); input.dispose(); selection.dispose(); resized.dispose(); links.dispose(); clipboardWrites.dispose(); styling.dispose(); fontObserver.disconnect(); observer.disconnect(); cancelAnimationFrame(frame); clearTimeout(settle);
       terminal.textarea?.removeEventListener('focus', focusIn); terminal.textarea?.removeEventListener('blur', focusOut); focusOut();
-      terminal.element?.removeEventListener('contextmenu', contextMenu); unregisterPopup();
+      terminal.element?.removeEventListener('contextmenu', contextMenu);
+      terminal.element?.removeEventListener('pointerdown', rememberGesture, true);
+      terminal.element?.removeEventListener('keydown', rememberGesture, true); unregisterPopup();
       gpu.current?.dispose(); gpu.current = null; unregister();
       terminal.dispose(); term.current = null;
     };
@@ -250,11 +270,13 @@ export function TerminalPane({ id, sessionId, agent = null, agentActive = !!agen
     }
   }, [focused, sessionId]);
   const action = (callback: () => void) => { callback(); setMenu(null); term.current?.focus(); };
-  return <><div className="terminal-host" ref={host} aria-label={t('项目终端')} />{menu && createPortal(<div ref={menuRef} className="dropdown terminal-context-menu" role="menu" aria-label={t('终端操作')} style={{ left: menu.x, top: menu.y }}>
-    <button role="menuitem" disabled={!menu.selection} onClick={() => action(() => { void copy(menu.selection); })}>{t('复制')}<span>Ctrl C</span></button>
+  return <><div className="terminal-host" ref={host} aria-label={t('项目终端')} />
+    {clipboardNotice && createPortal(<div className="notice-toast" role="status">{t('终端已将文字复制到剪贴板')}</div>, document.body)}
+    {menu && createPortal(<div ref={menuRef} className="dropdown terminal-context-menu" role="menu" aria-label={t('终端操作')} style={{ left: menu.x, top: menu.y }}>
+    <button role="menuitem" disabled={!menu.selection} onClick={() => action(() => { void copy(menu.selection); })}>{t('复制')}<span>{commandShortcut('C')}</span></button>
     <button role="menuitem" onClick={() => action(copyAll)}>{t('复制全部终端文字')}</button>
-    <button role="menuitem" onClick={() => action(() => term.current?.selectAll())}>{t('全选')}<span>Ctrl Shift A</span></button>
+    <button role="menuitem" onClick={() => action(() => term.current?.selectAll())}>{t('全选')}<span>{commandShortcut(isMac ? 'A' : 'Shift+A')}</span></button>
     <div className="menu-divider" />
-    <button role="menuitem" onClick={() => action(() => { void paste(); })}>{t('粘贴')}<span>Ctrl V</span></button>
+    <button role="menuitem" onClick={() => action(() => { void paste(); })}>{t('粘贴')}<span>{commandShortcut('V')}</span></button>
   </div>, document.body)}</>;
 }

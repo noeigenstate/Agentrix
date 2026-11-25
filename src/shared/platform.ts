@@ -3,4 +3,5 @@
 export const isMac = navigator.userAgent.includes('Macintosh');
 export const isLinux = !isMac && navigator.userAgent.includes('Linux');
 export const isWindows = !isMac && !isLinux;
+export const commandShortcut = (key: string) => isMac ? '⌘' + key.replace('Shift+', '⇧') : 'Ctrl+' + key;
 document.documentElement.dataset.platform = isMac ? 'darwin' : isLinux ? 'linux' : 'win32';

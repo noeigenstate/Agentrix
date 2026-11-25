@@ -15,7 +15,7 @@ export type Screen = {
   rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number;
   stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; queued?: number; approval?: ApprovalStamp | null;
   instances?: Record<ScreenAgent, number>; inputFrames?: Record<ScreenAgent, number>; inputHint?: boolean;
-  agent?: ScreenAgent; agentVersion?: string;
+  agent?: ScreenAgent; agentVersion?: string; observedAgentVersion?: string; columns?: number;
 };
 type Entry = { id: string; terminal: Terminal; listeners: Set<(screen: Screen) => void>; parses: Set<(screen: Screen) => void>; timer: number; dispose: () => void; frame?: Screen; epoch: number;
   sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; parse: number; updatedAt: number;
@@ -52,9 +52,9 @@ export function recordScreenPaste(id: string, sessionId: string, text: string, a
 }
 export function canPasteScreen(agent: ScreenAgent, frame: Screen | null, emptyInput = false) {
   if (!frame) return false;
-  const screen = { ...parseAgentScreen(agent, frame.rows), inputHint: frame.inputHint };
-  return !cliDialogShown(agent, frame.rows, screen)
-    && (!emptyInput || !frame.pending && cliInputAvailable(agent, frame.rows) && !cliInputDraft(agent, frame.rows, screen));
+  const screen = { ...parseAgentScreen(agent, frame.rows, frame.agentVersion), inputHint: frame.inputHint };
+  return !screen.unsupported && !cliDialogShown(agent, frame.rows, screen)
+    && (!emptyInput || !frame.pending && cliInputAvailable(agent, frame.rows, frame.agentVersion) && !cliInputDraft(agent, frame.rows, screen));
 }
 export const screenPaste = (id: string, sessionId: string, text: string) => {
   const receipt = pastes.get(id);
@@ -118,29 +118,30 @@ function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'row
 function capture(entry: Entry): Screen {
   const display = displayedAgents.get(entry.id), agent = display?.agent;
   const screen = read(entry.terminal, agent);
+  const activeAgent = display?.active === false ? undefined : agent;
+  if (activeAgent && !entry.observedVersion && !entry.pending) entry.observedVersion = screenOf(activeAgent)?.version?.(screen.rows);
+  const version = activeAgent ? entry.observedVersion ?? display?.installedVersion ?? undefined : undefined;
   // State timestamps advance only when the observed state changes, never for spinner or background output.
-  const rowsKey = JSON.stringify(screen.rows);
+  const rowsKey = JSON.stringify([activeAgent, version, screen.rows]);
   if (rowsKey !== entry.rowsKey) {
     entry.revision = ++frameRevision;
     entry.updatedAt = Date.now();
     entry.rowsKey = rowsKey;
     for (const kind of screenAgents) {
-      updateState(entry, kind, screen.rows);
+      updateState(entry, kind, screen.rows, kind === activeAgent ? version : undefined);
     }
   }
-  const activeAgent = display?.active === false ? undefined : agent;
-  if (activeAgent && !entry.observedVersion && !entry.pending) entry.observedVersion = screenOf(activeAgent)?.version?.(screen.rows);
   // The terminal remains mounted in raw mode. Remember input on every parse so a later identical prompt starts a new episode.
   for (const kind of screenAgents) if (entry.inputShown[kind]) entry.inputFrames[kind]++;
-  return entry.frame = { ...screen, agent: activeAgent, agentVersion: activeAgent ? entry.observedVersion ?? display?.installedVersion ?? undefined : undefined,
+  return entry.frame = { ...screen, columns: entry.terminal.cols, agent: activeAgent, agentVersion: version, observedAgentVersion: activeAgent ? entry.observedVersion : undefined,
     sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, parse: ++entry.parse, updatedAt: entry.updatedAt, parsed: true,
     stateUpdatedAt: { ...entry.stateUpdatedAt }, approval: entry.pending ? null : entry.approval, instances: { ...entry.instances }, inputFrames: { ...entry.inputFrames } };
 }
 
-function updateState(entry: Entry, agent: ScreenAgent, rows: string[]) {
-  const parsed = parseAgentScreen(agent, rows), choice = parsed.choice;
+function updateState(entry: Entry, agent: ScreenAgent, rows: string[], version?: string) {
+  const parsed = parseAgentScreen(agent, rows, version), choice = parsed.choice;
   const waiting = cliDialogShown(agent, rows, parsed);
-  entry.inputShown[agent] = !waiting && cliInputAvailable(agent, rows);
+  entry.inputShown[agent] = !waiting && cliInputAvailable(agent, rows, version);
   const state = waiting ? 'waiting' : isCliWorking(agent, rows, parsed) ? 'working' : isAtPrompt(agent, rows, parsed) ? 'idle' : null;
   if (entry.states[agent] !== state) { entry.states[agent] = state; entry.stateUpdatedAt[agent] = entry.updatedAt; }
   const identity = choice ? choiceIdentity(choice) : null;
@@ -240,7 +241,7 @@ export function writeScreen(id: string, data: string, approval?: ApprovalStamp) 
 }
 
 export function screenChoice(agent: ScreenAgent, screen: Screen | null): ScreenChoice | null {
-  const choice = parseAgentScreen(agent, screen?.rows ?? []).choice;
+  const choice = parseAgentScreen(agent, screen?.rows ?? [], screen?.agentVersion).choice;
   return bindApproval(choice, agent, screen);
 }
 

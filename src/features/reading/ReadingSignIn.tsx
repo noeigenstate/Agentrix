@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { ArrowSquareOut, Copy, SignIn } from '@phosphor-icons/react';
-import type { SignInScreen } from '../agents/sign-in-screen';
+import type { SignInScreen } from '../cli-screens/index.ts';
 import { t } from '../../shared/i18n';
 import './reading-cli.css';
 

@@ -116,6 +116,7 @@ function useEditorFind(editor: RefObject<HTMLTextAreaElement | null>, text: stri
     return () => node.removeEventListener('keydown', key);
   });
   const keys = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent?.isComposing) return;
     if (event.key === 'Enter' || event.key === 'F3') { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); input.current?.select(); }

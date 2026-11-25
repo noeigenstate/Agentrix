@@ -214,3 +214,12 @@ test('Claude fallback recognizes only complete input placeholders, independently
     assert.equal(hasCliInput('claude', rows, screen), true);
   }
 });
+
+test('a paste summary is only evidence for the CLI that drew that placeholder', () => {
+  const { sameMessage } = require('../src/features/reading/pending-prompts.ts');
+  const words = 'A first paragraph\nA second paragraph';
+  assert.equal(sameMessage(words, '[Image #1] [Pasted text #2 +1 lines]', 'claude'), true);
+  assert.equal(sameMessage(words, '[Pasted text #2 +1 lines]', 'codex'), false);
+  assert.equal(sameMessage(words, '[Pasted Content 301 chars]', 'codex'), true);
+  assert.equal(sameMessage(words, '[Pasted Content 301 chars]', 'claude'), false);
+});

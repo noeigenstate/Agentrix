@@ -6,7 +6,7 @@ function settingsView(t) {
   const view = hookHarness('src/features/settings/SettingsDialog.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: text => text, currentLanguage: () => 'en' },
     './VoiceButton': {}, './shortcuts': { shortcut: () => '' }, './ShortcutSettings': {}, './AgentsSettings': {},
-    './AgentRuntimeSettings': { AgentRuntimeSettings }, './platform': {}, './TerminalFontSettings': {}, './UserAvatarSetting': {},
+    './AgentRuntimeSettings': { AgentRuntimeSettings }, './platform': { commandShortcut: key => '⌘' + key }, './TerminalFontSettings': {}, './UserAvatarSetting': {},
     './ThemeSetting': {}, './Select': {}, './SkillsSettings': {}, './ProjectImagesSettings': {}, './AboutSettings': {},
   });
   t.after(() => view.dispose());

@@ -380,7 +380,7 @@ const expected = {
     ], hint: 'Enter to set as default · s to use this session only · Esc to cancel',
   } }),
   // A narrow terminal wrapped the paragraph and scrolled the heading off: its first row is a paragraph's tail.
-  'claude-model-menu-narrow': ({ ...emptyScreen, choice: {
+  'claude-model-menu-narrow': ({ ...emptyScreen, waitingHeadingClipped: true, choice: {
     kind: 'menu', title: 'model names, specify with --model.', context: [], options: [
       option(1, 'Default (recommended)  Opus 5.5'), option(2, 'Opus 5.5 ✔             Complex work', true), option(3, 'Fable 5.1              Toughest tasks'),
       option(4, 'Sonnet 5.5             Simpler tasks'),
@@ -721,6 +721,20 @@ test("Codex's own resume list opens as a choice of its conversations, wherever i
   assert.equal(parseAgentScreen('claude', readFixture('codex-resume-start')).choice?.title === 'Resume a previous session', false);
 });
 
+test('an older screen does not provide input, menus or an interrupt target; current and newer screens still parse', () => {
+  const { cliInputAvailable, isCliWorking, isAtPrompt } = require('../src/features/cli-screens/index.ts');
+  const menu = readFixture('claude-model-menu');
+  const old = parseAgentScreen('claude', menu, '2.1.292');
+  assert.equal(old.unsupported, true);
+  assert.equal(old.choice, null);
+  assert.equal(parseAgentScreen('claude', menu, '2.1.331').choice?.title, 'Select model');
+  assert.equal(parseAgentScreen('claude', menu, '2.2.0').choice?.title, 'Select model');
+  const input = readFixture('claude-idle-2-1-296');
+  assert.equal(cliInputAvailable('claude', input, '2.1.292'), false);
+  assert.equal(isAtPrompt('claude', input, old), false);
+  assert.equal(isCliWorking('claude', input, old), false);
+});
+
 test('the waiting notice is the dialog heading, never a wrapped tail of the paragraph below it', () => {
   const claude = rows => parseAgentScreen('claude', rows);
   assert.equal(waitingTitle(claude(readFixture('claude-model-menu'))), 'Select model');
@@ -732,7 +746,7 @@ test('the waiting notice is the dialog heading, never a wrapped tail of the para
   const cut = claude(readFixture('claude-model-menu-narrow'));
   assert.equal(cut.choice.title, 'model names, specify with --model.');
   assert.equal(waitingTitle(cut), null);
-  assert.equal(waitingTitle({ ...cut, choice: null, waiting: { title: 'specify with --model.' } }), null);
+  assert.equal(waitingTitle({ ...cut, waitingHeadingClipped: undefined, choice: null, waiting: { title: 'release notes' } }), 'release notes');
   assert.equal(waitingTitle({ ...cut, choice: null, waiting: { title: 'MCP server “localprobe” requests your input' } }), 'MCP server “localprobe” requests your input');
   assert.equal(waitingTitle(emptyScreen), null);
   assert.equal(waitingTitle({ ...emptyScreen, choice: { ...cut.choice, title: '是否继续？' } }), '是否继续？');

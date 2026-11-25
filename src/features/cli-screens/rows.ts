@@ -182,6 +182,12 @@ export const prompt = (marker: RegExp, row: string) => {
   return (match[1] ?? '').trim();
 };
 
+export function closingKeyHint(rows: string[]) {
+  const tail = rows.filter(row => row.trim()).at(-1)?.trim() ?? '';
+  return /^(?:press )?esc to (?:cancel|close|go back|dismiss)$/i.test(tail)
+    || /^(?:Type to filter|[←→/]+ tabs|enter select)\b.*\besc\b/i.test(tail);
+}
+
 export const cleanBannerRow = (row: string) => row.replace(/^[\s\u2580-\u259f]+/, '').trim() || null;
 export const emptyStatus = (): ScreenStatus => ({ model: null, effort: null, context: null, mode: null, notes: [] });
 export const normalizeRows = (rows: string[]) => rows.map(row => row.replace(/[\s\r]+$/, ''));

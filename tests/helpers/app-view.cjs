@@ -2,7 +2,7 @@ const { createContext } = require('react');
 const { hookHarness } = require('./hook-harness.cjs');
 const { elements, stubGlobals } = require('./renderer-fixtures.cjs');
 
-function appView(t, { project = { id: 'p', name: 'Fixture', terminals: [] }, ...overrides } = {}) {
+function appView(t, { project = { id: 'p', name: 'Fixture', terminals: [] }, bridge = {}, ...overrides } = {}) {
   const noop = () => {};
   const SettingsDialog = () => null, AgentSidebar = () => null, ProjectExplorer = () => null;
   const listeners = new Map(), workspace = { projects: [project], settings: {} };
@@ -14,7 +14,7 @@ function appView(t, { project = { id: 'p', name: 'Fixture', terminals: [] }, ...
       onState(fn) { fn(workspace); return noop; },
       onFocusProject: subscribe, onError: subscribe, onUpdateState: subscribe, onAgents: subscribe,
       onFullScreen: subscribe, onSSHAuth: subscribe, onEditorClose: subscribe, onDecisionShow: subscribe,
-      isFullScreen: answer, getSSHAuth: answer, getAgents: answer, getUpdateState: answer, getState: answer,
+      isFullScreen: answer, getSSHAuth: answer, getAgents: answer, getUpdateState: answer, getState: answer, ...bridge,
     } },
   }, () => view?.dispose());
   view = hookHarness('src/App.tsx', {

@@ -80,7 +80,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const { stuck, unseen, toBottom, ready } = useStickToBottom(scroller, content, entries, sessionId);
   const asked = model.requests.length + (asksChoice(change) ? 1 : 0), askedBefore = useRef(0);
   useLayoutEffect(() => { if (asked > askedBefore.current) toBottom(); askedBefore.current = asked; }, [asked]);
-  useEffect(() => { if (autoFocus && open) box.current?.focus(); }, [autoFocus, sessionId]);
+  useEffect(() => { if (autoFocus && open) box.current?.focus(); }, [autoFocus, sessionId, open]);
 
   // The draft goes to main when a switch prepares: the words, the pictures, and the messages never delivered: those carried in and those main refused.
   // One it has queued or read is its own and never offered again.
@@ -129,7 +129,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
       voiceInput.current.edit(node.value.slice(0, at) + words + node.value.slice(end)); node.focus();
     }, { available: () => current && voiceInput.current.open, sessionId });
     return () => { current = false; unregister(); };
-  }, [terminalId, sessionId, open]);
+  }, [terminalId, sessionId]);
   // A picture pasted or dropped joins the ones that go with the next message; one the runtime would refuse is refused here, with the reason.
   const attach = async (files: File[]) => {
     const { pictures, error: problem } = await readPictures(files, MAX_PICTURES - carried.length);

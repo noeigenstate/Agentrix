@@ -92,7 +92,11 @@ test('a refused key shows the reason and the page keeps its state; Enter in the 
   const bridge = fake({ keySave: async key => { bridge.calls.push(['save', key]); return { ok: false, error: 'No secure storage on this system' }; } }), view = page(bridge);
   try {
     view.render(); await settle();
-    view.secret().props.onChange({ target: { value: SECRET } }); view.secret().props.onKeyDown({ key: 'Enter' }); await settle();
+    view.secret().props.onChange({ target: { value: SECRET } });
+    const before = bridge.calls.length;
+    view.secret().props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: true } }); await settle();
+    assert.equal(bridge.calls.length, before);
+    view.secret().props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: false } }); await settle();
     assert.deepEqual(bridge.calls, [['save', SECRET]]); assert.equal(view.alert(), 'No secure storage on this system'); assert.equal(view.status(), '未保存');
     assert.ok(!view.html().includes(SECRET));
   } finally { view.done(); }
@@ -555,4 +559,17 @@ test('Claude Code background tasks: a switch that is off unless the setting says
   try { view.render(); await settle(); box(view).props.onChange({ target: { checked: true } }); assert.deepEqual(chosen, [true]); } finally { view.done(); }
   const readonly = page(fake(), wordsStub, {});
   try { readonly.render(); await settle(); assert.equal(box(readonly).props.disabled, true); } finally { readonly.done(); }
+});
+
+test('the terminal font field commits only an Enter outside the IME composition', t => {
+  const { hookHarness } = require('./helpers/hook-harness.cjs');
+  const { elements } = require('./helpers/renderer-fixtures.cjs');
+  const h = hookHarness('src/features/settings/TerminalFontSettings.tsx', { './i18n': { t: text => text } });
+  t.after(() => h.dispose());
+  const updates = [], settings = { terminalFontFamily: '', terminalCjkFontFamily: '' };
+  const tree = h.render('TerminalFontSettings', { settings, update: patch => updates.push(patch) }).result;
+  const field = elements(tree).find(node => node.props?.list === 'terminalCjkFontFamily-suggestions');
+  const enter = (value, isComposing) => field.props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing }, currentTarget: { value } });
+  enter('si yuan', true); assert.deepEqual(updates, []);
+  enter('思源黑体', false); assert.deepEqual(updates, [{ terminalCjkFontFamily: '思源黑体' }]);
 });

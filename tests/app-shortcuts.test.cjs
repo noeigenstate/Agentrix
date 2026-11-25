@@ -56,3 +56,44 @@ test('one held add-project shortcut runs once while repeated keys are still cons
   assert.equal(f.press('KeyN', f.body, true).defaultPrevented, true);
   assert.deepEqual(f.calls, ['addProject']);
 });
+
+test('focus animation changes keep the workspace subscription and an older snapshot cannot overwrite a push', async t => {
+  const { appView } = require('./helpers/app-view.cjs');
+  const callbacks = [], focuses = new Map();
+  let push, snapshot;
+  const project = { id: 'p', name: 'Live', terminals: [] };
+  const app = appView(t, { project, bridge: {
+    onState(fn) { callbacks.push(fn); push = fn; return () => {}; },
+    getState: () => new Promise(resolve => { snapshot = resolve; }),
+    acknowledge: async () => ({ ok: true }),
+  }, './useProjectFocusMotion': { useProjectFocusMotion: animation => {
+    if (!focuses.has(animation)) focuses.set(animation, () => {});
+    return { focusedId: project.id, focus: focuses.get(animation) };
+  } } });
+  push({ projects: [project], settings: { focusAnimation: 'off' } });
+  assert.ok(app.render().some(node => node.type === app.AgentSidebar));
+  snapshot({ ok: true, value: { projects: [], settings: {} } });
+  await Promise.resolve(); await Promise.resolve();
+  assert.ok(app.render().some(node => node.type === app.AgentSidebar));
+  assert.equal(callbacks.length, 1);
+});
+
+test('a removed project with an open editor asks the navigation guard once across state pushes', async t => {
+  const { appView } = require('./helpers/app-view.cjs');
+  const project = { id: 'p', name: 'Live', terminals: [] };
+  let push, confirms = 0;
+  const app = appView(t, { project, bridge: {
+    onState(fn) { push = fn; push({ projects: [project], settings: {} }); return () => {}; },
+  } });
+  const sidebar = app.render().find(node => node.type === app.AgentSidebar);
+  await sidebar.props.children({}).props.onSelectFile('draft.txt');
+  const editor = app.render().find(node => node.props?.registerGuard);
+  editor.props.registerGuard(async () => { confirms++; return false; });
+  for (const settings of [{}, { focusAnimation: 'off' }, {}]) {
+    push({ projects: [], settings });
+    app.render();
+    await Promise.resolve(); await Promise.resolve();
+  }
+  assert.equal(confirms, 1);
+  assert.equal(app.render().find(node => node.props?.registerGuard)?.props.filePath, 'draft.txt');
+});

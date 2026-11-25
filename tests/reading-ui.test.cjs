@@ -92,7 +92,6 @@ function loadUI(name, overrides = {}) {
     if (key === './CommandList') return loadUI('features/reading/CommandList.tsx', overrides);
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
-    if (key === './sign-in-screen') return require('../src/features/agents/sign-in-screen.ts');
     // Module B's split pane and its state are not under test here.
     if (key === './SubagentPane') return { SubagentPane: () => null };
     if (key === './subagent-splits.ts') return { closeSplit() {}, limitSplits() {}, splitLimit: () => 2, splitsOf: () => [], useSplits: () => [] };
@@ -1454,6 +1453,25 @@ test('reading routing commands show a notice and never enter the PTY or outbox',
   assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['无法读取模型路由状态'])));
 });
 
+test('reading accepts the newest routing mode when skill-seat reads resolve out of order', async t => {
+  const h = dictationHarness(t), pending = [], events = [];
+  let changed;
+  window.agentrix.onSkills = fn => { changed = fn; return () => {}; };
+  window.agentrix.skillSeats = () => new Promise(resolve => pending.push(resolve));
+  window.dispatchEvent = event => events.push(event.type);
+  h.remount();
+  changed();
+  assert.equal(pending.length, 2);
+  pending[1]({ conductor: true, roles: [] });
+  await h.tick(0);
+  pending[0]({ conductor: false, roles: [] });
+  await h.tick(0);
+  window.agentrix.skillSeats = async () => ({ conductor: true, roles: [] });
+  h.edit('/model'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(events, ['agentrix:open-seats']);
+  assert.deepEqual(h.written, []);
+});
+
 test('welcome command rows call the existing completion callback with the cached command', () => {
   const { ReadingWelcome } = loadUI('features/reading/ReadingWelcome.tsx');
   const command = { name: '/status', source: 'builtin', description: '状态', view: 'terminal' };
@@ -2115,7 +2133,7 @@ test('unrelated user records cannot discard a stalled prompt; retries stay bound
     './usePendingPrompts': { usePendingPrompts: () => {
       state = prompts.reconcilePendingPrompts(state, 'session', records, clock);
       return { pending: state.prompts,
-        echo(text, images) { const id = 'retry-' + ++sequence; state = prompts.addPendingPrompt(state, id, text, clock, images); return id; },
+        echo(text, images, count, id = 'retry-' + ++sequence) { state = prompts.addPendingPrompt(state, id, text, clock, images, count); return id; },
         cancelEcho(id) { cancellations.push(id); state = prompts.removePendingPrompt(state, id); },
       };
     } },
@@ -2123,7 +2141,7 @@ test('unrelated user records cannot discard a stalled prompt; retries stay bound
   h.props.terminal.codexActivity = 'idle';
   clock += 6000; await h.tick(6000);
   assert.deepEqual(h.pasted.map(item => item.text), ['NEVER_DELIVERED']);
-  assert.deepEqual(cancellations, ['lost'], 'a replacement echo follows a real resend, never a timestamp-only acknowledgment');
+  assert.deepEqual(cancellations, [], 'automatic retries retain their original message id');
   await h.tick(400); await h.tick(2000); await h.tick(1000);
   clock += 21000; h.render(); await h.tick(0);
   assert.equal(h.pasted.length, 2);
@@ -2138,11 +2156,15 @@ test('unrelated user records cannot discard a stalled prompt; retries stay bound
   assert.equal(h.pasted.length, 2);
   assert.equal(elements(h.tree()).find(element => element.props?.queued).props.queued(state.prompts[0]), true);
   records.pop();
+  state = prompts.addPendingPrompt(state, 'second-identical', 'NEVER_DELIVERED', clock - 21000);
+  h.render(); await h.tick(0);
+  assert.equal(h.pasted.length, 3, 'a second identical message in the same conversation has its own retries');
+  await h.tick(400); await h.tick(2000); await h.tick(1000);
   h.props.terminal.sessionId = 'next-session';
   // The actual pending hook clears old-session echoes; give this new session its own stalled send.
   state = prompts.addPendingPrompt(prompts.createPendingPrompts('session'), 'new-send', 'NEVER_DELIVERED', clock - 21000);
   h.render(); await h.tick(0);
-  assert.equal(h.pasted.length, 3, 'the previous session cannot exhaust the new session retry budget');
+  assert.equal(h.pasted.length, 4, 'the previous session cannot exhaust the new session retry budget');
 });
 
 test('a matching text receipt cannot acknowledge missing pictures, and a later image update can', () => {
@@ -2205,12 +2227,14 @@ const PASTE_KEYS = {
   codex: { win32: '\x16', darwin: '\x16', linux: '\x16' },
 };
 const PLATFORMS = { win32: { isMac: false, isLinux: false, isWindows: true }, darwin: { isMac: true, isLinux: false, isWindows: false }, linux: { isMac: false, isLinux: true, isWindows: false } };
-function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false, platform = 'darwin', pasteMode = 'accept' } = {}) {
+function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.preview), remote = false, platform = 'darwin',
+  pasteMode = 'accept', agentVersion = agent === 'claude' ? '2.1.312' : '0.165.0' } = {}) {
   let text = '', cursor = 0, next = 0, heldScreen = null, overriddenRows;
   const attached = [], waitingPastes = [];
   const rows = () => composerRows(agent, 'idle', heldScreen ?? text);
+  const frame = () => overriddenRows === null ? null : ({ rows: overriddenRows ?? rows(), agentVersion, observedAgentVersion: agentVersion });
   const h = dictationHarness(t, {
-    './terminal-screen': { useScreen: () => overriddenRows === null ? null : ({ rows: overriddenRows ?? rows() }), readScreen: () => overriddenRows === null ? null : ({ rows: overriddenRows ?? rows() }) },
+    './terminal-screen': { useScreen: frame, readScreen: frame },
     './agent-screen': { parseAgentScreen }, './image-thumbnail': { ...require('../src/shared/image-thumbnail.ts'), thumbnail: decode }, './platform': PLATFORMS[platform],
   });
   h.props.terminal.agent = agent; h.props.remote = remote;
@@ -2286,6 +2310,30 @@ function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.
     nextNumber(number) { next = number - 1; },
   });
 }
+
+test('an unverified PTY version never sends picture-removal keys and keeps the attachment', async t => {
+  const h = imageComposerHarness(t, 'claude', { agentVersion: '2.1.332' });
+  const errors = [];
+  h.props.onError = error => errors.push(error);
+  await h.paste(1);
+  const before = h.written.slice();
+  h.remove(0);
+  assert.deepEqual(h.written, before);
+  assert.deepEqual(h.native().images, [1]);
+  assert.deepEqual(errors, ['Continue in the terminal.']);
+});
+
+test('an older live CLI directs the reader to the terminal and disables its composer', t => {
+  const rows = composerRows('codex');
+  const h = dictationHarness(t, {
+    './terminal-screen': { useScreen: () => ({ rows, agentVersion: '0.160.0' }) },
+    './agent-screen': { parseAgentScreen },
+  });
+  h.props.terminal.agent = 'codex';
+  assert.equal(h.render().props.disabled, true);
+  const fallback = elements(h.tree()).find(element => element.type === 'button' && element.props.children === 'Continue in the terminal.');
+  assert.equal(fallback.props.onClick, h.props.onShowTerminal);
+});
 
 // Exercise the smoke's real fixture builder and console frames without compiling or launching the Windows program.
 function completionFixtureRows(withInput) {

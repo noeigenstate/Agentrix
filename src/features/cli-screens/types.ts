@@ -1,6 +1,7 @@
 // What the reading view knows about the agent's own terminal screen (see terminal-screen.ts for the rows and
 // index.ts for the parser). Everything is read from text the CLI drew; null means "not on screen".
 
+import type { SignInScreen } from './sign-in.ts';
 import type { AgentProvider } from '../../shared/agent-events.ts';
 import type { AgentSettings } from '../../shared/types.ts';
 import type { LeadRoutingCommand } from '../../shared/lead-routing-notices.ts';
@@ -81,6 +82,8 @@ export type AgentScreen = {
   waiting?: { title: string | null } | null;
   // The terminal registry found only a placeholder in the input box.
   inputHint?: boolean;
+  unsupported?: true;
+  waitingHeadingClipped?: true;
 };
 
 export type LeadStep =
@@ -106,7 +109,7 @@ export type CliScreen = {
   working(rows: string[]): boolean;
   // The shared state check also tests working and dialog before reporting idle.
   atPrompt(rows: string[]): boolean;
-  dialog?(rows: string[], layout?: ScreenLayout): Partial<Pick<AgentScreen, 'choice' | 'waiting' | 'overlay'>>;
+  dialog?(rows: string[], layout?: ScreenLayout): Partial<Pick<AgentScreen, 'choice' | 'waiting' | 'overlay' | 'waitingHeadingClipped'>>;
   status?(rows: string[]): ScreenLayout;
   picker?: ScreenPicker;
   echo?(rows: string[]): string[];
@@ -114,6 +117,10 @@ export type CliScreen = {
   receiptOnScreen?: boolean;
   inputMatches?(rows: string[], text: string): boolean;
   otherDialog?(rows: string[]): boolean;
+  workerPlan?(choice: ScreenChoice): boolean;
+  pasteSummary?(text: string): boolean;
+  removeImage?(text: string, index: number, rows: number): { keys: string; labels: string[] } | null;
+  signIn?(rows: string[], width?: number): SignInScreen | null;
   styledInput?: {
     range(rows: string[], wrapped: (row: number) => boolean): { first: number; end: number; prefix: number } | null;
     hint(rows: string[]): boolean;

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { Project } from '../../shared/types';
 import type { ScreenChoice } from '../agents/agent-screen-types';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen';
-import { signInScreen } from '../agents/sign-in-screen';
+import { screenAgent, signInScreen } from '../cli-screens/index.ts';
 import { hasCliInput } from '../reading/cli-panel';
-import { bindApproval, subscribeScreen, type Screen } from '../terminal/terminal-screen';
+import { bindApproval, subscribeScreen } from '../terminal/terminal-screen';
 import { reviewHistory } from './review-history';
 
 // Something one of the agents waits on you for, across every project: a permission to grant, a question to answer, a
@@ -34,21 +34,35 @@ export function snooze(id: string, until: number) {
 }
 const useSnoozes = () => useSyncExternalStore(listener => { snoozeListeners.add(listener); return () => { snoozeListeners.delete(listener); }; }, () => snoozes);
 
-// Every live agent terminal's screen, kept current.
-function useScreens(ids: string[]) {
-  const [screens, setScreens] = useState<Record<string, Screen>>({});
-  const key = ids.join('|');
+type DecisionScreen = { sessionId: string | null; signature: string; choice: ScreenChoice | null; signIn: string[] | null };
+type ScreenTarget = { id: string; sessionId: string | null; agent: Decision['agent'] };
+
+// Only a changed decision reaches App. Spinners, typing and cursor movement within one decision stay here.
+function useDecisionScreens(targets: ScreenTarget[]) {
+  const [screens, setScreens] = useState<Record<string, DecisionScreen>>({});
+  const key = JSON.stringify(targets);
   useEffect(() => {
-    const offs = ids.map(id => subscribeScreen(id, screen => setScreens(current => ({ ...current, [id]: screen }))));
+    const retained = new Map(targets.map(target => [target.id, target.sessionId]));
+    setScreens(current => Object.fromEntries(Object.entries(current).filter(([id, screen]) => retained.get(id) === screen.sessionId)));
+    const offs = targets.map(({ id, sessionId, agent }) => subscribeScreen(id, frame => {
+      if (frame.sessionId !== sessionId) return;
+      const rows = frame.rows, parsed = parseAgentScreen(agent, rows, frame.agentVersion);
+      const choice = bindApproval(parsed.choice, agent, frame);
+      const signIn = choice || hasCliInput(agent, rows, parsed) ? null : signInScreen(agent, rows, frame.agentVersion, frame.columns)?.lines ?? null;
+      const signature = choice ? JSON.stringify([choice.approval?.instance, choiceIdentity(choice)]) : signIn ? JSON.stringify(signIn) : '';
+      setScreens(current => {
+        if (current[id]?.signature === signature || !current[id] && !signature) return current;
+        return { ...current, [id]: { sessionId, signature, choice, signIn } };
+      });
+    }));
     return () => offs.forEach(off => off());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return screens;
 }
 
 export function useDecisions(projects: readonly Project[]) {
   const live = projects.flatMap(project => project.terminals.filter(terminal => terminal.cliActive && terminal.sessionId).map(terminal => ({ project, terminal })));
-  const screens = useScreens(live.map(({ terminal }) => terminal.id));
+  const screens = useDecisionScreens(live.map(({ terminal }) => ({ id: terminal.id, sessionId: terminal.sessionId, agent: screenAgent(terminal.agent) })));
   const snoozed = useSnoozes();
   const [now, setNow] = useState(Date.now());
   // A snooze that ends brings its decision back without anything else changing.
@@ -61,22 +75,21 @@ export function useDecisions(projects: readonly Project[]) {
   const all = useMemo(() => {
     const found: Decision[] = [];
     for (const { project, terminal } of live) {
-      const agent = terminal.agent === 'claude' ? 'claude' : 'codex', observed = screens[terminal.id] ?? null, rows = observed?.rows ?? [];
+      const agent = screenAgent(terminal.agent), observed = screens[terminal.id];
+      const screen = observed?.sessionId === terminal.sessionId ? observed : null;
       const base = { projectId: project.id, projectName: project.name, terminalId: terminal.id, sessionId: terminal.sessionId, terminalTitle: terminal.title, multipleTerminals: project.terminals.length > 1, agent } as const;
-      const parsed = parseAgentScreen(agent, rows), screen = { ...parsed, choice: bindApproval(parsed.choice, agent, observed) };
       const add = (decision: Omit<Decision, 'since' | keyof typeof base>) => {
         const id = `${terminal.id}:${terminal.sessionId}:${decision.id}`;
         if (!firstSeen.has(id)) { firstSeen.set(id, Date.now()); if (firstSeen.size > 500) firstSeen.delete(firstSeen.keys().next().value!); }
         found.push({ ...base, ...decision, id, since: firstSeen.get(id)! });
       };
-      if (screen.choice) {
+      if (screen?.choice) {
         const choice = screen.choice, identity = choiceIdentity(choice);
         const kind: DecisionKind = choice.kind === 'permission' ? 'approval' : choice.kind === 'question' ? 'question' : 'choice';
         add({ id: `${choice.approval?.instance ?? ''}:${identity}`, kind, title: choice.title, context: choice.context, choice, identity, message: '' });
         continue;
       }
-      const signIn = rows.length && !hasCliInput(agent, rows, screen) ? signInScreen(agent, rows) : null;
-      if (signIn) { add({ id: 'signin', kind: 'signin', title: '', context: signIn.lines, choice: null, identity: null, message: '' }); continue; }
+      if (screen?.signIn) { add({ id: 'signin', kind: 'signin', title: '', context: screen.signIn, choice: null, identity: null, message: '' }); continue; }
       // Claude said it needs you (its Notification hook) but nothing on its screen can be answered from here.
       if (terminal.needsInput !== null) add({ id: `attention:${terminal.needsInput}`, kind: 'attention', title: '', context: [], choice: null, identity: null, message: terminal.needsInput });
     }
@@ -89,7 +102,7 @@ export function useDecisions(projects: readonly Project[]) {
       const id = `${terminal.id}:review:${project.lastCompletedAt ?? terminal.lastCompletedAt ?? 0}`;
       if (!firstSeen.has(id)) firstSeen.set(id, project.lastCompletedAt ?? Date.now());
       found.push({ id, kind: 'review', projectId: project.id, projectName: project.name, terminalId: terminal.id, sessionId: terminal.sessionId, terminalTitle: terminal.title, multipleTerminals: project.terminals.length > 1,
-        agent: terminal.agent === 'codex' ? 'codex' : 'claude', title: reviewHistory(project.id).task || (terminal.task?.startsWith('<') ? '' : terminal.task), context: [], choice: null, identity: null, message: '', since: firstSeen.get(id)! });
+        agent: screenAgent(terminal.agent), title: reviewHistory(project.id).task || terminal.task, context: [], choice: null, identity: null, message: '', since: firstSeen.get(id)! });
     }
     return found.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.since - b.since);
     // eslint-disable-next-line react-hooks/exhaustive-deps

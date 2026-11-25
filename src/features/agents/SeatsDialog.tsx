@@ -1003,7 +1003,12 @@ function DialogMenu({ state }: DialogPart) {
     </div>
     {custom && <div className="seats-menu-custom">
       <input type="text" data-custom-input maxLength={160} autoFocus spellCheck={false} aria-label={t('模型名')} placeholder={t('模型名，例如 gpt-6.3-sol')} value={custom.text} disabled={!!modelReason}
-        onChange={event => setCustom({ text: event.target.value, error: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submitCustom(menu.slot); } }} />
+        onChange={event => setCustom({ text: event.target.value, error: '' })}
+        onKeyDown={event => {
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+          event.preventDefault();
+          submitCustom(menu.slot);
+        }} />
       <button type="button" className="seats-btn is-small" data-custom-apply disabled={!!modelReason} onClick={() => submitCustom(menu.slot)}>{t('使用')}</button>
       {custom.error && <small className="seats-menu-error" role="alert" data-custom-error>{custom.error}</small>}
     </div>}

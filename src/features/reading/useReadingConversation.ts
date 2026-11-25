@@ -32,7 +32,7 @@ export function useReadingHistory(id: string, sessionId: string | null, scope?: 
   const current = useRef<{ key: string; load: () => Promise<boolean>; compact: () => Promise<boolean> } | null>(null);
   useEffect(() => {
     if (!key) return;
-    let alive = true, page: ConversationPage | null = null, loading = false, blockCount = 0;
+    let alive = true, page: ConversationPage | null = null, loading = false, blockCount = 0, compactAt = 240;
     const buffer = createConversationBuffer(entries => {
       blockCount = conversationBlocks(entries).length;
       if (alive) setSnapshot(value => ({ ...value, key, entries, page, loading }));
@@ -57,7 +57,13 @@ export function useReadingHistory(id: string, sessionId: string | null, scope?: 
         return true;
       } catch { loading = false; fail('无法加载更早的对话，请重试。'); if (!older && !compact) buffer.snapshot(handoff.current.entries); return false; }
     };
-    current.current = { key, load: () => load(true), compact: () => blockCount > 240 ? load(false, true) : Promise.resolve(false) };
+    current.current = { key, load: () => load(true), compact: async () => {
+      if (loading || blockCount <= compactAt) return false;
+      compactAt = blockCount + 120;
+      const refreshed = await load(false, true);
+      if (refreshed) compactAt = Math.max(240, blockCount + 120);
+      return refreshed;
+    } };
     void load();
     return () => { alive = false; buffer.dispose(); off(); if (current.current?.key === key) current.current = null; };
   }, [id, key]);

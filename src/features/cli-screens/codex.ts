@@ -1,4 +1,7 @@
-import { codexQuestion } from '../agents/agent-question.ts';
+import { parseSignIn } from './sign-in.ts';
+import { imageRemoval } from './image-input.ts';
+import { closingKeyHint } from './rows.ts';
+import { codexQuestion } from './questions.ts';
 import type { AgentScreen, CliScreen, ScreenBanner, ScreenChoice, ScreenOption, ScreenStatus } from './types.ts';
 import { cleanBannerRow, commandInputText, emptyStatus, fromColumn, hintRow, optionRow, parseChoice, parseWaiting, prompt, rightPart } from './rows.ts';
 
@@ -172,11 +175,19 @@ function input(rows: string[]) {
 
 function otherDialog(rows: string[]) {
   const input = cliInputArea(rows);
-  return !!codexDialog(rows) || !!input && codexPickerBelow(rows, input.footer);
+  return closingKeyHint(rows) || !!codexDialog(rows) || !!input && codexPickerBelow(rows, input.footer);
 }
 
 export const codex: CliScreen = {
+  version: rows => banner(rows, parseStatus(rows, footerStart(rows)))?.version ?? undefined,
   input, working: rows => rows.some(row => /^\s*[•◦].*\besc to interrupt\b/i.test(row)),
   atPrompt: rows => !!cliInputArea(rows), dialog, status, otherDialog,
+  signIn: (rows, width) => parseSignIn(rows, width, {
+    marker: /^(?:Finish signing in via your browser|Paste or type your API key|Preparing device code login|Signed in with your ChatGPT account\. Press|Sign-in (?:failed|was cancelled)\.)/i,
+    footer: /^\s*(?:\?\s+for shortcuts\b|\S.*·\s*\d+%\s+(?:left|context left)\b|\S.*·\s*\d+[KM]?\s+window\b)/,
+    field: /Paste or type your API key/i, input: 'key',
+  }),
+  pasteSummary: text => /^\[Pasted Content \d+ chars\]$/.test(text),
+  removeImage: (text, index, rows) => imageRemoval(true, text, index, rows),
   receiptOnScreen: false, clears: text => /^\/(?:clear|new)(?:\s|$)/.test(text.trim()),
 };

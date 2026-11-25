@@ -5,7 +5,7 @@ import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { parseAgentScreen } from '../agents/agent-screen';
 import { readScreen, subscribeParsed, type Screen } from '../terminal/terminal-screen';
 import { cliDialogShown, cliInputAvailable, cliInputDraft } from './cli-panel';
-import { imageRemoval, inputImageLabels } from './image-input';
+import { canRemoveScreenImage, imageRemoval, inputImageLabels } from '../cli-screens/index.ts';
 import { normalizePrompt } from './pending-prompts';
 
 export type NativeImage = { id: number; src: string };
@@ -34,16 +34,17 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
   const readInput = (admit = false) => {
     const current = readScreen(terminalId);
     if (!valid() || !current || current.sessionId != null && current.sessionId !== sessionId || current.pending && (!admit || !current.parsed) || blocked(current)) return null;
-    const screen = { ...parseAgentScreen(agent, current.rows), inputHint: current.inputHint };
-    if (!cliInputAvailable(agent, current.rows) || cliDialogShown(agent, current.rows, screen)) return null;
-    return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, parse: current.parse };
+    const screen = { ...parseAgentScreen(agent, current.rows, current.agentVersion), inputHint: current.inputHint };
+    if (!cliInputAvailable(agent, current.rows, current.agentVersion) || cliDialogShown(agent, current.rows, screen)) return null;
+    return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, parse: current.parse,
+      version: current.agentVersion, observedVersion: current.observedAgentVersion };
   };
   // A cached parse may admit a message; every mutation requires all queued output to have parsed first.
   const parsing = () => !!readScreen(terminalId)?.pending;
   // A parsed frame showing a dialog, a menu or a picker.
   const dialogShown = () => {
     const shown = readScreen(terminalId);
-    return !!shown && (!shown.pending || shown.parsed) && cliDialogShown(agent, shown.rows, parseAgentScreen(agent, shown.rows));
+    return !!shown && (!shown.pending || shown.parsed) && cliDialogShown(agent, shown.rows, parseAgentScreen(agent, shown.rows, shown.agentVersion));
   };
   // The input on the first parsed frame that draws it: a busy agent's redraw can leave it out for a moment. Nothing once
   // a dialog takes its place, the caller lets go, or it stays away past the limit.
@@ -127,9 +128,11 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
     if (sending.current || !valid()) return;
     const image = images[index];
     if (!image) return;
+    if (!canRemoveScreenImage(agent, readScreen(terminalId)?.observedAgentVersion)) { onError(t('请到终端里操作')); return; }
     if (!observe()) { discard(image.id); onError(t('已从输入框移除，请检查终端中是否还留有图片。')); return; }
-    const current = readInput()!;
-    const labels = inputImageLabels(current.text), removal = imageRemoval(agent, current.text, labels.length - images.length + index, current.rows.length);
+    const current = readInput();
+    if (!current) { onError(t('请到终端里操作')); return; }
+    const labels = inputImageLabels(current.text), removal = imageRemoval(agent, current.text, labels.length - images.length + index, current.rows.length, current.observedVersion);
     if (!removal) { onError(t('请在终端中检查并移除这张图片。')); return; }
     const intent = interaction.current, owns = () => valid() && interaction.current === intent && !blocked();
     sending.current = true;

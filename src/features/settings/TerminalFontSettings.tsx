@@ -15,7 +15,7 @@ export function TerminalFontSettings({ settings, update }: { settings: Settings;
     <span><span><b>{t(field.label)}</b><small>{t(field.hint)}</small></span></span>
     <input aria-label={t(field.label)} list={field.key + '-suggestions'} value={draft[field.key]} placeholder={field.placeholder} maxLength={80}
       onChange={event => setDraft({ ...draft, [field.key]: event.target.value })} onBlur={event => update({ [field.key]: event.target.value.trim() })}
-      onKeyDown={event => { if (event.key === 'Enter') update({ [field.key]: event.currentTarget.value.trim() }); }} />
+      onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent?.isComposing) update({ [field.key]: event.currentTarget.value.trim() }); }} />
     <datalist id={field.key + '-suggestions'}>{field.names.map(name => <option value={name} key={name} />)}</datalist>
   </label>)}</>;
 }

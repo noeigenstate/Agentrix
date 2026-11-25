@@ -8,11 +8,28 @@ import { markdownEmphasis } from '../../shared/markdown-emphasis';
 const purifier = createDOMPurify(window);
 const previewMarked = new Marked(markdownEmphasis, { async: false, gfm: true });
 
+const remoteImage = (source: string) => /^https?:/i.test(source.trim().replace(/[\t\r\n]/g, ''));
+
+export function deferMarkdownImages(fragment: ParentNode) {
+  for (const image of fragment.querySelectorAll<HTMLImageElement>('img')) {
+    image.removeAttribute('data-md-image');
+    image.removeAttribute('srcset');
+    const source = image.getAttribute('src') ?? '';
+    if (!remoteImage(source)) continue;
+    image.removeAttribute('src');
+    image.dataset.mdImage = source;
+  }
+}
+
 function renderMarkdown(content: string, baseUrl: string) {
-  const fragment = purifier.sanitize(previewMarked.parse(content, { async: false }), {
+  // A template keeps images inert while their remote sources are removed, before sanitizing detached markup.
+  const template = document.createElement('template');
+  template.innerHTML = previewMarked.parse(content, { async: false });
+  deferMarkdownImages(template.content);
+  const fragment = purifier.sanitize(template.content, {
     RETURN_DOM_FRAGMENT: true,
     ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'img', 'hr', 'br', 'em', 'strong', 's', 'del', 'input', 'sup', 'sub', 'kbd'],
-    ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'colspan', 'rowspan', 'align', 'start', 'type', 'checked', 'disabled'],
+    ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'colspan', 'rowspan', 'align', 'start', 'type', 'checked', 'disabled', 'data-md-image'],
     ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false, FORBID_ATTR: ['style', 'id', 'name'],
   });
   const root = document.createElement('div'); root.append(fragment);
@@ -47,10 +64,18 @@ function renderMarkdown(content: string, baseUrl: string) {
     } catch { link.removeAttribute('href'); }
   }
   for (const image of root.querySelectorAll('img')) {
+    const deferred = image.dataset.mdImage;
+    if (deferred && remoteImage(deferred)) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'text-button'; button.dataset.mdImage = deferred;
+      button.dataset.mdAlt = image.alt; button.textContent = image.alt ? t('加载远程图片：{alt}', { alt: image.alt }) : t('加载远程图片');
+      image.replaceWith(button);
+      continue;
+    }
     const source = image.getAttribute('src') || '';
     try {
       const url = localUrl(source);
-      if (/^https?:\/\//i.test(source) || /^data:image\/(?:png|jpeg|gif|webp|avif);/i.test(source)) image.src = source;
+      if (/^data:image\/(?:png|jpeg|gif|webp|avif);/i.test(source)) image.src = source;
       else if (url && source) image.src = url.href;
       else image.removeAttribute('src');
     } catch { image.removeAttribute('src'); }
@@ -64,7 +89,15 @@ export function MarkdownPreview({ content, baseUrl, onOpenLink }: { content: str
   const rendered = useMemo(() => { try { return { html: renderMarkdown(content, baseUrl), error: false }; } catch { return { html: '', error: true }; } }, [content, baseUrl]);
   if (rendered.error) return <div className="file-preview-message" role="status">{t('Markdown 未能渲染，请切回编辑检查内容。')}</div>;
   return <article ref={root} className="markdown-body" aria-label={t('Markdown 预览')} tabIndex={0} onClick={event => {
-    const link = (event.target as Element).closest<HTMLAnchorElement>('a');
+    const target = event.target as Element;
+    const button = target.closest<HTMLButtonElement>('button[data-md-image]');
+    if (button && root.current?.contains(button) && remoteImage(button.dataset.mdImage ?? '')) {
+      const image = document.createElement('img');
+      image.alt = button.dataset.mdAlt ?? ''; image.referrerPolicy = 'no-referrer'; image.src = button.dataset.mdImage!;
+      button.replaceWith(image);
+      return;
+    }
+    const link = target.closest<HTMLAnchorElement>('a');
     if (!link || !root.current?.contains(link)) return;
     event.preventDefault();
     if (link.dataset.mdFragment !== undefined) [...root.current.querySelectorAll<HTMLElement>('[data-md-anchor]')].find(node => node.dataset.mdAnchor === link.dataset.mdFragment)?.scrollIntoView({ block: 'start' });

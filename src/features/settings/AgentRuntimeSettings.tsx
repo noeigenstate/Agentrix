@@ -102,7 +102,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     <div className="setting-row runtime-key-row"><span><Key size={19} /><span><b>{t('Anthropic API key')}</b><small role="status">{saved === null ? t('正在读取…') : saved ? t('已保存') : t('未保存')}</small></span></span>
       <span className="runtime-key">
         <input ref={keyField} type="password" autoComplete="off" spellCheck={false} aria-label={t('Anthropic API key')} placeholder={saved ? t('输入新的 key 以替换') : 'sk-ant-…'} value={key} disabled={busy || testing}
-          onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') saveKey(); }} />
+          onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent?.isComposing) saveKey(); }} />
         <button type="button" className="button secondary small" disabled={busy || testing || !key.trim()} onClick={saveKey}>{t('保存')}</button>
         {saved && <button type="button" className="text-button" disabled={busy || testing} onClick={() => void run(() => bridge.keyClear(), () => void refreshKey())}>{t('清除')}</button>}
       </span></div>

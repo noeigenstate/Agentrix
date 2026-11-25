@@ -1,3 +1,4 @@
+import { commandShortcut } from '../../shared/platform';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Clipboard, FilePlus, FolderOpen, FolderPlus, PencilSimple, Trash, X, SpinnerGap } from '@phosphor-icons/react';
@@ -33,9 +34,14 @@ export function useExplorerFileActions(project: Project, changed: (directory?: s
   const [message, setMessage] = useState('');
   const [progress, setProgress] = useState<FileProgress>(null);
   useEffect(() => {
-    const off = window.agentrix.onFileProgress(setProgress);
-    window.agentrix.getFileProgress().then(result => { if (result.ok) setProgress(result.value); });
-    return () => { off(); window.agentrix.fileTreeFocus(project.id, false); };
+    let live = true, pushed = false;
+    const off = window.agentrix.onFileProgress(value => { pushed = true; setProgress(value); });
+    const failed = (error: unknown) => { if (live && !pushed) setMessage(error instanceof Error ? error.message : String(error)); };
+    void window.agentrix.getFileProgress().then(result => {
+      if (!result.ok) { failed(result.error); return; }
+      if (live && !pushed) setProgress(result.value);
+    }, failed);
+    return () => { live = false; off(); window.agentrix.fileTreeFocus(project.id, false); };
   }, [project.id]);
   useEffect(() => {
     if (!menu) return;
@@ -124,10 +130,10 @@ export function useExplorerFileActions(project: Project, changed: (directory?: s
   };
   const overlays = <>{menu && createPortal(<div ref={menuElement} className="dropdown explorer-context-menu" role="menu" aria-label={t('文件操作')} style={{ left: menu.x, top: menu.y }}>
     {project.kind !== 'ssh' && <><button role="menuitem" onClick={() => void reveal(menu.entry.path)}><FolderOpen size={16} />{t('打开文件位置')}</button><div className="menu-divider" /></>}
-    <button role="menuitem" onClick={() => void copy(menu.targets)}><Copy size={16} />{t('复制')}<span>Ctrl C</span></button>
-    <button role="menuitem" onClick={() => void copyPaths(menu.targets, 'absolute')}><Copy size={16} />{t('复制绝对路径')}<span>Ctrl Shift C</span></button>
+    <button role="menuitem" onClick={() => void copy(menu.targets)}><Copy size={16} />{t('复制')}<span>{commandShortcut('C')}</span></button>
+    <button role="menuitem" onClick={() => void copyPaths(menu.targets, 'absolute')}><Copy size={16} />{t('复制绝对路径')}<span>{commandShortcut('Shift+C')}</span></button>
     <button role="menuitem" onClick={() => void copyPaths(menu.targets, 'relative')}><Copy size={16} />{t('复制相对路径')}</button>
-    <button role="menuitem" onClick={() => void paste(folder(menu.entry))}><Clipboard size={16} />{t('粘贴')}<span>Ctrl V</span></button><div className="menu-divider" />
+    <button role="menuitem" onClick={() => void paste(folder(menu.entry))}><Clipboard size={16} />{t('粘贴')}<span>{commandShortcut('V')}</span></button><div className="menu-divider" />
     <button role="menuitem" onClick={() => openCreate('file', menu.entry)}><FilePlus size={16} />{t('新建文件')}</button>
     <button role="menuitem" onClick={() => openCreate('directory', menu.entry)}><FolderPlus size={16} />{t('新建文件夹')}</button>
     <button role="menuitem" disabled={!menu.entry.path || menu.targets.length !== 1} onClick={() => { setEdit({ kind: 'rename', directory: parentOf(menu.entry.path), entry: menu.entry }); setMenu(null); }}><PencilSimple size={16} />{t('重命名')}<span>F2</span></button><div className="menu-divider" />

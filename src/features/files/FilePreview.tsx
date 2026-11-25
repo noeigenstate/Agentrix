@@ -1,3 +1,4 @@
+import { commandShortcut } from '../../shared/platform';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowClockwise, CaretLeft, CaretRight, Copy, FileText, FilmStrip, Globe, Image as ImageIcon, MagnifyingGlassMinus, MagnifyingGlassPlus, PencilSimple, SpinnerGap, Terminal, X } from '@phosphor-icons/react';
 import type { FilePreview as Preview, GitDiff, Result } from '../../shared/types';
@@ -234,7 +235,8 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
         onLoad={event => setDimensions({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
         onError={() => setImageError(true)} />
     </div></div>;
-  else if (preview?.kind === 'html' && mode === 'preview') body = <iframe key={preview.url} className="html-preview-frame" title={t('HTML 页面预览')} src={preview.url} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" />;
+  else if (preview?.kind === 'html' && mode === 'preview') body = <iframe key={preview.url} className="html-preview-frame"
+    title={t('HTML 页面预览')} src={preview.url} sandbox="allow-scripts" referrerPolicy="no-referrer" />;
   else if (markdown && mode === 'preview') body = markdownBody;
   else if (preview?.kind === 'video') body = videoError
     ? <div className="file-preview-message" role="status"><FilmStrip size={28} /><p>{t('当前视频编码无法在应用中播放，或文件尚未生成完整。')}</p><button className="button secondary small" onClick={openVideo}>{t('用系统播放器打开')}</button><button className="text-button" onClick={() => setRevision(r => r + 1)}>{t('重新加载视频')}</button></div>
@@ -242,8 +244,20 @@ export function FilePreview({ projectId, filePath, autoSave, onClose, onError, r
   else if (text !== null) body = <TextContent key={`${key}:${revision}`} content={text} />;
   else body = <div className="file-preview-message"><FileText size={28} /><p>{preview?.kind === 'unsupported' ? t(preview.reason) : t('无法预览此文件。')}</p></div>;
 
+  const status = markdown && mode === 'preview' ? t(dirty ? '预览 · 未保存' : 'Markdown 预览')
+    : editing ? saving ? t('编辑模式 · 保存中…') : autoSave ? t('编辑模式 · 自动保存')
+      : dirty ? t('编辑模式 · 未保存，{key} 保存', { key: commandShortcut('S') }) : t('编辑模式')
+      : t(preview?.kind === 'image' ? '图片预览' : preview?.kind === 'video' ? '视频预览' : preview?.kind === 'html' ? '网页预览' : '文本预览');
   return <section className="file-preview" aria-label={t('文件预览')} onKeyDown={event => { if (editing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); void save(); } }}>
-    <div className="file-tabs"><button className="terminal-tab" onClick={onClose}><Terminal size={15} />{t('返回终端')}</button><div className="selected-file-tab"><Icon size={15} /><span>{filePath.split('/').at(-1)}{dirty ? ' •' : ''}</span><button className="icon-button" title={t('关闭文件预览')} aria-label={t('关闭文件预览')} onClick={onClose}><X size={14} /></button></div><span className={`preview-readonly ${editing && (dirty || conflictCount) ? 'is-dirty' : ''}`} role="status">{t(markdown && mode === 'preview' ? dirty ? '预览 · 未保存' : 'Markdown 预览' : editing ? saving ? '编辑模式 · 保存中…' : autoSave ? '编辑模式 · 自动保存' : dirty ? '编辑模式 · 未保存，Ctrl+S 保存' : '编辑模式' : preview?.kind === 'image' ? '图片预览' : preview?.kind === 'video' ? '视频预览' : preview?.kind === 'html' ? '网页预览' : '文本预览')}{editing && conflictCount ? t(' · {count} 处冲突', { count: conflictCount }) : ''}</span></div>
+    <div className="file-tabs">
+      <button className="terminal-tab" onClick={onClose}><Terminal size={15} />{t('返回终端')}</button>
+      <div className="selected-file-tab"><Icon size={15} /><span>{filePath.split('/').at(-1)}{dirty ? ' •' : ''}</span>
+        <button className="icon-button" title={t('关闭文件预览')} aria-label={t('关闭文件预览')} onClick={onClose}><X size={14} /></button>
+      </div>
+      <span className={`preview-readonly ${editing && (dirty || conflictCount) ? 'is-dirty' : ''}`} role="status">
+        {status}{editing && conflictCount ? t(' · {count} 处冲突', { count: conflictCount }) : ''}
+      </span>
+    </div>
     <div className="file-preview-toolbar"><span title={filePath}>{filePath.split('/').join('  /  ')}</span><div>
       {preview?.kind === 'image' && <div className="image-controls">
         <button className="preview-option" aria-pressed={zoom === 'fit'} onClick={() => setZoom('fit')}>{t('适应窗口')}</button>

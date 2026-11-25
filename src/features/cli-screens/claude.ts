@@ -1,7 +1,10 @@
+import { parseSignIn } from './sign-in.ts';
+import { imageRemoval } from './image-input.ts';
+import { closingKeyHint } from './rows.ts';
 import type { AgentSettings } from '../../shared/types';
 import { modelName } from '../../shared/model-name.ts';
 import { sameModel } from '../../shared/lead-model.ts';
-import { claudeQuestion } from '../agents/agent-question.ts';
+import { claudeQuestion } from './questions.ts';
 import type { AgentScreen, CliScreen, LeadStep, LiveControl, PickerStep, ScreenBanner, ScreenChoice, ScreenOption, ScreenStatus } from './types.ts';
 import { cleanBannerRow, commandInputText, conversationRow, emptyStatus, hintRow, mcpUrlTitle, optionRow, parseChoice, parseWaiting, permissionTitle, prompt, rule } from './rows.ts';
 
@@ -368,7 +371,10 @@ function dialog(rows: string[], screen = status(rows)) {
     looseMenu(rows);
   const panelHead = rows.findIndex((row, index) => /^Settings\s{2,}Status\s{2,}Config\s{2,}Usage\s{2,}Stats$/.test(row.trim())
     && /^▔{8,}/.test(rows[index - 1]?.trim() ?? ''));
-  return { choice, waiting: choice ? null : parseWaiting(rows, false, index => claudeComposer(rows, index), inputRow, panelHead) };
+  const first = rows.find(row => row.trim())?.trim();
+  const clippedModelHeading = choice?.kind === 'menu' && choice.title === first && /\bspecify with --model\.$/.test(choice.title);
+  return { choice, waiting: choice ? null : parseWaiting(rows, false, index => claudeComposer(rows, index), inputRow, panelHead),
+    ...(clippedModelHeading ? { waitingHeadingClipped: true as const } : {}) };
 }
 
 function input(rows: string[], styledHint = false) {
@@ -411,6 +417,16 @@ export const claude: CliScreen = {
       if (match) return match[1];
     }
   },
+  signIn: (rows, width) => parseSignIn(rows, width, {
+    marker: /^(?:Paste code here if prompted|Browser didn't open\?|(?:[·✢✳✶✻✽*] )?Opening browser to sign in|Login successful\. Press Enter to continue|Security notes:)/i,
+    footer: /^\s*(?:(?:⏵⏵|⏸|⏵)\s.*(?:mode on|shift\+tab|for agents?|\d+ agents?)|\?\s+for shortcuts\b|.*·\s*←\s*(?:for agents|\d+ agents?))/,
+    field: /Paste code here if prompted/i, input: 'code',
+  }),
+  otherDialog: rows => closingKeyHint(rows) || (!input(rows) && rows.some(row => row.trim() === 'Sign in to Claude Code')
+    && rows.some(row => /^Paste the authorization code below:/.test(row.trim()))),
+  workerPlan: choice => choice.kind === 'permission' && choice.title === 'Exit plan mode?',
+  removeImage: (text, index, rows) => imageRemoval(false, text, index, rows),
+  pasteSummary: text => /^\[Pasted text #\d+[^\]]*\]$/.test(text),
   input, working, atPrompt: rows => !!cliInputArea(rows),
   dialog, status, receiptOnScreen: true, clears: text => /^\/clear(?:\s|$)/.test(text.trim()),
   inputMatches: claudeInputMatches,

@@ -17,6 +17,8 @@ export default Object.freeze({
     welcome: ['/init', '/help', '/status', '/review'],
   },
   supports: {
+    screenReading: { via: 'screen', verified: ['2.1.293', '2.1.331'] },
+    screenImageRemoval: { via: 'screen', verified: ['2.1.312', '2.1.312'] },
     terminal: { via: 'arg' }, native: { via: 'api' }, resume: { via: 'arg' }, roleTools: { via: 'arg' },
     startupNote: { via: 'arg' }, messageNote: { via: 'hook' },
     liveModel: liveScreen, liveEffort: liveScreen, fast: liveScreen, ultracode: liveScreen,

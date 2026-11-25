@@ -212,6 +212,18 @@ test('child Markdown mutations and late image or file-card sizes compensate befo
   assert.equal(h.node.scrollTop, released, 'user input releases observers and later layout compensation');
 });
 
+test('a completed prepend releases both observers after the layout settles', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = prependHarness(t);
+  h.render().showEarlier(); h.grow(250); h.render();
+  assert.equal(h.observers.ResizeObserver.size + h.observers.MutationObserver.size, 2);
+  t.mock.timers.runAll();
+  assert.equal(h.observers.ResizeObserver.size + h.observers.MutationObserver.size, 0);
+  const top = h.node.scrollTop;
+  h.grow(250); h.render();
+  assert.equal(h.node.scrollTop, top);
+});
+
 test('a user gesture during an asynchronous prepend releases its pending anchor before the page commits', async t => {
   const h = prependHarness(t);
   let finish;

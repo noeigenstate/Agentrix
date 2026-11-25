@@ -1,3 +1,4 @@
+import { isPasteSummary, withoutImageLabels, type ScreenAgent } from '../cli-screens/index.ts';
 import type { PasteReceipt } from '../terminal/terminal-screen';
 // Renderer echoes are replaced only by newly observed user records, one record per send.
 export const PENDING_PROMPT_TIMEOUT = 20_000;
@@ -22,7 +23,7 @@ const transcriptMatches = (message: string, record: string, original?: string) =
   const bounded = record.length === 20003 && record.endsWith('\n\n…');
   // The producer retains the full original beside its 20,000-character display. Shared prefixes cannot identify
   // distinct long sends. Keep the legacy prefix fallback only for records without that original.
-  if (bounded && original !== undefined) record = original.replace(/<\/?pasted_content\b[^>]*>\n?/g, '').replace(/\[Image #\d+\]\s?/g, '').trim();
+  if (bounded && original !== undefined) record = withoutImageLabels(original.replace(/<\/?pasted_content\b[^>]*>\n?/g, '')).trim();
   const normalized = normalizePrompt(message);
   return normalized === normalizePrompt(record)
     || (bounded && original === undefined && normalized.startsWith(normalizePrompt(record.slice(0, 20000))));
@@ -84,12 +85,11 @@ export const isTypedCommand = (text: string) => (/^\/[^\s/]+(?:\s|$)/.test(text)
 // may cut a long line short with "…", and shows a long paste only as "[Pasted text #1 +12 lines]" (Claude) or
 // "[Pasted Content 1200 chars]" (Codex). It must be this message, not one that merely begins the same way: Enter on a
 // leftover "delete" would send it instead of "delete nothing".
-const squash = (text: string) => text.replace(/\[Image #\d+\]/g, '').replace(/\s+/g, '');
-const PASTE_SUMMARY = /^\s*(?:\[Image #\d+\]\s*)*\[(?:Pasted text #\d+[^\]]*|Pasted Content \d+ chars)\]\s*$/;
-export function sameMessage(message: string, draft: string) {
+const squash = (text: string) => withoutImageLabels(text).replace(/\s+/g, '');
+export function sameMessage(message: string, draft: string, agent?: ScreenAgent) {
   if (!draft.trim()) return false;
   // Only a long or multi-line message is shown as a paste summary; its words cannot be compared.
-  if (PASTE_SUMMARY.test(draft)) return /\n/.test(message.trim()) || message.length > 200;
+  if (isPasteSummary(draft, agent)) return /\n/.test(message.trim()) || message.length > 200;
   const sent = squash(message), held = squash(draft);
   if (!sent || !held) return false;
   return held.endsWith('…') ? held.length > 9 && sent.startsWith(held.slice(0, -1)) : sent === held;
@@ -126,7 +126,9 @@ export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string
 
 export function addPendingPrompt(state: PendingPrompts, id: string, text: string, now: number, images: string[] = [], imageCount = images.length): PendingPrompts {
   if ((!normalizePrompt(text) && !imageCount) || isTypedCommand(text)) return state;
-  return { ...state, prompts: [...state.prompts, { id, role: 'user', text, at: now, sending: true, ...(images.length ? { images } : {}), ...(imageCount ? { imageCount } : {}) }] };
+  const prompt: PendingPrompt = { id, role: 'user', text, at: now, sending: true,
+    ...(images.length ? { images } : {}), ...(imageCount ? { imageCount } : {}) };
+  return { ...state, prompts: [...state.prompts.filter(pending => pending.id !== id), prompt] };
 }
 
 export function removePendingPrompt(state: PendingPrompts, id: string): PendingPrompts {

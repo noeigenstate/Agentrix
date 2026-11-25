@@ -32,11 +32,16 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
   useDictatedBox(voiceTarget, feedbackBox, setFeedback);
   useEffect(() => {
     let live = true;
-    void window.agentrix.terminalConversation(decision.terminalId).then(result => { if (live) setEntries(result.ok ? result.value : []); });
-    void window.agentrix.terminalActions(decision.terminalId).then(result => { if (live && result.ok) setActions(result.value); });
-    void window.agentrix.gitStatus(decision.projectId).then(result => { if (live && result.ok && result.value.repository) setGit(result.value); });
+    const failed = (error: unknown) => { if (live) onError(error instanceof Error ? error.message : String(error)); };
+    void window.agentrix.terminalConversation(decision.terminalId).then(result => {
+      if (!live) return;
+      setEntries(result.ok ? result.value : []);
+      if (!result.ok) failed(result.error);
+    }, error => { if (live) setEntries([]); failed(error); });
+    void window.agentrix.terminalActions(decision.terminalId).then(result => { if (live && result.ok) setActions(result.value); }, failed);
+    void window.agentrix.gitStatus(decision.projectId).then(result => { if (live && result.ok && result.value.repository) setGit(result.value); }, failed);
     return () => { live = false; };
-  }, [decision.terminalId, decision.projectId, decision.id]);
+  }, [decision.terminalId, decision.projectId, decision.id, onError]);
   const round = useMemo(() => lastRound(entries ?? []), [entries]);
   // Like homework: which submission this is, and the notes you sent back before it.
   const history = useMemo(() => reviewHistory(decision.projectId), [decision.projectId, decision.id]);

@@ -496,7 +496,13 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   typeCustom(h, '-x'); applyCustom(h);
   assert.match(textOf(byAttr(liveMenu(h), 'data-custom-error')), /starts with a letter or digit/);
   assert.equal(h.calls.length, 0);
-  typeCustom(h, 'gpt-6.3-sol'); applyCustom(h);
+  typeCustom(h, 'gpt-6.3-sol');
+  const enter = (isComposing, preventDefault) => byAttr(liveMenu(h), 'data-custom-input').props.onKeyDown({
+    key: 'Enter', nativeEvent: { isComposing }, preventDefault,
+  });
+  enter(true, assert.fail);
+  assert.ok(liveMenu(h), 'IME confirmation leaves the draft menu open');
+  enter(false, () => {});
   assert.equal(liveMenu(h), undefined, 'the menu closes after an accepted id');
   const tree = h.render();
   assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /gpt-6\.3-sol/);

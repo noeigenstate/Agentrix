@@ -679,6 +679,16 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   return { render, button, note, errors, text: () => renderToStaticMarkup(render()), done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
 
+test('a rejected launcher history read leaves a usable new conversation option', async () => {
+  const view = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, []);
+  try {
+    window.agentrix.agentHistory = async () => { throw new Error('history disconnected'); };
+    view.render(); await settle();
+    assert.equal(view.note('claude'), '开始新的对话');
+    assert.equal(view.button('claude').props.disabled, false);
+  } finally { view.done(); }
+});
+
 test('the launcher puts the orchestrator family first and labels both leads from C0', async () => {
   const team = require('./fixtures/team-seats.json');
   const routing = { ...team, conductor: true, leadAgent: 'codex', leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer } };
@@ -1077,7 +1087,8 @@ function sessionView(events, bridge, base = {}) {
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
   let entry = build(events(ev));
-  const tree = () => harness.render('NativeSession', { terminalId: 't1', projectId: 'p1', entry, autoFocus: false, switchState: change, handoff, onError() {}, onOpenLink() {} }).result;
+  const tree = () => harness.render('NativeSession', { terminalId: 't1', projectId: 'p1', entry, autoFocus: base.autoFocus ?? false,
+    switchState: change, handoff, onError() {}, onOpenLink() {} }).result;
   const find = predicate => elements(tree()).find(predicate), box = () => find(node => node.type === 'textarea');
   return {
     ev, find, box, tree, dismissed, refreshed, handoff, parts, toBottom, show(list) { entry = build(list); }, switching(state) { change = state; },
@@ -1126,7 +1137,7 @@ for (const provider of ['claude', 'codex']) test(`${provider}: native dictation 
   } finally { globalThis.FileReader = reader; document.activeElement = null; view.done(); }
 });
 
-test('native dictation follows composer availability and discards stale recordings and delayed results across switches and session replacement', async t => {
+test('native dictation stays registered through a temporary input block and discards results from a replaced session', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
   try {
@@ -1136,9 +1147,11 @@ test('native dictation follows composer availability and discards stale recordin
     const previous = view.voice(); previous.insert('held'); view.tree();
     view.handoff.locked = true; view.tree();
     assert.equal(view.voiceButton().disabled, true); assert.equal(view.voice().options.available(), false);
+    assert.equal(view.voice(), previous);
     view.handoff.locked = false; view.tree();
-    previous.insert('STALE'); view.tree(); t.mock.timers.tick(500); await settle();
-    assert.equal(view.box().props.value, 'held'); assert.deepEqual(sends, []);
+    assert.equal(view.voice(), previous);
+    previous.insert('resumed'); view.tree(); t.mock.timers.tick(500); await settle();
+    assert.equal(view.box().props.value, 'resumed'); assert.deepEqual(sends, []);
     const oldSession = view.voice(), other = stream({ runtimeSessionId: 'replacement' });
     view.show([other('session.state', { state: 'idle' })]); view.tree();
     oldSession.insert('OLD_SESSION'); view.tree();
@@ -1146,6 +1159,19 @@ test('native dictation follows composer availability and discards stale recordin
     view.show([other('session.state', { state: 'closed' })]); view.tree();
     assert.equal(view.voiceButton().disabled, true); assert.equal(view.voice().options.available(), false);
     t.mock.timers.tick(500); await settle(); assert.deepEqual(sends, []);
+  } finally { document.activeElement = null; view.done(); }
+});
+
+test('an autofocus native composer gets focus when a temporary input lock is lifted', () => {
+  const view = sessionView(idle, {}, { autoFocus: true });
+  try {
+    view.handoff.locked = true;
+    const box = voiceBox(view);
+    document.activeElement = null;
+    assert.equal(view.box().props.disabled, true);
+    view.handoff.locked = false;
+    assert.equal(view.box().props.disabled, false);
+    assert.equal(document.activeElement, box);
   } finally { document.activeElement = null; view.done(); }
 });
 

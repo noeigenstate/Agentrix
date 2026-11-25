@@ -1,4 +1,4 @@
-import type { ScreenAgent, ScreenChoice, ScreenOption, ScreenQuestion } from './agent-screen-types.ts';
+import type { ScreenAgent, ScreenChoice, ScreenOption, ScreenQuestion } from './types.ts';
 
 // Questions an agent asks with options, read from the text it drew (see tests/fixtures/screens/*-question*.txt).
 // Only a question still waiting is recognised: its key hint (or Claude's review options) must close the screen.
