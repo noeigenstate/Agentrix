@@ -516,7 +516,7 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
   assert.equal(open.props.type, 'button');
   assert.equal(open.props['aria-expanded'], undefined);
   assert.equal(unavailable.type, 'div');
-  assert.equal(unavailable.props.title, '没有可打开的工作会话');
+  assert.equal(unavailable.props.title, '没有可打开的工作会话\nGPT-6.1-Sol · max · 快速');
   assert.equal(unavailable.props.onClick, undefined);
   const html = renderToStaticMarkup(rows[0]);
   assert.match(html, /data-state="awaiting" role="img" aria-label="等待你确认"/);

@@ -127,25 +127,31 @@ function callsMarkup(calls, language = 'zh', terminalId = 'placeholder') {
   return renderToStaticMarkup(React.createElement(CallsCard, { calls, terminalId }));
 }
 
-function groupedCallsMarkup(items, language = 'en') {
+function groupedCallsMarkup(items, language = 'en', otherCalls = []) {
   const team = require('./fixtures/team-seats.json');
   const info = { ...team, catalog: [{ model: 'opus', label: 'Opus (follows latest)' }] };
   const { CallsCard, AgentTabScope } = compileFile(path.join(__dirname, '../src/features/agents/AgentCalls.tsx'), language, {
     useState: initial => React.useState(initial && typeof initial === 'object' ? { t1: info } : initial),
   });
-  const call = { agent: 'Claude Code', model: 'opus', effort: 'high', fast: false, items };
-  const terminal = { id: 't1', agentUsage: { calls: [call] } };
+  const calls = [{ agent: 'Claude Code', model: 'opus', effort: 'high', fast: false, items }, ...otherCalls];
+  const terminal = { id: 't1', agentUsage: { calls } };
   return renderToStaticMarkup(React.createElement(AgentTabScope.Provider, { value: 'p1' },
-    React.createElement(CallsCard, { calls: [call], terminalId: 't1', terminals: [terminal] })));
+    React.createElement(CallsCard, { calls, terminalId: 't1', terminals: [terminal] })));
 }
 
-test('a grouped Agent tab row keeps the specialty and model label beneath the role heading', () => {
+test('a role heading lists each model setting once while its rows retain their own specialties', () => {
+  const item = { state: 'running', seat: 'developer', seatSource: 'declared' };
   const html = groupedCallsMarkup([
-    { id: 'one', state: 'running', seat: 'developer', seatSource: 'declared', specialty: 'backend', title: 'Build parser' },
-  ]);
-  assert.match(html, /<h4>Developer<\/h4>/);
+    { ...item, id: 'one', specialty: 'backend', title: 'Build parser' },
+    { ...item, id: 'two', specialty: 'frontend', title: 'Build UI' },
+  ], 'en', [{ agent: 'Codex', model: 'gpt-6.2-sol', effort: 'medium', fast: true, items: [{ ...item, id: 'three', title: 'Build fixture' }] }]);
+  const heading = /<h4 class="agent-team-heading"><span>Developer<\/span><span class="agent-team-model"[^>]*>([^<]+)<\/span><\/h4>/.exec(html);
+  assert.ok(heading);
+  assert.deepEqual(heading[1].split(' / ').sort(), ['GPT-6.2-Sol · medium · Fast', 'Opus · high · Standard']);
   assert.equal((html.match(/Developer/g) ?? []).length, 1);
-  assert.match(html, /<b>Backend<\/b><span>Opus · high/);
+  assert.equal((html.match(/class="agent-team-model"/g) ?? []).length, 1);
+  assert.match(html, /<b>Backend<\/b>/);
+  assert.match(html, /<b>Frontend<\/b>/);
 });
 
 test('grouped call rows lead with a labelled status icon and show only actionable routing notes', () => {
@@ -161,24 +167,30 @@ test('grouped call rows lead with a labelled status icon and show only actionabl
     ['preparing', 'Circle', '准备中', { state: 'preparing' }],
     ['reviewing', 'Record', '审核中', { state: 'reviewing', endedAt, declared: { model: 'opus' } }],
   ];
-  const items = cases.map(([id, , , state]) => ({ id, title: `Task ${id}`, seat: 'developer', startedAt: endedAt - 65000, ...state }));
+  const items = cases.map(([id, , , state]) => ({ id, title: `Task ${id}`, seat: 'developer', seatSource: 'declared', startedAt: endedAt - 65000, ...state }));
   toggleFinished('t1');
   try {
     for (const language of ['zh', 'en']) {
       const html = groupedCallsMarkup(items, language);
-      const rows = [...html.matchAll(/<li class="agent-team-call">(.*?)<\/li>/g)].map(match => match[1]);
+      const rows = [...html.matchAll(/<li class="agent-team-call">(.*?)<\/li>/gs)].map(match => match[1]);
       assert.equal(rows.length, cases.length);
       for (const [state, icon, key] of cases) {
         const word = language === 'en' ? en[key] : key;
-        const row = rows.find(markup => markup.includes(`<strong>Task ${state}</strong>`));
+        const subject = `<span class="agent-team-title">Task ${state}</span>`;
+        const row = rows.find(markup => markup.includes(subject));
+        assert.ok(row);
         assert.ok(row.includes(`data-state="${state}" role="img" aria-label="${word}" title="${word}"`));
-        assert.ok(row.includes(`data-icon="${icon}"></svg></span><strong>Task ${state}</strong><time>`));
+        assert.ok(row.includes(`data-icon="${icon}"></svg></span>${subject}<time>`));
         assert.ok(!row.includes(`>${word}<`), `${word} appears in the label and tooltip only`);
       }
       const [running, awaiting, failed, stopped] = ['running', 'awaiting', 'failed', 'stopped'].map(state => rows.find(row => row.includes(`data-state="${state}"`)));
-      assert.match(running, /<span class="agent-team-line"><span class="agent-team-worktree" title="[^"]+">[^<]+<\/span><\/span>/);
-      assert.ok(running.includes(`title="${worktree}">${worktree}</span>`));
-      assert.equal((awaiting.match(/class="agent-team-line"/g) ?? []).length, 1, 'no empty metadata line or premature routing note');
+      assert.ok(running.includes(`\n${worktree}"><span class="agent-team-subject">`));
+      assert.equal(running.split(worktree).length, 2, 'the path appears only in the tooltip');
+      assert.doesNotMatch(awaiting, /agent-team-line/, 'no empty metadata line or premature routing note');
+      const done = rows.find(row => row.includes('data-state="done"'));
+      const seat = language === 'en' ? 'Developer' : '开发';
+      const mode = language === 'en' ? en['普通'] : '普通';
+      assert.ok(done.includes(`<b>${seat}</b><span class="agent-team-model" title="Opus · high · ${mode}">Opus · high · ${mode}</span>`));
       assert.match(failed, /data-routing-verdict="mismatch"/);
       assert.match(stopped, /data-routing-verdict="unknown"/);
       assert.match(stopped, /<time>1:05<\/time>/);
