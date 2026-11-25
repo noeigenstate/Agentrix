@@ -50,6 +50,22 @@ const until = async (check, label) => {
   while (!check()) { if (Date.now() > deadline) throw new Error(`Timed out: ${label}`); await new Promise(resolve => setTimeout(resolve, 30)); }
 };
 
+test('plain replies ignore saved scheduling options and refuse new changes', t => {
+  const id = 'builtin:plain-reply';
+  const { store } = fixture(t, ({ dataDir, builtinDir }) => {
+    const shipped = fs.readFileSync(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), 'utf8');
+    put(path.join(builtinDir, 'plain-reply', 'SKILL.md'), shipped);
+    put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: { enabled: false, trigger: 'first-open', firstOpenRun: true } }));
+  });
+  const { enabled, trigger, firstOpenRun, optionsLocked, hiddenInSettings } = store.list().find(skill => skill.id === id);
+  assert.deepEqual([enabled, trigger, firstOpenRun, optionsLocked, hiddenInSettings], [true, 'always', false, true, undefined]);
+  const saved = fs.readFileSync(store.optionsFile, 'utf8');
+  for (const patch of [{ enabled: false }, { trigger: 'auto' }, { firstOpenRun: true }]) {
+    assert.throws(() => store.setOptions(id, patch), /只读/);
+  }
+  assert.equal(fs.readFileSync(store.optionsFile, 'utf8'), saved);
+});
+
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
   assert.deepEqual(Object.keys(builtin).sort(), [

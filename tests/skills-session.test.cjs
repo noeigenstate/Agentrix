@@ -61,6 +61,22 @@ test('startup/resume deduplicate CLI session plus content fingerprint, compact/c
   assert.equal(sessionContext({ session_id: 'cli-session', source: 'unexpected' }, changed), null);
 });
 
+test('local Claude and Codex launches receive plain replies before every task in later sessions too', async t => {
+  const f = await fixture(t), folder = path.join(f.store.builtinDir, 'plain-reply');
+  fs.mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, 'SKILL.md');
+  fs.copyFileSync(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), file);
+  f.store.list();
+  const instruction = `Before any task, read and follow ${file.replace(/\\/g, '/')}`;
+  const first = sessionContext({ session_id: 'first-claude', source: 'startup' }, f.note('first-claude'));
+  assert.ok(first.hookSpecificOutput.additionalContext.includes(`${instruction}; this is its first run in this project.`));
+  const later = sessionContext({ session_id: 'later-claude', source: 'startup' }, f.note('later-claude'));
+  assert.ok(later.hookSpecificOutput.additionalContext.includes(`${instruction}.`));
+  const codex = f.store.delivery(f.project, false, 'codex', { agent: 'codex', started: true });
+  assert.ok(fs.readFileSync(codex.manifest, 'utf8').includes(`${instruction}.`));
+  assert.ok(startupNote('Read.', null, null, codex).includes(`${instruction}.`));
+});
+
 test('routing note is optional, current on a new delivery and included in bounded SSH manifests', async t => {
   let routing = '';
   const f = await fixture(t, () => routing), before = f.delivery('lead');
@@ -256,8 +272,8 @@ test('routing discards first-run claims while other built-ins keep them through 
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-')));
   const project = { id: 'project', path: path.join(root, 'project'), name: 'Long-running project' };
   const workspaceFile = path.join(root, 'workspace.json'), skillsFile = path.join(root, 'skills.json');
-  const code = 'builtin:code-standard', ui = 'builtin:ui-standard', routing = 'builtin:model-routing';
-  const claims = { [code]: { [project.id]: 'old-code-launch' }, [ui]: { [project.id]: 'old-ui-launch' } };
+  const code = 'builtin:code-standard', ui = 'builtin:ui-standard', reply = 'builtin:plain-reply', routing = 'builtin:model-routing';
+  const claims = { [code]: { [project.id]: 'old-code-launch' }, [ui]: { [project.id]: 'old-ui-launch' }, [reply]: { [project.id]: 'old-reply-launch' } };
   const visual = { model: 'opus', effort: 'high' };
   const seats = { global: { lookup: { model: 'haiku', effort: 'high' } }, projects: { [project.id]: { visual } } };
   const migratedRoles = { designer: visual, qa: visual, researcher: seats.global.lookup };
@@ -266,6 +282,7 @@ test('routing discards first-run claims while other built-ins keep them through 
   fs.writeFileSync(skillsFile, JSON.stringify({
     [code]: { firstOpenedProjects: claims[code] },
     [ui]: { trigger: 'first-open', firstOpenedProjects: claims[ui] },
+    [reply]: { firstOpenedProjects: claims[reply] },
     [routing]: { enabled: false, trigger: 'auto', firstOpenRun: true, firstOpenedProjects: { [project.id]: 'old-routing-launch' }, seats },
   }));
 
@@ -314,7 +331,7 @@ test('routing discards first-run claims while other built-ins keep them through 
       assert.doesNotMatch(startupNote('Read.', null, null, preview), /this is its first run in this project/);
       store.endSession(current.id, `${launchId}-shell`);
       const launch = store.delivery(current, false, launchId, { agent: 'claude', started: true });
-      for (const id of [code, ui]) assert.equal(launch.skills.find(skill => skill.id === id).firstRun, false, id);
+      for (const id of [code, ui, reply]) assert.equal(launch.skills.find(skill => skill.id === id).firstRun, false, id);
       assert.equal(launch.skills.some(skill => skill.id === routing), false, 'native mode sends no routing, so it claims no first run');
       const note = startupNote('Read.', null, null, launch);
       assert.doesNotMatch(note, /this is its first run in this project/);

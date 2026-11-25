@@ -174,6 +174,22 @@ test('a built-in skill is read-only: no edit or delete, a trigger, its dependenc
   assert.equal(h.nodes().some(node => node.props.className?.includes('skills-dot is-hollow')), false);
 });
 
+test('plain replies show a fixed, enabled schedule in skill settings', async t => {
+  const required = builtin({ id: 'builtin:plain-reply', name: 'plain-reply', title: '大白话回复',
+    when: '每个会话的每个任务开始前生效。', trigger: 'always', optionsLocked: true, firstOpenRun: false, requires: null });
+  const h = mount(t, [required, builtin()]);
+  await h.settle();
+  assert.ok(h.items().includes('大白话回复'));
+  h.one(node => node.props['data-skill-id'] === required.id).props.onClick();
+  await h.settle();
+  const enabled = h.byLabel('启用 大白话回复'), trigger = h.byLabel('触发'), firstOpen = h.byLabel('首次打开项目时先运行一次');
+  assert.deepEqual([enabled.props.checked, enabled.props.disabled], [true, true]);
+  assert.deepEqual([trigger.props.value, trigger.props.disabled], ['always', true]);
+  assert.deepEqual([firstOpen.props.checked, firstOpen.props.disabled], [false, true]);
+  assert.equal(h.text(h.one(node => node.props['data-skill-when'])), required.when);
+  assert.ok(h.page().includes('系统强制，对所有项目生效'));
+});
+
 test('a built-in skill needing no agents shows no dependency', async t => {
   const h = mount(t, [builtin(), release]);
   await h.settle();

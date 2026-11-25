@@ -64,9 +64,10 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
     <div className="skills-title" data-skill-extends={skill.extends ?? undefined}><b>{title}<em>{mine ? `v${skill.version}` : `v${skill.version} · ${t('随应用更新')}`}</em>{tag && <span className="skills-tag">{tag}</span>}</b>
       <span className="skills-title-tools">
         {mine && <button type="button" className="button" data-skill-edit onClick={actions.onEdit}><PencilSimple size={16} />{t('编辑')}</button>}
-        <Switch label={t('启用 {name}', { name: title })} checked={skill.enabled} onChange={enabled => actions.onOptions({ enabled })} />
+        <Switch label={t('启用 {name}', { name: title })} checked={skill.enabled} disabled={skill.optionsLocked} onChange={enabled => actions.onOptions({ enabled })} />
       </span></div>
     <p className="skills-desc skills-summary" title={summary}>{summary}</p>
+    {skill.optionsLocked && <p className="skills-desc">{t('系统强制，对所有项目生效')}</p>}
     {skill.createdByAgent && <p className="skills-desc"><span className="skills-new-note">{t('新 · 由 Agent 创建，看一眼再决定留不留。')}</span>
       <button type="button" className="text-button" data-skill-keep onClick={() => actions.onResolve(true)}>{t('确认保留')}</button></p>}
     <dl className="skills-facts">
@@ -75,10 +76,11 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
         <button type="button" className="text-button" data-skill-accept onClick={() => actions.onResolve(true)}>{t('采用')}</button>
         <button type="button" className="text-button" data-skill-discard onClick={() => actions.onResolve(false)}>{t('放弃')}</button></dd></div>}
       <div className={mine ? 'skills-trigger-row skills-facts-pair' : 'skills-trigger-row'}>
-        <div className="skills-pair"><dt>{t('触发')}</dt><dd><Select label={t('触发')} className="skills-trigger" value={skill.trigger} onChange={value => actions.onOptions({ trigger: value as SkillInfo['trigger'] })}
+        <div className="skills-pair"><dt>{t('触发')}</dt><dd><Select label={t('触发')} className="skills-trigger" value={skill.trigger} disabled={skill.optionsLocked}
+          onChange={value => actions.onOptions({ trigger: value as SkillInfo['trigger'] })}
           options={[{ value: 'always', label: t('每个任务') }, { value: 'auto', label: t('相关任务') }]} /></dd></div>
         {mine && <div className="skills-pair"><dt>{t('范围')}</dt><dd><Select label={t('范围')} className="skills-scope" value={skill.scope === 'project' && skill.projectId ? skill.projectId : 'global'} options={scopes} onChange={actions.onScope} /></dd></div>}
-        <dd className="skills-when" data-skill-when>{skillWhen(skill)}</dd>
+        <dd className="skills-when" data-skill-when>{skill.optionsLocked ? t(skill.when) : skillWhen(skill)}</dd>
       </div>
       <div><dt>{t('首次打开项目时先运行一次')}</dt>
         <dd><Switch label={t('首次打开项目时先运行一次')} checked={!!skill.firstOpenRun} disabled={skill.trigger === 'always'}

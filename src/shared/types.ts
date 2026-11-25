@@ -222,6 +222,7 @@ export type SkillInfo = {
   projectId: string | null; projectName: string | null; path: string;
   enabled: boolean; trigger: 'always' | 'auto'; firstOpenRun: boolean; autoOptimize: boolean; confirmChanges: boolean;
   hiddenInSettings?: true;
+  optionsLocked?: true;
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
   // updatedIn and lastUsed.project are project NAMES (for display), never ids.
   version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;

@@ -21,6 +21,7 @@ const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 const liveSessionSnapshots = new Map();
 
 const ROUTING_ID = 'builtin:model-routing';
+const PLAIN_REPLY_ID = 'builtin:plain-reply';
 const defaults = entry => ({ enabled: true,
   trigger: entry.id === ROUTING_ID ? 'always' : entry.source === 'builtin' ? entry.trigger : 'auto', firstOpenRun: false,
   autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
@@ -283,7 +284,8 @@ class SkillsStore {
   pendingText(entry) { try { return readText(this.pendingPath(entry)); } catch (error) { this.report(error); return null; } }
 
   info(entry) {
-    const latest = this.history.latest(entry.id), options = { ...defaults(entry), ...this.options[entry.id] };
+    const latest = this.history.latest(entry.id), optionsLocked = entry.id === PLAIN_REPLY_ID;
+    const options = { ...defaults(entry), ...this.options[entry.id], ...(optionsLocked && { enabled: true, trigger: 'always', firstOpenRun: false }) };
     const agents = this.getAgents(), required = entry.source === 'builtin' ? entry.requires : 'none';
     const lastUsed = options.lastUsed && { at: options.lastUsed.at, project: this.projectName(options.lastUsedProjectId || options.lastUsed.project, options.lastUsed.project), agent: options.lastUsed.agent };
     return { id: entry.id, name: entry.name, description: entry.description, title: entry.source === 'builtin' ? entry.title : entry.name,
@@ -294,6 +296,7 @@ class SkillsStore {
       projectId: entry.projectId, projectName: this.projectName(entry.projectId), path: entry.path,
       enabled: options.enabled, trigger: options.trigger, firstOpenRun: options.firstOpenRun === true,
       ...(entry.id === ROUTING_ID && { hiddenInSettings: true }),
+      ...(optionsLocked && { optionsLocked: true }),
       autoOptimize: entry.source !== 'builtin' && options.autoOptimize,
       confirmChanges: entry.source !== 'builtin' && options.confirmChanges,
       version: latest?.version || 0, updatedAt: latest?.at || null, updatedBy: latest?.by || null, updatedIn: this.projectName(latest?.projectId || latest?.project, latest?.project || null),
@@ -378,7 +381,7 @@ class SkillsStore {
   setOptions(id, patch) {
     this.refresh();
     const entry = this.entry(id);
-    if (id === ROUTING_ID) throw new Error('系统自带技能为只读。');
+    if (id === ROUTING_ID || id === PLAIN_REPLY_ID) throw new Error('系统自带技能为只读。');
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('技能选项无效。');
     for (const [key, value] of Object.entries(patch)) {
       if (key === 'trigger' ? value !== 'first-open' && !TRIGGERS.includes(value)
@@ -809,9 +812,10 @@ class SkillsStore {
     let { skills } = delivery;
     let bundle = null;
     if (remote) {
-      const files = [], included = [], enabled = skills.filter(skill => skill.enabled);
+      const files = [], included = [];
+      const enabled = skills.filter(skill => skill.enabled).sort((a, b) => Number(!!b.optionsLocked) - Number(!!a.optionsLocked));
       const skippedNote = count => count ? `${count} enabled skills were omitted to keep the SSH bundle within its size limit.` : '';
-      // Measure escaped JSON, including the manifest and omission notice, with ample room for the open envelope.
+      // Pack required skills first and measure escaped JSON, including the manifest and omission notice.
       for (const skill of enabled) {
         if (skill.extends && !included.some(base => base.source === 'builtin' && base.name === skill.extends)) continue;
         const entry = this.entries.get(skill.id), file = { id: entry.id, name: entry.folder, scope: entry.scope, text: delivery.rendered[skill.id]?.text ?? entry.text };
@@ -819,6 +823,7 @@ class SkillsStore {
         if (Buffer.byteLength(JSON.stringify({ files: [...files, file], instructions: skillInstructions(candidate), key: '0'.repeat(64) })) > MAX_SSH_BUNDLE_BYTES) continue;
         files.push(file); included.push(skill);
       }
+      if (enabled.some(skill => skill.optionsLocked && !included.includes(skill))) throw new Error('Required skills exceed the SSH bundle size limit.');
       skills = included;
       Object.assign(delivery, { skills, skippedNote: skippedNote(enabled.length - included.length) });
       bundle = { files, instructions: skillInstructions(delivery) };

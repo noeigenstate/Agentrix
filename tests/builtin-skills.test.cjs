@@ -459,6 +459,25 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} skills omitted 
   assert.doesNotMatch(start(store, projects[2], 'later').bundle.instructions, /this is its first run/);
 });
 
+test('plain replies keep their place when an earlier built-in would fill the SSH bundle', t => {
+  const { builtinDir, store, projects } = fixture(t, ({ builtinDir }) => {
+    put(path.join(builtinDir, 'a-large', 'SKILL.md'), builtin('a-large') + 'x'.repeat(510 * 1024));
+  });
+  const project = projects[2];
+  assert.ok(store.delivery(project, true).bundle.files.some(file => file.name === 'a-large'));
+  const shipped = fs.readFileSync(path.join(resources, 'plain-reply/SKILL.md'), 'utf8');
+  put(path.join(builtinDir, 'plain-reply', 'SKILL.md'), shipped);
+  store.list();
+  for (const agent of ['claude', 'codex']) {
+    const { bundle } = start(store, project, agent, agent);
+    assert.equal(bundle.files[0].name, 'plain-reply');
+    assert.equal(bundle.files[0].text, shipped);
+    assert.ok(!bundle.files.some(file => file.name === 'a-large'));
+    assert.match(bundle.instructions, /Before any task, read and follow \{AGENTRIX_SKILLS\}\/builtin\/plain-reply\/SKILL\.md/);
+    assert.match(bundle.instructions, /1 enabled skills were omitted/);
+  }
+});
+
 for (const trigger of ['always', 'first-open']) test(`simultaneous launches claim ${trigger} first run once and the production launch boundary separates agents in one shell`, async t => {
   const { store, projects, root } = fixture(t, dirs => firstRunSkill(dirs, trigger));
   const project = projects[0], id = 'builtin:code-standard';
