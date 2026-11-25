@@ -1,0 +1,9 @@
+{
+  "electron/features/skills/agent-seat.cjs": 2,
+  "electron/features/skills/delivery-cleanup.cjs": 1,
+  "electron/features/skills/model-catalog.cjs": 5,
+  "electron/features/skills/model-seats.cjs": 7,
+  "electron/features/skills/skill-render.cjs": 2,
+  "electron/features/skills/store.cjs": 8,
+  "electron/features/skills/team-roles.cjs": 2
+}

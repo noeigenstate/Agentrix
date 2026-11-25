@@ -1,0 +1,3 @@
+{
+  "electron/features/dashboard/preload.cjs :: tests/dashboard-window.test.cjs :: source-execution": 1
+}

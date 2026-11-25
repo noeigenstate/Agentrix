@@ -4,6 +4,10 @@ How a terminal's CLI reports to main: the Claude Code hook events (over HTTP to 
 
 Agent and Task have separate synchronous command hooks for seat routing in both local channels.
 The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook checks the private sidecar for accepted worker seats.
+The structured migration uses the shared wire fields for shell and command-hook events and versioned bootstrap files.
+Lead seat and mode sidecars use key=value. The 1.6.4 writer also retains the legacy sidecars.
+An unsupported seat sidecar version produces one diagnostic and allows the shell to launch without applying that seat.
+The cross-language file format and the reader baseline are checked by `tests/wire-format.test.cjs` and `tests/self-format-guard.test.cjs`.
 
 ## Owns
 - `electron/features/terminal-events/**`
@@ -28,6 +32,7 @@ The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)
 - `electron/features/agents/call-seat.cjs` (shared worker seat byte limit)
 - `electron/features/cli-adapters/registry.cjs` (the terminal's message-note delivery)
+- `electron/features/agents/dispatch-events.cjs` (session bootstrap and shell event formats)
 
 ## Invariants
 - A failed optional seat write keeps the bootstrap usable — test: `tests/seat-auto.test.cjs` › "a failed dispatch seat snapshot write leaves the required bootstrap usable"

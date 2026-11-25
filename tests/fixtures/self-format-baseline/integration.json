@@ -1,0 +1,12 @@
+{
+  "electron/features/agents/dispatch-control.cjs :: tests/dispatch-control.test.cjs :: source-execution": 1,
+  "integration/dispatch.cjs :: dispatch-text": 5,
+  "integration/dispatch.cjs :: heading-text": 1,
+  "integration/dispatch.cjs :: tests/dispatch-detach.test.cjs :: source-execution": 1,
+  "integration/dispatch.cjs :: tests/dispatch-team.test.cjs :: source-regex": 1,
+  "integration/dispatch.cjs :: tests/dispatch.test.cjs :: source-execution": 1,
+  "integration/dispatch.cjs :: tests/lab-engine.test.cjs :: source-regex": 4,
+  "integration/dispatch.cjs :: tests/lab-env.test.cjs :: source-regex": 2,
+  "integration/role-tools.cjs :: dispatch-text": 7,
+  "integration/role-tools.cjs :: whole-word": 1
+}

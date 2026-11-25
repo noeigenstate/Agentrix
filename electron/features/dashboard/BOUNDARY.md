@@ -2,6 +2,8 @@
 
 Keeps private evaluation records, summarizes local model and collaboration evidence, and owns the dashboard window and owner-adopted routing weights. Incidents, findings and roundtable issues from historical Team journals stay available in reports.
 Successful in-scope runs with a permission note remain eligible for first pass and model scoring under the usual review rules.
+The journal migration uses the shared versioned envelope and continues to read historical v0 records.
+Journal reader checks are in `tests/wire-format.test.cjs` and `tests/self-format-guard.test.cjs`.
 
 ## Owns
 - `electron/features/dashboard/**` — bounded records and decisions, cost and summary functions, journal readers, suggestions, window, IPC and dedicated preload
@@ -23,6 +25,7 @@ Successful in-scope runs with a permission note remain eligible for first pass a
 - `electron/i18n.cjs`
 - `electron/shared/ipc.cjs`
 - `electron/features/cli-adapters/registry.cjs` (session identity and quota scope)
+- `electron/features/agents/dispatch-events.cjs` (journal envelopes)
 
 ## Invariants
 - App records contain only the declared metadata fields, with the owner's sent-back note as the local text field — conversations, credentials and scope filenames do not belong in evaluation data — test: `tests/dashboard-records.test.cjs` › "run and grade hooks retain only local evaluation metadata"

@@ -1,0 +1,5 @@
+{
+  "electron/features/terminal/ipc.cjs": 4,
+  "electron/features/terminal/lead-fast-settings.cjs": 1,
+  "electron/features/terminal/switch-host.cjs": 4
+}

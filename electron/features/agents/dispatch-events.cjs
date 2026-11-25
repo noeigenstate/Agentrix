@@ -150,4 +150,184 @@ function acceptDispatch(session, event, calls, observeAccount, admissionKey = se
   return calls?.dispatch(['dispatch-declared', 'dispatch-start'].includes(event.type) ? { ...event, planner } : event) || false;
 }
 
-module.exports = { REFUSAL_LIMIT, validRefusal, validRefusals, acceptDispatch, validDispatch, validSeat, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame };
+const fields = (required, optional = '') => Object.freeze({
+  required: Object.freeze(required.split(' ')),
+  optional: Object.freeze(optional ? optional.split(' ') : []),
+});
+const dispatchFields = (required = '', optional) => fields(`v type id at${required && ' ' + required}`, optional);
+const shellFields = optional => fields('v type projectId sessionKey sequence', `sentAt ${optional}`);
+const fileFields = (required = '', optional, version = 1) => Object.freeze({ ...fields(`format version${required && ' ' + required}`, optional), version });
+
+// Field names for the unsigned channels. Signed frames retain their own admission and version checks above.
+const WIRE_FIELDS = Object.freeze({
+  dispatch: Object.freeze({
+    'dispatch.started': dispatchFields('agent model effort fast routing pid session', 'fallback'),
+    'dispatch.waiting': dispatchFields('kind message', 'menu'),
+    'dispatch.start-failed': dispatchFields('code message'),
+    'dispatch.ended': dispatchFields('agent model effort fast exitCode reason rate scope refused needsDecision result routing',
+      'skillProposals skillChangesLeftLive interventions stops treeStopFailure warnings fallback'),
+    'dispatch.running': dispatchFields('seconds lastActivityAt', 'waiting'),
+    'dispatch.unknown-run': dispatchFields(),
+    'dispatch.detached': dispatchFields(),
+    'dispatch.intervention': dispatchFields('messageId status', 'reason'),
+    'dispatch.transport': dispatchFields('path reason'),
+    'dispatch.request': dispatchFields('requestId resolution'),
+    'dispatch.resume': dispatchFields('state message'),
+    'dispatch.notice': dispatchFields('code', 'detail'),
+    'dispatch.failed': dispatchFields('message'),
+  }),
+  shell: Object.freeze({
+    'shell-ready': shellFields('codexAvailable claudeAvailable codexHome cwd agent exitCode'),
+    'shell-prompt': shellFields('codexAvailable claudeAvailable codexHome cwd agent exitCode'),
+    'agent-started': shellFields('agent exitCode codexAvailable claudeAvailable codexHome cwd command accountLaunch args'),
+    'agent-exited': shellFields('agent exitCode codexAvailable claudeAvailable codexHome cwd command'),
+    'hook-channel': shellFields('agent exitCode codexAvailable claudeAvailable codexHome cwd command'),
+  }),
+  hook: Object.freeze({
+    'agent-activity': fields('v type projectId sessionKey agent state sessionId eventId',
+      'message sentAt hookEvent sessionSource menuTool turnId requestId promptId transcriptPath prompt agentId agentType'),
+    'claude-seat-input': fields('v type projectId sessionKey toolUseId model effort phase', 'sessionId expected cwd sentAt sequence'),
+    'turn-complete': fields('v type projectId sessionKey eventId threadId turnId', 'cwd sentAt sequence'),
+  }),
+  journal: Object.freeze({
+    end: fields('v type id time agent title session role kind model reason outputTokens totalOutputTokens activeMs',
+      'exitCode at effort fast requested verdict seat source parentId meeting outcome filesChanged outOfScope'),
+    intervention: fields('v type id messageId at time text'),
+    stop: fields('v type id messageId at time', 'reason noResume'),
+    withdrawn: fields('v type id messageId at time'),
+    'control-receipt': fields('v type id messageId status at time', 'reason'),
+    'dispatch-input': fields('v type id sessionId entryId inputId origin ownerMessageIds at time'),
+    // Historical dashboard and Lab rows can carry either time or at.
+    meeting: fields('v type', 'id time at meeting agent session title status confirmation'),
+    skip: fields('v type id reason', 'time at meeting'),
+    consolidate: fields('v type', 'id time at meeting'),
+    incident: fields('v type', 'id time at meeting model kind cause fix lead weight'),
+    finding: fields('v type', 'id time at meeting author category title fixed'),
+    issues: fields('v type issues', 'id time at meeting'),
+  }),
+  inbox: Object.freeze({
+    // In 1.6.4 the intervention row has no type; 1.6.5 writes the explicit type.
+    intervention: fields('v id at text', 'type'),
+    stop: fields('v type id at', 'reason noResume'),
+    withdrawn: fields('v type id at'),
+  }),
+  memory: Object.freeze({ 'memory.entry': fields('v type at title text', 'runId source') }),
+  launch: Object.freeze({ 'launch.words': fields('v type unset env argv') }),
+  files: Object.freeze({
+    'agentrix.detached-run': fileFields('id argv source cwd out createdAt',
+      'roleFallback roleArtifacts helperPid helperStartedAt lease admitted activityAt startedAt confirmedAt endedAt settled exitCode ownerWait ownerWaitSequence menu refused routing needsDecision'
+      + ' started waiting startFailed ended startedLine waitingLine failedLine endedLine', 2),
+    'agentrix.bootstrap': fileFields('projectId projectPath sessionKey pipeName', 'controlAddress controlCapability shims nodePath claudeEnvFile'),
+    'agentrix.background-policy': fileFields('claudeBackgroundTasks'),
+    'agentrix.seat-map': fileFields('seats'),
+    'agentrix.terminal-wire': fileFields('words claude'),
+    'agentrix.board-entry': fileFields('id pid title role agent model cwd allow startedAt', 'session'),
+    'agentrix.role-result': fileFields('runId source answer needsDecision needsApproval findings calls at', 'skillProposals verification'),
+    'agentrix.lead-seat': fileFields('model effort fast ultracode seats'),
+    'agentrix.session-mode': fileFields('mode'),
+    'agentrix.launch-route': fileFields('route'),
+    'agentrix.launch-words': fileFields('', 'unset env arg'),
+  }),
+});
+
+const KEY_VALUE_LIMIT = 16 * 1024;
+const KEY = /^[a-z][a-z0-9_]*$/;
+const VERSION = /^[1-9][0-9]*$/;
+const WIRE_FORMAT = /^agentrix\.[a-z][a-z0-9-]*$/;
+
+function wireError(code, channel, detail) {
+  return Object.assign(new Error(`${channel}: ${detail}`), { code: `wire.${code}` });
+}
+
+function checkVersion(channel, received, version, versions) {
+  if (!Number.isSafeInteger(version) || version < 1 || !versions.includes(version)) {
+    const label = received && typeof received === 'object' ? Object.prototype.toString.call(received)
+      : String(received).slice(0, 80).replace(/[\r\n\0]/g, ' ');
+    throw wireError('unsupported_version', channel, `unsupported version ${label}`);
+  }
+}
+
+// Parsing the envelope leaves payload validation to the channel owner and keeps the original legacy record intact.
+function readEnvelope(input, { format, channel = format ?? 'JSONL', versions = [WIRE_FIELDS.files[format]?.version ?? 1], legacy: allowLegacy = true } = {}) {
+  const value = typeof input === 'string' ? JSON.parse(input) : input;
+  if (!object(value)) throw wireError('invalid', channel, 'expected a JSON object');
+  const key = format ? 'version' : 'v';
+  const legacy = !Object.hasOwn(value, key);
+  if (!legacy || !allowLegacy) checkVersion(channel, legacy ? '0 (missing)' : value[key], legacy ? 0 : value[key], versions);
+  if (format && (!legacy || Object.hasOwn(value, 'format')) && value.format !== format) {
+    throw wireError('invalid', channel, `expected format ${format}`);
+  }
+  return { value, version: legacy ? 0 : value[key], legacy };
+}
+
+function readKeyValue(text, { format, versions = [1] } = {}) {
+  const channel = format ?? 'key=value';
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > KEY_VALUE_LIMIT) {
+    throw wireError('invalid', channel, 'expected UTF-8 text up to 16 KiB');
+  }
+  const lines = text.replace(/^\uFEFF/, '').split('\n'), values = {};
+  if (lines.at(-1) === '') lines.pop();
+  for (const row of lines) {
+    const equals = row.indexOf('='), key = row.slice(0, equals), value = row.slice(equals + 1);
+    if (equals < 1 || !KEY.test(key) || /[\r\0]/.test(value) || Object.hasOwn(values, key)) {
+      throw wireError('invalid', channel, 'invalid or repeated key=value record');
+    }
+    values[key] = value;
+  }
+  if (!WIRE_FORMAT.test(values.format) || (format !== undefined && values.format !== format) || !Object.hasOwn(values, 'version')) {
+    throw wireError('invalid', channel, 'expected format and version');
+  }
+  checkVersion(format ?? values.format, values.version, VERSION.test(values.version) ? Number(values.version) : NaN, versions);
+  return values;
+}
+
+function writeKeyValue(values, { format, versions = [1] } = {}) {
+  const channel = format ?? 'key=value';
+  if (!object(values)) throw wireError('invalid', channel, 'expected key=value fields');
+  const rows = Object.entries(values).map(([key, value]) => {
+    if (!KEY.test(key) || typeof value !== 'string' || /[\r\n\0]/.test(value)) {
+      throw wireError('invalid', channel, 'invalid key=value field');
+    }
+    return `${key}=${value}\n`;
+  });
+  const text = rows.join('');
+  readKeyValue(text, { format, versions });
+  return text;
+}
+
+function readRoleResult(input) {
+  const format = 'agentrix.role-result';
+  const { value } = readEnvelope(input, { format, legacy: false });
+  const { required, optional } = WIRE_FIELDS.files[format];
+  if (required.some(key => !Object.hasOwn(value, key)) || !uuid(value.runId) || typeof value.answer !== 'string'
+    || !['finish-role', 'final-text', 'legacy-heading'].includes(value.source) || !optionalCount(value.calls) || value.calls == null
+    || !number(value.at) || !(value.needsDecision === null || Array.isArray(value.needsDecision))
+    || !Array.isArray(value.needsApproval) || !Array.isArray(value.findings)) {
+    throw wireError('invalid', format, 'invalid role result');
+  }
+  return Object.fromEntries([...required, ...optional].filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+}
+
+function readSessionMode(text) {
+  const format = 'agentrix.session-mode';
+  const { mode } = readKeyValue(text, { format });
+  if (!['native', 'conductor'].includes(mode)) throw wireError('invalid', format, 'invalid mode');
+  return mode;
+}
+
+function readLeadSeat(text) {
+  const format = 'agentrix.lead-seat';
+  const { model, effort, fast, ultracode, seats } = readKeyValue(text, { format });
+  if (!line(model, 160) || model.startsWith('-') || !line(effort, 32) || effort.startsWith('-')
+    || !['0', '1'].includes(fast) || !['0', '1'].includes(ultracode) || seats === undefined) {
+    throw wireError('invalid', format, 'invalid lead seat');
+  }
+  const seatsMap = JSON.parse(seats);
+  if (seatsMap !== null && !object(seatsMap)) throw wireError('invalid', format, 'invalid seat map');
+  return { model, effort, fast: fast === '1', ultracode: ultracode === '1', seatsMap };
+}
+
+module.exports = {
+  REFUSAL_LIMIT, validRefusal, validRefusals, acceptDispatch, validDispatch, validSeat, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame,
+  WIRE_FIELDS, readEnvelope, readKeyValue, writeKeyValue, readRoleResult, readSessionMode, readLeadSeat,
+};

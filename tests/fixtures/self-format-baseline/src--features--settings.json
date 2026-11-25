@@ -1,0 +1,10 @@
+{
+  "src/features/settings/AboutSettings.tsx :: tests/release-notes.test.cjs :: source-regex": 1,
+  "src/features/settings/AgentRuntimeSettings.tsx :: tests/agent-runtime-settings.test.cjs :: source-regex": 4,
+  "src/features/settings/AgentRuntimeSettings.tsx :: tests/u1-polish.test.cjs :: source-regex": 1,
+  "src/features/settings/SettingsDialog.tsx :: tests/agent-runtime-settings.test.cjs :: source-regex": 3,
+  "src/features/settings/agent-runtime-settings.css :: tests/agent-runtime-settings.test.cjs :: source-regex": 2,
+  "src/features/settings/settings.css :: tests/agent-runtime-settings.test.cjs :: source-regex": 6,
+  "src/features/settings/settings.css :: tests/release-notes.test.cjs :: source-regex": 2,
+  "src/features/settings/settings.css :: tests/u1-polish.test.cjs :: source-regex": 2
+}

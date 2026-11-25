@@ -3,6 +3,8 @@
 Runs Virtual Lab experiments on macOS and Windows: takes tasks from its sources (the project's own past changes, and the oss and aa providers behind `sources/contract.cjs`), runs each source as one lane
 and each approach in its own sandboxed workspace through the dispatch helper, grades it by the source's own tests and, when the provider asks, a blind review, and owns the lab window, its IPC and dedicated preload. Unknown measurements stay null.
 Orchestrated briefs launch their workers directly. The phase reports also read historical journal records.
+The dispatch migration takes status from the helper's `--events jsonl` stream. See `tests/wire-format.test.cjs`
+for the event envelope and `tests/self-format-guard.test.cjs` for the remaining text readers.
 
 ## Owns
 - `electron/features/lab/**`
@@ -20,6 +22,7 @@ Orchestrated briefs launch their workers directly. The phase reports also read h
 - `electron/features/dashboard/prices.json`
 - `electron/features/lab-oss/index.cjs`
 - `electron/features/lab-aa/index.cjs`
+- `electron/features/agents/dispatch-events.cjs` (dispatch stdout event envelopes)
 - `src/shared/lab-types.ts`
 
 ## Invariants

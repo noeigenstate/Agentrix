@@ -4,6 +4,8 @@ Reads agent records and account usage for the Activity view, and presents the ag
 Agent or Task routing reports its model alias and effort by tool-use ID at PreToolUse. PostToolUse reconciles the final input.
 The child's own reply or metadata takes precedence. See `tests/seat-auto.test.cjs`.
 An authenticated dispatch end with reason permission shows the refused-work state for review. Dashboard scoring uses the run's execution and review evidence.
+The structured lead-seat migration uses `readLeadSeat(text)` for the new sidecar. The `[seat]` Agent description prefix remains part of the tool contract.
+Reader and source-test counts are covered by `tests/self-format-guard.test.cjs`.
 
 ## Owns
 - `src/features/agents/AgentCalls.tsx` (the called models' list and its rows, with the state words and the rate column)
@@ -37,8 +39,7 @@ An authenticated dispatch end with reason permission shows the refused-work stat
 - `ReadingHistory` (`electron/reading-history.cjs`) — validates restored local transcript identities, prepares the latest page and serves `terminal:conversationPage(id, { key, cursor })` through agents IPC; `beforeCursor` alone indicates earlier history
 
 ## May import
-- `src/features/agents/AgentBrandIcon.ts`
-- `src/features/agents/Metric.tsx` (shared count formatting)
+- `src/features/agents/AgentBrandIcon.ts` and `src/features/agents/Metric.tsx` (shared brand and count components)
 - `src/features/agents/skill-seats.ts` (Agent tab role groups and labels)
 - `src/shared/**`
 - `electron/agent-actions.cjs`
@@ -49,6 +50,7 @@ An authenticated dispatch end with reason permission shows the refused-work stat
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/team/*.cjs` (the team folder and a run's owner inbox)
 - `electron/features/cli-adapters/*.cjs` (display names, usage and portable record facets)
+- `electron/features/agents/dispatch-events.cjs` (versioned lead-seat reader)
 
 ## Invariants
 - Each model is shown from its own records: the main model is its latest reply's (configured only until the first reply), its rows are the user's prompts and its own steps, never another worker's or a prompt's model; a called model's effort and speed are its own recorded values, unknown (null) when absent, never taken from the parent, configuration or dispatch declaration — child user messages carry main-owned sender provenance: dispatch and in-process Agent prompts belong to the observed spawning model, owner intervention IDs alone prove the owner, unknown planner identity stays neutral and message text never classifies origin; replayed source facts and late facts affect presentation only; guessed routing hides which model really ran — test: `tests/activity-route.test.cjs` › "the main model section: the model its latest reply records"; test: `tests/agent-calls.test.cjs` › "Claude Agent calls keep their own effort and leave unrecorded effort and speed unknown"; a dispatched worker's model follows its reports, and until one arrives the row and view show the requested model marked 未确认 (模型未确认 without one), never the internal placeholder — test: `tests/activity-route.test.cjs` › "a dispatched worker that has not reported its model shows the requested one as unconfirmed"

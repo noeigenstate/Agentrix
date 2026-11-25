@@ -3,6 +3,9 @@
 A planner's tool-shell calls to Codex exec and Claude print mode pass through PATH shims. Native mode runs them on the real CLI. Conductor mode directs the planner to the role tools. The owner's shell, scripts and typed commands keep their real CLI path.
 The MCP command carries the lead provider and, for a Claude terminal with a saved lead seat, its launch model and effort.
 
+The structured launch migration uses `agentrix.launch-route` for classify, typed NUL-terminated records for words,
+and `launch.words` JSON for PowerShell. It reads the new session mode through `readSessionMode`.
+
 ## Owns
 - `integration/shims/**`
 
@@ -19,8 +22,10 @@ The MCP command carries the lead provider and, for a Claude terminal with a save
 - `integration/dispatch.cjs` (the helper's public run function and its CLI locators)
 - `electron/features/cli-adapters/registry.mjs` (source manifests)
 - `electron/features/cli-adapters/terminal.cjs` (terminal facets)
+- `electron/features/agents/dispatch-events.cjs` (session mode and launch formats)
 
 ## Invariants
+- Shell and helper format readers stay within the module baseline — test: `tests/self-format-guard.test.cjs` › "product and test text readers match the per-module self-format baseline"
 - Shell delegation runs on the real CLI in native mode and is refused with exit code 2 in conductor mode. Interactive planner conversations get the role tools in both modes — test: `tests/dispatch-intercept.test.cjs` › "native mode runs a delegation on the real CLI and conductor mode refuses it; an interactive lead gets the role tools in both"
 - A planner's call that is not a delegation (codex mcp-server, claude mcp serve, --version, login status) runs the real CLI found outside the shim folder, with inherited streams and its exit status; both locators exclude a folder containing .agentrix-shims, and the helper never launches a bare codex — test: `tests/dispatch-intercept.test.cjs` › "at depth zero a call that is not a delegation runs the real CLI"; test: `tests/codex-runtime-guards.test.cjs` › "the Agentrix shim folder is never a locator candidate, for Claude or Codex"; test: `tests/dispatch.test.cjs` › "no session, timeout and spawn failure print failed-start once and end unconfirmed".
 - A call fails closed as nested, before stdin, lookup or dispatch, when its depth is missing or not zero, when it carries a worker's run identity or proof, or when it has no bootstrap; a worker still runs the CLI's version and help. A Codex planner whose shell_environment_policy is inherit="core" drops AGENTRIX_* but keeps PATH, so its calls are refused as nested by design — test: `tests/dispatch-intercept.test.cjs` › "a call without a planner's depth zero and bootstrap, or with a worker identity, is refused as nested"; test: `tests/dispatch-intercept.test.cjs` › "a worker runs only version and help".

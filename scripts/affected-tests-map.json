@@ -69,6 +69,7 @@
     "tests/release-notes.test.cjs",
     "tests/review-grade.test.cjs",
     "tests/select.test.cjs",
+    "tests/self-format-guard.test.cjs",
     "tests/session-files.test.cjs",
     "tests/ssh-config.test.cjs",
     "tests/state-updates.test.cjs",
@@ -91,6 +92,16 @@
     "tests/workspace-ipc-updates.test.cjs"
   ],
   "tests": {
+    "tests/wire-format.test.cjs": [
+      "integration/BOUNDARY.md",
+      "integration/shims/BOUNDARY.md",
+      "electron/features/agents/BOUNDARY.md",
+      "electron/features/team/BOUNDARY.md",
+      "electron/features/terminal-events/BOUNDARY.md",
+      "electron/features/cli-adapters/BOUNDARY.md",
+      "electron/features/dashboard/BOUNDARY.md",
+      "electron/features/lab/BOUNDARY.md"
+    ],
     "tests/claude-sdk-process-lifecycle.test.cjs": [
       "electron/features/claude-sdk/BOUNDARY.md"
     ],

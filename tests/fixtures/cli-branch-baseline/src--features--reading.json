@@ -1,0 +1,8 @@
+{
+  "src/features/reading/ConversationFeed.tsx": 2,
+  "src/features/reading/ReadingSignIn.tsx": 1,
+  "src/features/reading/ResultCard.tsx": 1,
+  "src/features/reading/Timeline.tsx": 1,
+  "src/features/reading/image-input.ts": 1,
+  "src/features/reading/useNativePictures.ts": 1
+}

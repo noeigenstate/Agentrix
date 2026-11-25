@@ -70,6 +70,16 @@ When a dynamic load changes, review its declared targets and reason in `scripts/
 `node scripts/affected-tests.mjs --repin <repo-relative file>` and `node --test tests/affected-tests.test.cjs`.
 The pin tracks loads, loader calls and the declarations their arguments use. Unresolved dependencies use a normalized whole-file digest.
 
+The S0 wire contract is shared by the later migrations. `readEnvelope(input, {channel, format, versions, legacy})` returns
+`{value, version, legacy}`. Only an omitted version reads as v0, and journal readers retain that path for historical rows.
+`readKeyValue(text, {format, versions})` and `writeKeyValue(fields, {format, versions})` use UTF-8 LF records up to 16 KiB.
+`readRoleResult(input)` reads the file contract. Its source is `finish-role`, `final-text`, or the 1.6.4 transition's `legacy-heading`.
+`readSessionMode(text)` returns the mode and `readLeadSeat(text)` returns `{model, effort, fast, ultracode, seatsMap}`.
+The shell file readers take the new format; the migration owns fallback to the old file when the new file is absent.
+The detached run file uses version 2. The future `--events jsonl` path and the in-process callback use `WIRE_FIELDS.dispatch`.
+The default dispatch output stays human-readable. Skill proposal versions live in `<out>.skill-proposals-<run id>/`.
+The wire contract and its baseline are checked by `tests/wire-format.test.cjs` and `tests/self-format-guard.test.cjs`.
+
 ## Owns
 - `integration/dispatch.cjs`
 - `integration/dispatch-outbox.cjs`
@@ -89,12 +99,12 @@ The pin tracks loads, loader calls and the declarations their arguments use. Unr
 - `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines, and a Codex worker's request lines (opened, unanswered, resolution); events carry kind, the requested model and verified routing, and a model reported after the start follows as dispatch-routing; outputTokens/activeMs are the meter's timed pair and totalOutputTokens is the invocation's cost count; resumed Codex never falls back to stdout totals
 - `createRoleTools` (`integration/role-tools.cjs`) — creates the role tools. The module also exports `serve`, which replies once per MCP request and cancels pending waits when stdin closes.
 - `runtimeFiles` (`integration/dispatch.cjs`) — the electron modules the helper carries; copied by scripts/after-pack.cjs and electron/remote-connection.cjs
-- `acceptDispatch` (`electron/features/agents/dispatch-events.cjs`) — main.cjs hands it every dispatch-* event from a session's event pipe
+- `acceptDispatch` (`electron/features/agents/dispatch-events.cjs`) — receives signed dispatch events. The same file exports readEnvelope, readKeyValue, writeKeyValue and WIRE_FIELDS.
 - `createDispatchIntake` (`electron/features/agents/dispatch-intake.cjs`) — main's intake and per-terminal inbox binding/disposal for a session's dispatch-* events over the app shell's deps; holds the per-project dispatchAccounts, read by dispatchReading and cleared by clearDispatchAccount
 - `dispatchAccount` (`electron/features/agents/dispatch-events.cjs`) — a Codex worker's dispatch-account report (its own app-server's account kind, observation time, account name and merged quota, read afresh for each report, sent only between dispatch-start and dispatch-end; an accepted report makes main send `agents:usage-changed` for the project) rebuilt from known fields as the limits payload an account read gives; acceptDispatch takes it only for a running Codex call and hands it to main's per-project store. The pane's Codex section uses it only when the project has no running Codex session and its own account read named no account, or named the same one; a report past two account intervals reads as stale. The name is made in the helper with main's account key, which the control registration gives only to local runs: without it (no control channel, an SSH run) the report names no account; account identifiers never leave the helper — test: `tests/dispatch-codex-usage.test.cjs` › "a dispatched Codex worker reports its app-server account and quota, and the pane shows them without a native session"
 - `sessionContext` (`electron/features/skills/session.cjs`) — the Claude SessionStart command in agent-event.cjs emits context once per CLI session/fingerprint on startup/resume, always after compact/clear; other hooks remain silent
 - `shellEvent` (`integration/agent-event.cjs`) — a Bash terminal's own reports, as zsh-integration.zsh sends them: shell-ready, shell-prompt, agent-started, agent-exited, and hook-channel (the claude wrapper fell back to command hooks; command names the proxy variable)
-- `skillProposals` (`integration/dispatch.cjs`) — dispatch-end and the end line report the number awaiting the lead; versions live in `<out>.skill-proposals-<run id>/`
+- `readRoleResult` (`electron/features/agents/dispatch-events.cjs`) — reads a versioned result object from JSON text or a parsed value. Also exports readSessionMode and readLeadSeat for shell text.
 
 ## May import
 - `electron/features/agents/token-rate.cjs`

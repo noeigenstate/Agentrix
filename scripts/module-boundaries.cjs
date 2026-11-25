@@ -92,7 +92,7 @@ function checkBoundaries(root = ROOT) {
       if (!fs.readFileSync(full, 'utf8').includes(name)) problems.push(`${boundary.file}: Interface name ${name} is not in ${file}`);
       boundary.interfaceFiles.push(posix(file));
     }
-    boundary.mayImport = boundary.sections['May import'].map(code).filter(Boolean);
+    boundary.mayImport = boundary.sections['May import'].flatMap(entry => [...entry.matchAll(/`([^`]+)`/g)].map(match => match[1]));
     for (const entry of boundary.sections.Invariants) {
       const match = /test:\s*`([^`]+)`\s*›\s*"([^"]+)"/.exec(entry);
       if (!match) { problems.push(`${boundary.file}: each invariant ends with test: \`file\` › "name": ${entry}`); continue; }
@@ -118,7 +118,7 @@ function ownerOf(file, root = ROOT) {
   return checkBoundaries(root).boundaries.find(boundary => matches(boundary.owns || [], relative)) || null;
 }
 
-module.exports = { checkBoundaries, parseBoundary, ownerOf, globRegExp, importsOf, sourceFiles };
+module.exports = { boundaryFiles, checkBoundaries, parseBoundary, ownerOf, globRegExp, importsOf, sourceFiles };
 
 if (require.main === module) {
   const { problems, boundaries } = checkBoundaries();

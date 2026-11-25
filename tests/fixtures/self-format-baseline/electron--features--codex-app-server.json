@@ -1,0 +1,5 @@
+{
+  "electron/features/codex-app-server/index.cjs :: tests/native-ui-backend.test.cjs :: source-execution": 1,
+  "electron/features/codex-app-server/index.cjs :: tests/native-ui-backend.test.cjs :: source-slice": 1,
+  "electron/features/codex-app-server/rpc.cjs :: tests/native-parity-review.test.cjs :: source-execution": 1
+}

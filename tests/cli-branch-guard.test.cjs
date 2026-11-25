@@ -2,9 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { ROOT, moduleOfFile, walk, loadBaseline, writeBaseline } = require('./helpers/guard-baselines.cjs');
 
-const ROOT = path.join(__dirname, '..');
-const BASELINE = 'tests/fixtures/cli-branch-baseline.json';
+const BASELINE = 'tests/fixtures/cli-branch-baseline';
 const WRITE = 'node tests/cli-branch-guard.test.cjs --write';
 const SOURCE = /\.(?:cjs|mjs|ts|tsx|py|ps1|bash|zsh)$/;
 const SKIP = /^(?:electron\/features\/(?:cli-adapters|claude-runtime|claude-sdk|codex-app-server|codex-runtime|codex-sandbox-setup)|src\/features\/cli-screens)$/;
@@ -21,16 +21,9 @@ function branchCount(source) {
   return [comparisons, cases, lists, families].reduce((total, pattern) => total + (source.match(pattern)?.length ?? 0), 0);
 }
 
-function files(folder) {
-  return fs.readdirSync(path.join(ROOT, folder), { withFileTypes: true }).flatMap(entry => {
-    const file = `${folder}/${entry.name}`;
-    if (entry.isDirectory() && !['tests', 'node_modules'].includes(entry.name) && !SKIP.test(file)) return files(file);
-    return entry.isFile() && SOURCE.test(file) ? [file] : [];
-  });
-}
-
 function counts() {
-  const all = ['electron', 'src', 'integration'].flatMap(files).sort();
+  const excluded = (file, entry) => entry.isDirectory() ? ['tests', 'node_modules'].includes(entry.name) || SKIP.test(file) : !SOURCE.test(file);
+  const all = ['electron', 'src', 'integration'].flatMap(folder => walk(folder, excluded)).sort();
   return Object.fromEntries(all.map(file => [file, branchCount(fs.readFileSync(path.join(ROOT, file), 'utf8'))]).filter(([, count]) => count));
 }
 
@@ -43,13 +36,13 @@ function differences(actual, baseline) {
   });
 }
 
+const moduleOf = moduleOfFile();
+const readBaseline = () => Object.assign({}, ...Object.values(loadBaseline(BASELINE, moduleOf)));
+
 if (process.argv.includes('--write')) {
-  const target = path.join(ROOT, BASELINE), actual = counts();
-  if (fs.existsSync(target)) {
-    const increases = differences(actual, JSON.parse(fs.readFileSync(target, 'utf8'))).filter(change => change.increased);
-    assert.deepEqual(increases.map(change => change.message), [], 'The CLI branch baseline may only shrink');
-  }
-  fs.writeFileSync(target, JSON.stringify(actual, null, 2) + '\n');
+  const actual = counts(), increases = differences(actual, readBaseline()).filter(change => change.increased);
+  assert.deepEqual(increases.map(change => change.message), [], 'The CLI branch baseline may only shrink');
+  writeBaseline(BASELINE, actual, moduleOf);
   console.log(`Wrote ${Object.values(actual).reduce((sum, count) => sum + count, 0)} CLI branch matches; review ${BASELINE}.`);
 } else {
   test('the CLI branch guard recognizes comparisons, cases, two-CLI lists and model family calls', () => {
@@ -60,8 +53,7 @@ if (process.argv.includes('--write')) {
   });
 
   test('generic code matches its per-file CLI branch baseline', () => {
-    const baseline = JSON.parse(fs.readFileSync(path.join(ROOT, BASELINE), 'utf8'));
-    const changes = differences(counts(), baseline);
+    const changes = differences(counts(), readBaseline());
     assert.deepEqual(changes.map(change => change.message), [], 'CLI branch counts changed');
   });
 }

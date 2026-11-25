@@ -1,0 +1,179 @@
+[
+  {
+    "name": "dispatch JSONL",
+    "channel": "dispatch",
+    "kind": "envelope",
+    "input": "{\"v\":1,\"type\":\"dispatch.notice\",\"id\":\"00000000-0000-0000-0000-000000000001\",\"at\":12,\"code\":\"events_undelivered\",\"future\":true}",
+    "version": 1
+  },
+  {
+    "name": "legacy journal",
+    "channel": "journal",
+    "kind": "envelope",
+    "input": "{\"type\":\"end\",\"id\":\"run\",\"time\":12}",
+    "version": 0
+  },
+  {
+    "name": "intervention without a type",
+    "channel": "inbox",
+    "kind": "envelope",
+    "input": "{\"v\":1,\"id\":\"message\",\"text\":\"第一行\\n第二行\",\"at\":12}",
+    "version": 1
+  },
+  {
+    "name": "unknown event version",
+    "channel": "shell",
+    "kind": "envelope",
+    "input": "{\"v\":3,\"type\":\"shell-ready\"}",
+    "error": "wire.unsupported_version",
+    "received": "3"
+  },
+  {
+    "name": "explicit zero is not a legacy record",
+    "channel": "journal",
+    "kind": "envelope",
+    "input": "{\"v\":0,\"type\":\"end\"}",
+    "error": "wire.unsupported_version",
+    "received": "0"
+  },
+  {
+    "name": "a string is not a JSON version",
+    "channel": "hook",
+    "kind": "envelope",
+    "input": "{\"v\":\"1\",\"type\":\"agent-activity\"}",
+    "error": "wire.unsupported_version",
+    "received": "1"
+  },
+  {
+    "name": "legacy read can be disabled",
+    "channel": "shell",
+    "kind": "envelope",
+    "legacy": false,
+    "input": "{\"type\":\"shell-ready\"}",
+    "error": "wire.unsupported_version",
+    "received": "0"
+  },
+  {
+    "name": "receipt uses file version 2",
+    "kind": "envelope",
+    "format": "agentrix.detached-run",
+    "versions": [
+      2
+    ],
+    "input": "{\"format\":\"agentrix.detached-run\",\"version\":2,\"id\":\"run\"}",
+    "version": 2
+  },
+  {
+    "name": "unknown file version",
+    "kind": "envelope",
+    "format": "agentrix.seat-map",
+    "input": "{\"format\":\"agentrix.seat-map\",\"version\":6}",
+    "error": "wire.unsupported_version",
+    "received": "6"
+  },
+  {
+    "name": "wrong file format",
+    "kind": "envelope",
+    "format": "agentrix.seat-map",
+    "input": "{\"format\":\"agentrix.bootstrap\",\"version\":1}",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "legacy file without envelope",
+    "kind": "envelope",
+    "format": "agentrix.background-policy",
+    "input": "{\"claudeBackgroundTasks\":true}",
+    "version": 0
+  },
+  {
+    "name": "shell keys preserve exact values and accept a BOM",
+    "kind": "kv",
+    "format": "agentrix.lead-seat",
+    "input": "﻿effort=high\nformat=agentrix.lead-seat\nmodel=测试=a=b\nversion=1\nfast=0\nultracode=1\nseats={\"Developer\":\"a=b\"}\nempty=\nliteral=  \\n=  \n",
+    "expected": {
+      "effort": "high",
+      "format": "agentrix.lead-seat",
+      "model": "测试=a=b",
+      "version": "1",
+      "fast": "0",
+      "ultracode": "1",
+      "seats": "{\"Developer\":\"a=b\"}",
+      "empty": "",
+      "literal": "  \\n=  "
+    }
+  },
+  {
+    "name": "shell accepts a final line without LF",
+    "kind": "kv",
+    "format": "agentrix.session-mode",
+    "input": "version=1\nformat=agentrix.session-mode\nmode=conductor",
+    "expected": {
+      "version": "1",
+      "format": "agentrix.session-mode",
+      "mode": "conductor"
+    }
+  },
+  {
+    "name": "unknown shell version",
+    "kind": "kv",
+    "format": "agentrix.session-mode",
+    "input": "format=agentrix.session-mode\nversion=17\nmode=native\n",
+    "error": "wire.unsupported_version",
+    "received": "17"
+  },
+  {
+    "name": "duplicate key",
+    "kind": "kv",
+    "format": "agentrix.session-mode",
+    "input": "format=agentrix.session-mode\nversion=1\nmode=a\nmode=b\n",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "missing format",
+    "kind": "kv",
+    "input": "version=1\nmode=native\n",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "missing version",
+    "kind": "kv",
+    "input": "format=agentrix.session-mode\nmode=native\n",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "numeric versions are canonical",
+    "kind": "kv",
+    "format": "agentrix.session-mode",
+    "input": "format=agentrix.session-mode\nversion=01\nmode=native\n",
+    "error": "wire.unsupported_version",
+    "received": "01"
+  },
+  {
+    "name": "bare CR",
+    "kind": "kv",
+    "input": "format=agentrix.session-mode\nversion=1\nmode=na\rtive\n",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "bare NUL",
+    "kind": "kv",
+    "input": "format=agentrix.session-mode\nversion=1\nmode=na\u0000tive\n",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "invalid key",
+    "kind": "kv",
+    "input": "format=agentrix.session-mode\nversion=1\nMode=native\n",
+    "error": "wire.invalid"
+  },
+  {
+    "name": "oversized UTF-8",
+    "kind": "kv",
+    "input": "format=agentrix.lead-seat\nversion=1\nmodel=",
+    "repeat": [
+      "好",
+      5500
+    ],
+    "error": "wire.invalid"
+  }
+]

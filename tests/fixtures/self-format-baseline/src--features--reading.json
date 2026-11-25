@@ -1,0 +1,13 @@
+{
+  "src/features/reading/ConversationFeed.tsx :: tests/pending-prompts.test.cjs :: source-regex": 2,
+  "src/features/reading/ConversationFeed.tsx :: tests/reading-image-cards.test.cjs :: source-execution": 1,
+  "src/features/reading/ConversationFeed.tsx :: tests/reading-image-cards.test.cjs :: source-slice": 1,
+  "src/features/reading/ConversationFeed.tsx :: tests/reading-ui.test.cjs :: source-regex": 1,
+  "src/features/reading/ConversationFeed.tsx :: tests/reading-ui.test.cjs :: source-slice": 1,
+  "src/features/reading/markdown.worker.ts :: tests/reading-paths.test.cjs :: source-execution": 1,
+  "src/features/reading/reading-flow.css :: tests/brand-icons.test.cjs :: source-regex": 8,
+  "src/features/reading/reading-flow.css :: tests/reading-ui.test.cjs :: source-regex": 2,
+  "src/features/reading/reading-quote.css :: tests/reading-quote.test.cjs :: source-regex": 5,
+  "src/features/reading/reading.css :: tests/reading-ui.test.cjs :: source-regex": 11,
+  "src/features/reading/reading.css :: tests/u1-polish.test.cjs :: source-regex": 1
+}

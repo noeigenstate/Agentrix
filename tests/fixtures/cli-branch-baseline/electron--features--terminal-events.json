@@ -1,0 +1,4 @@
+{
+  "electron/features/terminal-events/bootstrap-file.cjs": 2,
+  "electron/features/terminal-events/claude-activity.cjs": 2
+}
