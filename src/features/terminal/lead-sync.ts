@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { AgentSettings, ProjectTerminal, SeatsInfo } from '../../shared/types';
-import { leadRoutingScope, routingNotice, setLeadRoutingFailure, trackLeadRouting, type LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
+import { leadRoutingScope, routingNotice, setLeadRoutingFailure, setLeadRoutingPending, trackLeadRouting, type LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
 import { t } from '../../shared/i18n';
 import { screenOf, unverifiedScreenStep } from '../cli-screens/index.ts';
 import { applyLeadStep } from './lead-picker.ts';
-import { comparableModel, leadSteps, type LeadSeat, type LeadStep } from './lead-steps.ts';
+import { comparableModel, leadSteps, pendingLeadChanges, type LeadSeat, type LeadStep } from './lead-steps.ts';
 import { canPasteScreen, readScreen, subscribeScreen, type Screen } from './terminal-screen';
 
 type Terminal = Parameters<typeof applyLeadStep>[1];
@@ -108,15 +108,17 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
     let active = true, running = false, loading = false, seats: SeatsInfo | null = null, reads = 0;
     let failed = '', scope = '', previous: AgentSettings | null = null, observed: Partial<AgentSettings> = {};
     const clearFailure = () => { if (failed) { failed = ''; setLeadRoutingFailure(scope, null); } };
+    const clearPending = () => setLeadRoutingPending(scope, null);
     const target = () => seats?.conductor ? seats.leads?.[agent] : null;
     const conversation = () => leadRoutingScope(current.current);
     const frame = (): Screen | null => {
       const screen = readScreen(id);
       return screen?.sessionId === session && !screen.pending ? screen : null;
     };
+    const busy = facet.facts?.busy ?? facet.working;
     const ready = () => {
       const screen = frame();
-      return !!screen && !(facet.facts?.busy ?? facet.working)(screen.rows) && canPasteScreen(agent, screen, true);
+      return !!screen && !busy(screen.rows) && canPasteScreen(agent, screen, true);
     };
     const actual = () => previous ? reconcileSettings(previous, observed, current.current.agentSettings) : current.current.agentSettings;
     const state = (seat: LeadSeat, { model, effort, fast, ultracode }: AgentSettings) =>
@@ -126,9 +128,9 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
       const thread = conversation(), seat = target(), choice = targetKey(seat);
       const bound = () => active && current.current.cliActive && current.current.agent === agent && conversation() === thread;
       const live = () => bound() && targetKey(target()) === choice;
-      if (scope !== thread) { clearFailure(); scope = thread; previous = null; observed = {}; }
+      if (scope !== thread) { clearFailure(); clearPending(); scope = thread; previous = null; observed = {}; }
       const settings = actual();
-      if (!seat || !settings) { clearFailure(); return; }
+      if (!seat || !settings) { clearFailure(); clearPending(); return; }
       const key = state(seat, settings);
       const steps = leadSteps(seat, settings, !!picker.restoreFastDefaults && !api.leadFastSettings);
       const switchReason = () => {
@@ -138,13 +140,18 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
       };
       const reason = switchReason(), failureKey = reason ? JSON.stringify([key, reason]) : key;
       if (failed !== failureKey) clearFailure();
-      if (failed || !live() || !steps.length) return;
+      if (failed || !live() || !steps.length) { clearPending(); return; }
       if (reason) {
+        clearPending();
         failed = failureKey;
         setLeadRoutingFailure(thread, { targetModel: seat.model, notice: { unavailable: reason } });
         return;
       }
-      if (!ready()) return;
+      if (!ready()) {
+        const screen = readScreen(id);
+        setLeadRoutingPending(thread, screen?.sessionId === session && busy(screen.rows) ? pendingLeadChanges(steps, settings, seats?.catalog ?? []) : null);
+        return;
+      }
       running = true;
       const rows = () => frame()?.rows ?? [];
       const driver = { rows, ready, bound, active: () => live() && !switchReason(), picker, echo,
@@ -161,7 +168,10 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
           }
           if (result.notice.fastError) error.current?.(routingNotice(result.notice, t));
         }
-      } finally { running = false; }
+      } finally {
+        running = false;
+        if (active) clearPending();
+      }
       if (active) void syncLead();
     };
     const load = () => {
@@ -171,7 +181,9 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
       const accept = (info: SeatsInfo | null) => {
         if (!currentRead()) return;
         loading = false;
+        const previousTarget = targetKey(target());
         seats = info;
+        if (running && previousTarget !== targetKey(target())) clearPending();
         void syncLead();
       };
       void api.skillSeats(projectId, id).then(accept, () => { if (currentRead()) loading = false; });
@@ -180,7 +192,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
     load();
     const off = api.onSkills?.(load);
     const unsubscribe = subscribeScreen(id, wake.current);
-    return () => { active = false; clearFailure(); wake.current = null; off?.(); unsubscribe(); };
+    return () => { active = false; clearFailure(); clearPending(); wake.current = null; off?.(); unsubscribe(); };
   }, [agent, projectId, terminal.id, terminal.sessionId]);
   useEffect(() => { wake.current?.(); }, [terminal.agentSettings, terminal.readingHistory?.threadId, terminal.agentStartedAt]);
 }

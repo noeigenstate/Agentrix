@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { leadSteps } = require('../src/features/terminal/lead-steps.ts');
+const { leadSteps, pendingLeadChanges } = require('../src/features/terminal/lead-steps.ts');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 const { registerLeadFastSettings } = require('../electron/features/terminal/lead-fast-settings.cjs');
 const { applyLeadStep: driveLeadStep } = require('../src/features/terminal/lead-picker.ts');
@@ -9,7 +9,8 @@ const { picker, echo } = screenOf('claude');
 const { action: pickerAction, result: pickerResult } = picker;
 const applyLeadStep = (step, terminal, hooks) => driveLeadStep(step, { ...terminal, picker, echo }, hooks);
 const { hookHarness } = require('./helpers/hook-harness.cjs');
-const { leadRoutingFailure, leadRoutingScope, leadRoutingSnapshot, leadRoutingNotices, routingNotice, subscribeLeadRouting, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
+const { leadRoutingFailure, leadRoutingPending, leadRoutingScope, leadRoutingSnapshot, leadRoutingNotices,
+  pendingRoutingWords, routingNotice, subscribeLeadRouting, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
 
 // In conductor mode a changed lead seat reaches the running Claude Code as the commands the owner would type.
 test('a changed lead model reapplies its effort, while a matched or unknown seat types nothing', () => {
@@ -304,6 +305,82 @@ test('the real xterm screen registry recognizes a prompt with an Ultracode borde
   assert.equal(canPasteScreen('claude', readScreen(id), true), false);
 });
 
+test('lead sync reports what waits for the current turn, clears a reverted target, and keeps failure separate', async t => {
+  const terminal = { id: 'lead-wait', sessionId: 'pty', agent: 'claude', cliActive: true,
+    readingHistory: { threadId: 'conversation' }, agentSettings: { model: 'Fable 5.2', effort: 'medium', fast: false, ultracode: false } };
+  const scope = leadRoutingScope(terminal), keys = [];
+  let repaint, reload, seats, attempt;
+  let rows = ['✻ Thinking…'];
+  const previous = global.window;
+  global.window = { agentrix: { skillSeats: () => seats, onSkills: load => { reload = load; }, answerTerminal: (_id, key) => keys.push(key) } };
+  const harness = hookHarness('src/features/terminal/lead-sync.ts', {
+    './i18n': { t: text => text },
+    './terminal-screen': { readScreen: () => ({ sessionId: 'pty', rows }), canPasteScreen: () => true,
+      subscribeScreen: (_id, callback) => { repaint = callback; return () => {}; } },
+    './lead-picker.ts': { async applyLeadStep(step, driver, hooks) {
+      driver.write('/effort'); hooks.typed(); driver.write('\r'); hooks.submitted('/effort');
+      const applied = await attempt.promise;
+      if (applied) hooks.observed({ effort: step.target }, { effort: step.target });
+      return applied;
+    } },
+  });
+  t.after(() => { harness.dispose(); global.window = previous; });
+  const route = (effort, conductor = true) => {
+    seats = Promise.resolve({ conductor, leads: { claude: { model: 'claude-fable-5-2', effort } } });
+    if (reload) reload(); else harness.render('LeadSync', { projectId: 'project', terminal });
+    return seats;
+  };
+  const finish = async applied => {
+    const ended = new Promise(resolve => {
+      const off = subscribeLeadRouting(() => {
+        if (leadRoutingPending(scope) === null) { off(); resolve(); }
+      });
+    });
+    attempt.resolve(applied);
+    await ended;
+  };
+  await route('high', false);
+  assert.equal(leadRoutingPending(scope), null);
+  await route('high');
+  const pending = leadRoutingPending(scope);
+  assert.deepEqual(pending, { effort: 'high' });
+  assert.equal(pendingRoutingWords(pending, (text, values) => text.replace(/\{(\w+)\}/g, (_, key) => values[key])), '这一轮结束后切换到 high');
+  repaint();
+  assert.equal(leadRoutingPending(scope), pending);
+  assert.equal(leadRoutingFailure(scope), null);
+  assert.deepEqual(keys, []);
+  await route('medium');
+  assert.equal(leadRoutingPending(scope), null);
+  assert.deepEqual(keys, []);
+  await route('high');
+  attempt = Promise.withResolvers();
+  rows = []; repaint();
+  assert.deepEqual(keys, ['/effort', '\r']);
+  assert.deepEqual(leadRoutingPending(scope), { effort: 'high' });
+  await finish(true);
+  assert.equal(leadRoutingPending(scope), null);
+  assert.equal(leadRoutingFailure(scope), null);
+  rows = ['✻ Thinking…'];
+  await route('max');
+  assert.deepEqual(leadRoutingPending(scope), { effort: 'max' });
+  attempt = Promise.withResolvers();
+  rows = []; repaint();
+  await finish(false);
+  assert.equal(leadRoutingPending(scope), null);
+  assert.deepEqual(leadRoutingFailure(scope), { targetModel: 'claude-fable-5-2', notice: { incomplete: true } });
+});
+
+test('a waiting route names the changes, including mode toggles, in one sentence', () => {
+  const before = { model: 'Fable 5.2', effort: 'medium', fast: true, ultracode: false };
+  const steps = leadSteps({ model: 'opus', effort: 'high', fast: false, ultracode: true }, before);
+  const catalog = [{ model: 'claude-opus-5-5', family: 'claude', label: 'Opus 5.5' }];
+  const changes = pendingLeadChanges(steps, before, catalog);
+  assert.deepEqual(changes, { model: 'Opus 5.5', effort: 'high', fast: false, ultracode: true });
+  const en = require('../electron/locales/en.json');
+  const translate = (text, values) => en[text].replace(/\{(\w+)\}/g, (_, key) => values[key]);
+  assert.equal(pendingRoutingWords(changes, translate), 'After this turn, switch to Opus 5.5 · high · turn on Ultracode · turn off fast mode');
+});
+
 test('lead sync registers only submitted conductor commands under the live conversation', async t => {
   const terminal = { id: 'lead', sessionId: 'pty', agent: 'claude', cliActive: true, readingHistory: { threadId: 'conversation' },
     agentSettings: { model: 'Fable 5.2', effort: 'medium' } };
@@ -348,6 +425,7 @@ test('an unverified live version reports why and sends no routing keys until a v
     agentSettings: { model: 'sonnet', effort: 'medium', ultracode: false, fast: false } };
   const scope = leadRoutingScope(terminal), keys = [];
   let agentVersion = '2.1.316', repaint;
+  let rows = ['✻ Thinking…'];
   const before = global.window;
   global.window = { agentrix: {
     skillSeats: async () => ({ conductor: true, leads: { claude: { model: 'opus', effort: 'high', ultracode: true, fast: true } } }),
@@ -355,7 +433,7 @@ test('an unverified live version reports why and sends no routing keys until a v
   } };
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
     './i18n': { t: value => value },
-    './terminal-screen': { readScreen: () => ({ sessionId: 'pty', agent: 'claude', agentVersion, rows: [] }), canPasteScreen: () => true,
+    './terminal-screen': { readScreen: () => ({ sessionId: 'pty', agent: 'claude', agentVersion, rows }), canPasteScreen: () => true,
       subscribeScreen: (_id, callback) => { repaint = callback; return () => {}; } },
     './lead-picker.ts': { async applyLeadStep(_step, driver) { driver.write('/model'); return false; } },
   });
@@ -370,6 +448,8 @@ test('an unverified live version reports why and sends no routing keys until a v
   assert.equal(await unavailable, 'Claude Code');
   assert.deepEqual(keys, []);
   assert.deepEqual(leadRoutingSnapshot(scope), []);
+  assert.equal(leadRoutingPending(scope), null);
+  rows = [];
   agentVersion = '2.1.331'; repaint();
   assert.deepEqual(keys, ['/model']);
   assert.equal(leadRoutingFailure(scope), null);

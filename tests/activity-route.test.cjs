@@ -249,6 +249,25 @@ test('the lead panel replaces pending with the failure of the current seat and c
   assert.match(render('opus'), /正在切换到 Opus/);
 });
 
+test('the lead model keeps the current effort visible and shows a deferred switch only in its own conversation', t => {
+  const { MainModel, useMainTurn } = loadAgentsFile('MainModel.tsx');
+  const { leadRoutingScope, setLeadRoutingPending, setLeadRoutingFailure } = require('../src/shared/lead-routing-notices.ts');
+  const terminal = { id: 'lead-wait-panel', sessionId: 'pty', agent: 'claude', cliActive: true, readingHistory: { threadId: 'current' },
+    agentUsage: { model: 'claude-fable-5-2' }, agentSettings: { model: 'claude-fable-5-2', effort: 'medium' } };
+  const scope = leadRoutingScope(terminal);
+  const render = (conductor = true, threadId = 'current') => renderToStaticMarkup(React.createElement(() => React.createElement(MainModel, {
+    turn: useMainTurn({ ...terminal, readingHistory: { threadId } }), seats: { conductor, leads: { claude: { model: 'fable', effort: 'high' } } },
+  })));
+  t.after(() => { setLeadRoutingPending(scope, null); setLeadRoutingFailure(scope, null); });
+  setLeadRoutingPending(scope, { effort: 'high' });
+  assert.match(render(), /activity-call-settings[^>]*>medium<.*role="status"><span><\/span><p>这一轮结束后切换到 high</);
+  assert.doesNotMatch(render(false), /这一轮结束后/);
+  assert.doesNotMatch(render(true, 'other'), /这一轮结束后/);
+  setLeadRoutingFailure(scope, { targetModel: 'fable', notice: { incomplete: true } });
+  assert.match(render(), /按模型路由切换未完成/);
+  assert.doesNotMatch(render(), /这一轮结束后/);
+});
+
 test('the Agent tab leads with the selected terminal’s Orchestrator above calls from every terminal', () => {
   const { AgentSidebar } = loadAgentsFile('AgentSidebar.tsx');
   const call = { agent: 'Claude Code', model: 'claude-sonnet-5-5', items: [{ id: 'one', state: 'running', role: '执行', title: 'First terminal’s worker' }] };

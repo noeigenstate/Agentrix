@@ -11,7 +11,7 @@ import { actionText } from './action-text';
 import { CALL_STATES, ModelHead } from './AgentCalls';
 import { resetTime } from './Metric';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
-import { leadRoutingFailure, leadRoutingScope, subscribeLeadRouting, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
+import { leadRoutingFailure, leadRoutingPending, leadRoutingScope, pendingRoutingWords, routingNotice, subscribeLeadRouting } from '../../shared/lead-routing-notices.ts';
 // A terminal's last worked prompt supplies its finished row when the Agent tab reopens.
 const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
 export function useMainTurn(terminal: ProjectTerminal | undefined) {
@@ -71,6 +71,23 @@ function sameModel(chosen: string, actual: string) {
   return a === b || modelName(chosen).toLowerCase() === modelName(actual).toLowerCase() || /^[a-z]+$/.test(a) && b.split(/[-\s]/).includes(a);
 }
 
+function LeadModelNotice({ terminal, seats, actual }: { terminal: ProjectTerminal; seats: SeatsInfo | null; actual: string | null }) {
+  const kind = screenAgent(terminal.agent), scope = screenOf(kind)?.picker ? leadRoutingScope(terminal) : '';
+  const failureSnapshot = () => leadRoutingFailure(scope), pendingSnapshot = () => leadRoutingPending(scope);
+  const failure = useSyncExternalStore(subscribeLeadRouting, failureSnapshot, failureSnapshot);
+  const waiting = useSyncExternalStore(subscribeLeadRouting, pendingSnapshot, pendingSnapshot);
+  const chosen = seats?.conductor ? seats.leads?.[kind]?.model : null;
+  const pendingModel = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
+  const currentFailure = failure && failure.targetModel === chosen ? failure.notice : null;
+  const deferred = waiting && !currentFailure && seats?.conductor !== false;
+  let words;
+  if (currentFailure) words = !currentFailure.unavailable && pendingModel
+    ? t('未能切换到 {model}，可在终端里用 /model 手动切换。', { model: pendingModel }) : routingNotice(currentFailure, t);
+  else if (deferred) words = pendingRoutingWords(waiting, t);
+  else if (pendingModel) words = t('正在切换到 {model}', { model: pendingModel });
+  return words ? <li className={`activity-call-note${deferred ? ' activity-routing-wait' : ''}`} role="status"><span /><p>{words}</p><span /></li> : null;
+}
+
 export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undefined }) {
   const turn = useMainTurn(terminal);
   const seats = useSeats(terminal?.cliActive ? terminal.id : undefined, terminal?.sessionId);
@@ -84,13 +101,6 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
-  // In conductor mode a changed lead seat is typed into the running CLI at once (terminal/lead-sync.ts); the note shows until it answers.
-  // In native mode the CLI's own /model and /effort decide, and the panel shows what it runs.
-  const chosen = seats?.conductor ? seats.leads?.[kind]?.model : null;
-  const pending = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
-  const routingFailure = () => leadRoutingFailure(screenOf(kind)?.picker ? leadRoutingScope(terminal) : '');
-  const failure = useSyncExternalStore(subscribeLeadRouting, routingFailure, routingFailure);
-  const routeFailed = failure?.targetModel === chosen, unavailable = routeFailed && failure?.notice.unavailable;
   const now = useNow(Date.now);
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
   // Native turns distinguish a failure from an interruption only for their own runtime session.
@@ -135,9 +145,7 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} ultracode={settings?.ultracode}
         provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
-      {unavailable && <li className="activity-call-note" role="status"><span /><p>{unverifiedSwitchWords(unavailable, t)}</p><span /></li>}
-      {pending && !unavailable && <li className="activity-call-note" role="status"><span /><p>{routeFailed
-        ? t('未能切换到 {model}，可在终端里用 /model 手动切换。', { model: pending }) : t('正在切换到 {model}', { model: pending })}</p><span /></li>}
+      <LeadModelNotice terminal={terminal} seats={seats} actual={actual} />
     </ul>
     <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>
       {expanded ? rows : rows.slice(0, 4)}

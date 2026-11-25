@@ -1,5 +1,11 @@
 {
   "按模型路由切换未完成": "Model routing switch did not complete",
+  "这一轮结束后{changes}": "After this turn, {changes}",
+  "切换到 {target}": "switch to {target}",
+  "启用 Ultracode": "turn on Ultracode",
+  "停用 Ultracode": "turn off Ultracode",
+  "打开快速模式": "turn on fast mode",
+  "关闭快速模式": "turn off fast mode",
   "已按模型路由开启快速模式": "Model routing turned on fast mode",
   "已按模型路由关闭快速模式": "Model routing turned off fast mode",
   "已按模型路由开启 Ultracode": "Model routing turned on Ultracode",

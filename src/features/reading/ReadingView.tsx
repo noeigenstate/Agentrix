@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { ArrowDown, Image as ImageIcon, Info, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import type { AgentCommand, ProjectTerminal } from '../../shared/types';
-import { leadRoutingFailure, leadRoutingNotices, leadRoutingScope, leadRoutingSnapshot, routingNotice as formatRoutingNotice, subscribeLeadRouting,
-  unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
+import { leadRoutingFailure, leadRoutingNotices, leadRoutingPending, leadRoutingScope, leadRoutingSnapshot, pendingRoutingWords,
+  routingNotice as formatRoutingNotice, subscribeLeadRouting, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
 import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { VoiceButton } from '../voice/VoiceButton';
@@ -115,6 +115,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const routes = useSyncExternalStore(subscribeLeadRouting, routingSnapshot, routingSnapshot);
   const routingFailureSnapshot = () => leadRoutingFailure(routingScope);
   const failedRoute = useSyncExternalStore(subscribeLeadRouting, routingFailureSnapshot, routingFailureSnapshot);
+  const routingPendingSnapshot = () => leadRoutingPending(routingScope);
+  const pendingRoute = useSyncExternalStore(subscribeLeadRouting, routingPendingSnapshot, routingPendingSnapshot);
   const notices = useMemo(() => leadRoutingNotices(conversationEntries, routes), [conversationEntries, routes]);
   const entries = useMemo(() => conversationEntries.filter(entry => !entry.queued && !hidden?.has(entry.id) && notices.get(entry.id) !== null),
     [conversationEntries, hidden, notices]);
@@ -974,13 +976,16 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const lastEntry = roundEntries.at(-1);
   const statusInTurn = !!lastEntry && lastEntry.role !== 'user' && pending.every(queued);
   const unplacedRoute = failedRoute && !tail.visible.some(block => block.kind === 'message' && notices.get(block.entry.id) === failedRoute.notice);
+  const routeWait = pendingRoute && !failedRoute && <p className="reading-status reading-routing-notice" role="status">{pendingRoutingWords(pendingRoute, t)}</p>;
+  const showWelcome = !terminal.agentCommand && !entries.length && !cards.prompts.length;
   const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} queuedNote={reasonWords('term.queued_behind_turn')}
     unconfirmedNote={receiptOnScreen ? reasonWords('term.receipt_missing') : undefined} undelivered={undelivered}
     onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
     {unplacedRoute && <p className="reading-status reading-routing-notice" role="status">{formatRoutingNotice(failedRoute.notice, t)}</p>}
+    {!showWelcome && routeWait}
     {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={shownWorking ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
   const beforeFeed = terminal.agentCommand ? <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />
-    : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
+    : showWelcome ? <><ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} />{routeWait}</> : <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
     {historyPage.error && <p role="status">{t(historyPage.error)}</p>}</>;
   const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: shownWorking, anchor: result?.anchor,

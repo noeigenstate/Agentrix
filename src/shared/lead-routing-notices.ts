@@ -3,12 +3,14 @@ import type { ConversationEntry, ProjectTerminal } from './types';
 export type LeadRoutingCommand = '/model' | '/effort' | '/fast on' | '/fast off';
 type Submission = { command: LeadRoutingCommand; at: number; until: number };
 export type LeadRoutingNotice = { model?: string; effort?: string; fast?: boolean; ultracode?: boolean; incomplete?: boolean; unavailable?: string; fastError?: { target: boolean; reason: string } };
+export type LeadRoutingPending = Pick<LeadRoutingNotice, 'model' | 'effort' | 'fast' | 'ultracode'>;
 type LeadRoutingFailure = { targetModel: string; notice: LeadRoutingNotice };
 type Route = { submissions: Submission[]; outcome: LeadRoutingNotice | null };
 
 // Renderer memory only. A reopened transcript needs the same live PTY and conversation to use these receipts.
 const routes = new Map<string, readonly Route[]>();
 const failures = new Map<string, LeadRoutingFailure>();
+const pending = new Map<string, LeadRoutingPending>();
 const listeners = new Set<() => void>();
 const empty: readonly Route[] = [];
 const notify = () => { for (const listener of listeners) listener(); };
@@ -21,6 +23,7 @@ export function leadRoutingScope(terminal: ProjectTerminal) {
 
 export const leadRoutingSnapshot = (scope: string) => routes.get(scope) ?? empty;
 export const leadRoutingFailure = (scope: string) => failures.get(scope) ?? null;
+export const leadRoutingPending = (scope: string) => pending.get(scope) ?? null;
 export const unverifiedSwitchWords = (cli: string, t: (text: string, values: { cli: string }) => string) =>
   t('未验证的 {cli} 版本，不支持运行中切换', { cli });
 
@@ -28,6 +31,25 @@ export function setLeadRoutingFailure(scope: string, failure: LeadRoutingFailure
   if (failure) failures.set(scope, failure);
   else if (!failures.delete(scope)) return;
   notify();
+}
+
+export function setLeadRoutingPending(scope: string, next: LeadRoutingPending | null) {
+  if (next) {
+    const prior = pending.get(scope);
+    if (prior && prior.model === next.model && prior.effort === next.effort && prior.fast === next.fast && prior.ultracode === next.ultracode) return;
+    pending.set(scope, next);
+  } else if (!pending.delete(scope)) return;
+  notify();
+}
+
+export function pendingRoutingWords({ model, effort, fast, ultracode }: LeadRoutingPending, t: (text: string, values?: Record<string, string>) => string) {
+  const target = [model, effort].filter(Boolean).join(' · ');
+  const changes = [
+    target && t('切换到 {target}', { target }),
+    ultracode !== undefined && t(ultracode ? '启用 Ultracode' : '停用 Ultracode'),
+    fast !== undefined && t(fast ? '打开快速模式' : '关闭快速模式'),
+  ].filter(Boolean).join(' · ');
+  return t('这一轮结束后{changes}', { changes });
 }
 
 export function subscribeLeadRouting(listener: () => void) {

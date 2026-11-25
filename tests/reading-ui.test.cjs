@@ -1844,15 +1844,22 @@ test('reading reports effort-only and unconfirmed routes and leaves ambiguous or
 });
 
 test('reading shows an incomplete switch before its CLI receipt, then shows the same note once', t => {
-  const { leadRoutingScope, setLeadRoutingFailure, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
+  const { leadRoutingScope, setLeadRoutingFailure, setLeadRoutingPending, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
   const h = readingHarness(t, []);
   Object.assign(h.state.terminal, { id: 'routing-no-receipt', agent: 'claude', codexActivity: 'idle' });
   const scope = leadRoutingScope(h.state.terminal), route = trackLeadRouting(scope), notice = { incomplete: true };
-  t.after(() => setLeadRoutingFailure(scope, null));
+  t.after(() => { setLeadRoutingPending(scope, null); setLeadRoutingFailure(scope, null); });
+  const waiting = /reading-routing-notice"[^>]*>After this turn, switch to high/g;
+  setLeadRoutingPending(scope, { effort: 'high' });
+  assert.equal([...h.render().matchAll(waiting)].length, 1);
+  h.state.entries = [{ id: 'prompt', at: 990, role: 'user', text: 'keep working' }];
+  assert.equal([...h.render().matchAll(waiting)].length, 1);
   route.submit('/model', 1000)(1030); route.finish(notice);
   setLeadRoutingFailure(scope, { targetModel: 'opus', notice });
   const note = /reading-routing-notice"[^>]*>Model routing switch did not complete/g;
   assert.equal([...h.render().matchAll(note)].length, 1);
+  assert.equal([...h.render().matchAll(waiting)].length, 0);
+  setLeadRoutingPending(scope, null);
   h.state.entries = [{ id: 'receipt', at: 1010, role: 'user', text: '/model', original: '/model' }];
   assert.equal([...h.render().matchAll(note)].length, 1);
   h.state.entries = [];

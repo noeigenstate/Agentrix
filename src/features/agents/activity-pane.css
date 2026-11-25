@@ -65,6 +65,8 @@
 .activity-call-rows li.activity-call-note { height: 24px; }
 .activity-call-rows li.activity-call-note p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
 .activity-call-rows li.activity-call-note:hover::before { background: none; }
+.activity-call-rows li.activity-routing-wait { height: auto; min-height: 24px; }
+.activity-call-rows li.activity-routing-wait p { white-space: normal; overflow-wrap: anywhere; }
 .activity-call-rows li.is-idle p { color: var(--flow-faint); }
 .activity-call-rows li.is-step p { color: var(--flow-faint); }
 .activity-call-rows li.is-step p { color: var(--flow-faint); }
