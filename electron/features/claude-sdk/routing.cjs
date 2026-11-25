@@ -62,7 +62,9 @@ function routeSettings(spec) {
   const trusted = new Map(Object.entries({ ...inherited, ...(user.env || {}) }).map(([name, value]) => [name.toUpperCase(), value]));
   const names = new Set(ROUTE_ENV.filter(name => !conditionalRoute(name)));
   // Cover mixed-case spellings and newly added transport variables from every project settings source.
-  for (let folder = cwd; (folder === root || folder.startsWith(root + path.sep)); folder = path.dirname(folder)) {
+  for (let folder = cwd; ; folder = path.dirname(folder)) {
+    const relative = path.relative(root, folder);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) break;
     for (const filename of ['settings.json', 'settings.local.json']) {
       const file = path.join(folder, '.claude', filename), config = settings(file, true);
       // A parser mismatch must not remove route protection; malformed files still let the CLI start.
@@ -73,7 +75,7 @@ function routeSettings(spec) {
       }
       for (const name of Object.keys(env || {})) if (routeName(name)) names.add(name);
     }
-    if (folder === root) break;
+    if (!relative) break;
   }
   const env = {};
   for (const name of names) {

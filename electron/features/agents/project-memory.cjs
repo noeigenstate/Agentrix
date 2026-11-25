@@ -42,7 +42,8 @@ function roundsOf(entries, agent, session) {
 
 async function readArchive(dir, folder) {
   let text = '';
-  try { text = await fs.readFile(archiveFile(dir, folder), 'utf8'); } catch { return []; }
+  try { text = await fs.readFile(archiveFile(dir, folder), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const rounds = new Map();
   for (const line of text.split('\n')) { try { const round = JSON.parse(line); if (round?.key) rounds.set(round.key, round); } catch { } }
   return [...rounds.values()].sort((a, b) => a.at - b.at);
@@ -50,10 +51,22 @@ async function readArchive(dir, folder) {
 
 // Adds rounds, or a round's later state (its reply arrived, more files changed); one writer per folder at a time.
 const writing = new Map();
+function serialize(file, action) {
+  const next = (writing.get(file) || Promise.resolve()).catch(() => {}).then(action).finally(() => {
+    if (writing.get(file) === next) writing.delete(file);
+  });
+  writing.set(file, next);
+  return next;
+}
+async function writeAtomically(file, text) {
+  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+  try { await fs.writeFile(temporary, text, { encoding: 'utf8', flag: 'wx' }); await fs.rename(temporary, file); }
+  finally { await fs.rm(temporary, { force: true }); }
+}
 function remember(dir, folder, rounds) {
   if (!rounds.length) return Promise.resolve(0);
-  const file = archiveFile(dir, folder), previous = writing.get(file) || Promise.resolve();
-  const next = previous.catch(() => {}).then(async () => {
+  const file = archiveFile(dir, folder);
+  return serialize(file, async () => {
     const known = new Map((await readArchive(dir, folder)).map(round => [round.key, round]));
     let changed = 0;
     for (const round of rounds) {
@@ -64,13 +77,10 @@ function remember(dir, folder, rounds) {
     if (!changed) return 0;
     await fs.mkdir(dir, { recursive: true });
     const sorted = [...known.values()].sort((a, b) => a.at - b.at);
-    await fs.writeFile(`${file}.tmp`, sorted.map(round => JSON.stringify(round)).join('\n') + '\n', 'utf8');
-    await fs.rename(`${file}.tmp`, file);
+    await writeAtomically(file, sorted.map(round => JSON.stringify(round)).join('\n') + '\n');
     await fs.writeFile(path.join(dir, `${folderKey(folder)}.folder.txt`), folder, 'utf8');
     return changed;
   });
-  writing.set(file, next);
-  return next;
 }
 
 async function conversation(agent, filename, cwd) {
@@ -92,9 +102,11 @@ async function gather(dir, cwd, homes = {}) {
   for (const source of sources) {
     let stat; try { stat = await fs.stat(source.filename); } catch { continue; }
     const mark = `${stat.size}:${stat.mtimeMs}`;
-    if (looked.get(source.filename) === mark) continue;
-    rounds.push(...roundsOf(await conversation(source.agent, source.filename, cwd).catch(() => []), source.agent, source.id));
+    const previous = looked.get(source.filename);
+    if (previous !== mark) rounds.push(...roundsOf(await conversation(source.agent, source.filename, cwd).catch(() => []), source.agent, source.id));
+    looked.delete(source.filename);
     looked.set(source.filename, mark);
+    if (looked.size > 10000) looked.delete(looked.keys().next().value);
   }
   return remember(dir, cwd, rounds);
 }
@@ -112,11 +124,16 @@ function renderRound(round) {
 // file without a byte-order mark for the system code page (GBK on a Chinese system) and turns every Chinese word into
 // garbage; with the mark it reads UTF-8.
 const forAgents = text => (process.platform === 'win32' ? '\uFEFF' : '') + text;
-async function writeMemoryBook(dir, folder) {
-  const rounds = await readArchive(dir, folder), file = path.join(dir, `${folderKey(folder)}.md`);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(file, forAgents(`# Development memory of ${folder}\n\nEvery round worked in this folder with Claude Code or Codex, newest first. Kept by Agentrix.\n\n${rounds.slice().reverse().map(renderRound).join('\n')}`), 'utf8');
-  return { file, rounds };
+function writeMemoryBook(dir, folder) {
+  return serialize(archiveFile(dir, folder), async () => {
+    const rounds = await readArchive(dir, folder), file = path.join(dir, `${folderKey(folder)}.md`);
+    await fs.mkdir(dir, { recursive: true });
+    const text = forAgents(`# Development memory of ${folder}\n\nEvery round worked in this folder with Claude Code or Codex, newest first. Kept by Agentrix.\n\n`
+      + rounds.slice().reverse().map(renderRound).join('\n'));
+    const previous = await fs.readFile(file, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; });
+    if (previous !== text) await writeAtomically(file, text);
+    return { file, rounds };
+  });
 }
 
 module.exports = { folderKey, roundsOf, readArchive, remember, gather, writeMemoryBook, renderRound, forAgents };

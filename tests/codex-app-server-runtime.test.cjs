@@ -5,10 +5,88 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { EventEmitter, once } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
-const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
+const { createCodexRuntime, replaceContextCwd, releaseTurnInputs } = require('../electron/features/codex-app-server/index.cjs');
 const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
 const { mergeLimits, tokenUsage } = require('../electron/features/codex-app-server/account.cjs');
 const { createEvents } = require('../electron/features/codex-app-server/events.cjs');
+
+function memoryServer(reply) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const send = message => child.stdout.write(JSON.stringify(message) + '\n');
+  child.stdin = new Writable({ write(chunk, _encoding, callback) {
+    const { id, method, params } = JSON.parse(chunk.toString());
+    if (id != null) queueMicrotask(() => reply({ id, method, params }, send));
+    callback();
+  } });
+  return child;
+}
+
+test('a stop timeout preserves both the original startup error and the failed session state', async () => {
+  const events = [];
+  const child = memoryServer(({ id }, send) => send({ id, result: { userAgent: 'codex/0.165.0' } }));
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => child,
+    stopChild: async () => { throw new Error('process_stop_timeout'); } });
+  const session = factory.create({ cwd: os.tmpdir(), env: {} }, event => events.push(event));
+  await assert.rejects(session.start(), { code: 'unsupported_codex_version' });
+  assert.equal(session.snapshot().state, 'failed');
+  assert.deepEqual(events.findLast(event => event.type === 'session.state').payload, { state: 'failed', reason: 'unsupported_codex_version' });
+});
+
+test('a stop timeout preserves the history result and disposes the transport', async () => {
+  const cwd = os.tmpdir(); let disposed = false;
+  const child = memoryServer(({ id, method }, send) => send({ id, result: method === 'initialize'
+    ? { userAgent: 'codex/0.166.0' } : { data: [{ id: 'history-thread', cwd, name: 'Prior thread', updatedAt: 5 }] } }));
+  child.dispose = () => { disposed = true; };
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => child,
+    stopChild: async () => { throw new Error('process_stop_timeout'); } });
+  assert.deepEqual(await factory.history({ cwd, env: {} }), { id: 'history-thread', title: 'Prior thread', at: 5000 });
+  assert.equal(disposed, true);
+});
+
+test('changing the Codex working directory rewrites both slash forms at path boundaries', () => {
+  const cwd = 'C:\\proj', wireCwd = 'C:\\expanded';
+  const context = 'Use "C:\\proj\\README" and C:/proj/skills (C:\\proj), keep C:\\proj2\\README and C:/project.';
+  assert.equal(replaceContextCwd(context, cwd, wireCwd),
+    'Use "C:\\expanded\\README" and C:/expanded/skills (C:\\expanded), keep C:\\proj2\\README and C:/project.');
+});
+
+test('finishing a Codex turn discards input payloads except the candidate for one safe retry', () => {
+  const image = { type: 'image', url: 'data:image/png;base64,c3ludGhldGlj' };
+  const done = { status: 'consumed', input: [image] }, retry = { status: 'delivered', input: [image] };
+  const entries = new Set([done, retry]);
+  releaseTurnInputs(entries, retry);
+  assert.deepEqual(done, { status: 'consumed' });
+  assert.deepEqual(retry, { status: 'delivered', input: [image] });
+  assert.equal(entries.size, 0);
+});
+
+test('Codex keeps accepting inputs after its receipt cap, while recent inputs still deduplicate', async t => {
+  const cwd = os.tmpdir(), idle = new EventEmitter();
+  let turns = 0;
+  const child = memoryServer(({ id, method, params }, send) => {
+    if (method === 'initialize') send({ id, result: { userAgent: 'codex/0.166.0' } });
+    else if (method === 'thread/start') send({ id, result: { thread: { id: 'receipt-cap-thread' }, sandbox: { type: 'workspaceWrite' } } });
+    else if (!params.threadId) send({ id, error: { code: -32602, message: 'Required threadId' } });
+    else if (method === 'turn/start') {
+      const turn = { id: String(++turns), status: 'inProgress' };
+      send({ id, result: { turn } });
+      send({ method: 'turn/started', params: { turn } });
+      send({ method: 'turn/completed', params: { turn: { ...turn, status: 'completed' } } });
+    }
+  });
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => child, stopChild: async () => {} });
+  const session = factory.create({ cwd, env: {} }, event => { if (event.type === 'session.state' && event.payload.state === 'idle') idle.emit('idle'); });
+  t.after(() => session.close());
+  await session.start();
+  for (let number = 0; number <= 2000; number++) {
+    const settled = once(idle, 'idle');
+    assert.equal((await session.send({ clientMessageId: String(number), text: 'synthetic input' })).status, 'delivered');
+    await settled;
+  }
+  assert.equal((await session.send({ clientMessageId: '2000', text: 'synthetic input' })).status, 'delivered');
+  assert.equal(turns, 2001);
+});
 
 async function until(predicate) {
   for (let n = 0; n < 200; n++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); }

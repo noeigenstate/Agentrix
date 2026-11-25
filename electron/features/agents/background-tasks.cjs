@@ -8,6 +8,12 @@ const polls = new Set(['BashOutput', 'TaskOutput']);
 const stops = new Set(['KillShell', 'TaskStop']);
 const body = content => typeof content === 'string' ? content : (Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => text(block.text)).join('\n') : '');
 const tag = (content, name) => new RegExp(`<${name}>\\s*([^<]+?)\\s*</${name}>`).exec(content)?.[1];
+function taskNotificationRecord(record) {
+  if (record.type === 'queue-operation') return ['enqueue', 'remove'].includes(record.operation);
+  if (record.attachment?.type === 'queued_command') return true;
+  return record.type === 'user' && (record.isMeta === true || record.origin?.kind === 'task-notification'
+    || record.promptSource === 'system' && record.turnOrigin === 'task_notification');
+}
 
 // Consume the host's existing raw transcript stream, including workOnly prefix records before its early return.
 // One instance belongs to one terminal and transcript binding; reset it when that binding changes. No file reads,
@@ -32,7 +38,7 @@ class BackgroundTasks {
       else if (record.type === 'user' && !record.isMeta && block?.type === 'tool_result') changed = this.result(block, record.toolUseResult || {}, at) || changed;
     }
     const queued = record.type === 'queue-operation';
-    if (queued && ['enqueue', 'remove'].includes(record.operation) || record.type === 'user' || record.attachment?.type === 'queued_command') {
+    if (taskNotificationRecord(record)) {
       const content = body(queued ? record.content : record.attachment?.prompt ?? record.message?.content);
       for (const [notice] of content.matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {
         if (!terminal(tag(notice, 'status'))) continue;
@@ -145,4 +151,4 @@ function attach(usage, entries) {
   return { ...usage, background: entries.map(entry => ({ ...entry })) };
 }
 
-module.exports = { BackgroundTasks, attach };
+module.exports = { BackgroundTasks, attach, taskNotificationRecord };

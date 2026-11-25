@@ -19,7 +19,7 @@ function registrationChannel() {
   const net = {
     createServer(receive) {
       const server = new EventEmitter(); accept = receive;
-      server.listen = (_address, ready) => queueMicrotask(ready); server.close = () => {};
+      server.listen = (_address, ready) => queueMicrotask(ready); server.close = finish => finish?.();
       return server;
     },
     connect() {
@@ -38,6 +38,45 @@ function registrationChannel() {
     name === 'node:net' ? net : name === 'node:fs' ? { ...fs, chmodSync() {} } : load(name));
   return { ...control, net };
 }
+
+test('finished control receipts make room in both directions without admitting recent duplicates', async t => {
+  const transport = registrationChannel(), ready = Promise.withResolvers(), finish = Promise.withResolvers();
+  const runId = 'control-cap', projectId = 'project', cwd = os.tmpdir();
+  let pushed = 0, delivered = 0;
+  const server = transport.createDispatchControl({ resolveRun: () => ({ runId, projectId, cwd, allow: [], agent: 'claude' }) });
+  t.after(() => { finish.resolve(); server.close(); });
+  server.onRequest('claude-sdk.run', async (_run, _payload, stream) => {
+    stream.onControl(control => { if (control.type === 'intervene') delivered++; return 'delivered'; });
+    ready.resolve();
+    await finish.promise;
+  });
+  const { address } = await server.listen();
+  const client = await transport.connectDispatchControl({ address, runId, projectId, onControl: () => { pushed++; return 'delivered'; } });
+  t.after(() => client.close());
+  const broker = client.request('claude-sdk.run', {});
+  void broker.catch(() => {});
+  await ready.promise;
+  for (let number = 0; number <= 4000; number++) {
+    assert.equal(await client.request('control.deliver', { type: 'intervene', messageId: 'deliver-' + number, text: 'synthetic' }), 'delivered');
+  }
+  await client.request('control.deliver', { type: 'intervene', messageId: 'deliver-4000', text: 'synthetic' });
+  assert.equal(delivered, 4001);
+  for (let number = 0; number <= 10000; number++) {
+    assert.equal((await server.pushControl(runId, { type: 'stop', messageId: 'push-' + number })).status, 'delivered');
+  }
+  await server.pushControl(runId, { type: 'stop', messageId: 'push-10000' });
+  assert.equal(pushed, 10001);
+  finish.resolve();
+  await broker;
+});
+
+test('the Unix control socket listens inside a private directory', { skip: process.platform === 'win32' }, async t => {
+  const server = createDispatchControl({});
+  t.after(() => server.close());
+  const { address } = await server.listen();
+  assert.equal(fs.statSync(path.dirname(address)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(address).mode & 0o777, 0o600);
+});
 
 test('registration rejection reports the failed binding without exposing credentials', async t => {
   const { createDispatchControl, connectDispatchControl, net } = registrationChannel();

@@ -3,13 +3,45 @@ const assert = require('node:assert/strict');
 const { createRequests } = require('../electron/features/codex-app-server/requests.cjs');
 const { assertCompatible } = require('../electron/features/codex-app-server/compatibility.cjs');
 
-function fixture() {
+function fixture({ active = () => true, respond } = {}) {
   const writes = [], events = [], states = [];
-  const api = createRequests({ respond: (id, result) => writes.push({ id, result }), reject: (id, code = -32601) => writes.push({ id, code }) },
-    { binding: { providerSessionId: 'thread', turnId: 'turn' }, publish: (type, payload) => events.push({ type, payload }) }, state => states.push(state));
+  const api = createRequests({ respond: respond || ((id, result) => writes.push({ id, result })), reject: (id, code = -32601) => writes.push({ id, code }) },
+    { binding: { providerSessionId: 'thread', turnId: 'turn' }, publish: (type, payload) => events.push({ type, payload }) }, state => states.push(state), active);
   const open = (method, params = {}, id = 1) => api.open({ method, id, params: { threadId: 'thread', turnId: 'turn', itemId: 'same-item', ...params } });
   return { api, open, events, writes, states };
 }
+
+test('late and unknown resolutions leave idle alone, and a real resolution only resumes an active turn', () => {
+  let active = false;
+  const f = fixture({ active: () => active });
+  f.api.resolved(99);
+  assert.deepEqual(f.states, []);
+  f.open('item/commandExecution/requestApproval');
+  f.api.resolved(1);
+  assert.deepEqual(f.states, []);
+  active = true;
+  f.open('item/commandExecution/requestApproval');
+  f.api.resolved(1);
+  assert.deepEqual(f.states, ['waiting', 'running']);
+});
+
+test('a disconnected transport still settles every approval without resuming work', () => {
+  const f = fixture({ respond() { throw new Error('closed'); } });
+  f.open('item/commandExecution/requestApproval', {}, 1);
+  f.open('item/fileChange/requestApproval', {}, 2);
+  const ids = f.api.snapshot().map(request => request.requestId);
+  f.api.cancelAll();
+  assert.deepEqual(f.api.snapshot(), []);
+  assert.deepEqual(f.events.filter(event => event.type === 'request.resolved').map(event => event.payload),
+    ids.map(requestId => ({ requestId, resolution: 'cancelled', reason: null })));
+  assert.deepEqual(f.states, ['waiting', 'waiting']);
+});
+
+test('Codex version is taken from its product token, even with another version before it', () => {
+  assert.equal(assertCompatible({ userAgent: 'desktop/0.158.1 codex_cli_rs/0.166.2' }).reason, null);
+  assert.throws(() => assertCompatible({ userAgent: 'desktop/9.1.1 codex_cli_rs/0.165.1' }), { code: 'unsupported_codex_version' });
+  assert.notEqual(assertCompatible({ userAgent: 'desktop/0.166.1 codex-cli/0.167.0' }).reason, null);
+});
 
 test('same item approvals retain distinct RPC identities and old turn requests are rejected', () => {
   const f = fixture();

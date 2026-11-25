@@ -28,7 +28,8 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   let decisions = readJson(path.join(directory, 'policy-audit.json'), [], { validate: value => Array.isArray(value) && value.length <= 1000 });
   const recordDecision = audit || (decision => {
     const next = [...decisions, { ...decision, at: now() }].slice(-1000);
-    writeJson(path.join(directory, 'policy-audit.json'), next); decisions = next;
+    decisions = next;
+    try { writeJson(path.join(directory, 'policy-audit.json'), next); } catch {}
   });
   const runtimeApi = {
     credentials, usage, facts: resolver.facts, observeCli: resolver.observeCli, trackCli: resolver.trackCli,

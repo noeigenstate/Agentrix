@@ -6,6 +6,25 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 
+test('a targeted sweep replays only its run and leaves other runs for the periodic sweep', async t => {
+  const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
+  const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-inbox-target-')), applied = [];
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projectId = 'terminal', sessionKey = 'test-key', ids = [randomUUID(), randomUUID()];
+  for (const id of ids) {
+    const outbox = new DispatchOutbox({ directory: root, id, projectId, sessionKey });
+    outbox.append({ type: 'dispatch-declared', id, helperPid: process.pid, agent: 'claude', role: '执行', title: 'Task',
+      cwd: root, worktree: root, requested: { model: 'opus', effort: 'high', fast: false }, source: 'dispatch', at: 1000 });
+  }
+  const inbox = new DispatchInbox({ directory: root, projectId, sessionKey, apply: event => applied.push(event.id) });
+  t.after(() => inbox.dispose());
+  await inbox.sweep(ids[0]);
+  assert.deepEqual(applied, [ids[0]]);
+  await inbox.sweep();
+  assert.deepEqual(applied, ids);
+});
+
 test('replayed SSH wakes apply the lost end once and send a signed cumulative acknowledgment to the same channel', async t => {
   const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
   const { dispatchFrame, verifyDispatchFrame } = require('../electron/features/agents/dispatch-events.cjs');

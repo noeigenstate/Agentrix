@@ -4,8 +4,8 @@ function createSdkLoader({ resourcesPath = process.resourcesPath, packaged = fal
   // The pinned sdk.mjs entry bundles third-party code; its runtime imports are Node builtins.
   // Packaging tests load that entry without adjacent peers and exercise query against an offline CLI.
   let promise;
-  return () => promise ||= load(pathToFileURL(packaged
+  return () => promise ||= Promise.resolve().then(() => load(pathToFileURL(packaged
     ? path.join(resourcesPath, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs')
-    : require.resolve('@anthropic-ai/claude-agent-sdk')).href);
+    : require.resolve('@anthropic-ai/claude-agent-sdk')).href)).catch(error => { promise = null; throw error; });
 }
 module.exports = { createSdkLoader };

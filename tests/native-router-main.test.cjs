@@ -6,7 +6,24 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createNativeHost } = require('../electron/features/native-session/host.cjs');
+const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
+const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
 const { createShellEvents } = require('../electron/features/terminal-events/shell-events.cjs');
+
+test('Claude lead MCP argv config contains only the role server environment', t => {
+  const { randomUUID } = require('node:crypto'), abort = new AbortController(), cwd = __dirname;
+  t.after(() => abort.abort());
+  const host = createHostInputs({ findProject: () => ({ id: 'p', kind: 'local', path: cwd }), sessions: new Map(), nativeSpecs: new Map(), randomUUID,
+    store: { findTerminal: () => ({ record: {} }) }, runtimeDir: cwd, integrationDir: cwd, writeBootstrap() {}, handoffFile() {}, startupNote: () => '',
+    nativeEnvironment: bootstrap => ({ AGENTRIX_BOOTSTRAP: bootstrap, CODEX_HOME: 'test-home', FAKE_ACCESS_TOKEN: 's'.repeat(33000) }) });
+  const spec = host.nativeSpec('t', 'claude', false);
+  const options = queryOptions(spec, { key: 'synthetic-key', executable: process.execPath, abort, policy: () => ({ behavior: 'allow' }) });
+  const { env } = options.mcpServers.agentrix;
+  assert.deepEqual(env, { AGENTRIX_BOOTSTRAP: spec.bootstrapFile, CODEX_HOME: 'test-home', ELECTRON_RUN_AS_NODE: '1' });
+  assert.equal(options.env.FAKE_ACCESS_TOKEN.length, 33000);
+  assert.equal(options.env.ANTHROPIC_API_KEY, 'synthetic-key');
+  assert.ok(JSON.stringify(options.mcpServers).length < 1000);
+});
 
 test('callFile IPC requires the app sender and unwraps the bound local call result in preload', async () => {
   const { createIpcAdapter } = require('../electron/shared/ipc.cjs');

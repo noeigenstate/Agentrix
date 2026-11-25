@@ -11,6 +11,7 @@ const path = require('node:path');
 // These instructions describe host capabilities proved by the paired real-CLI tests.
 // Keep the CLI's own preset and entrypoint; do not replace its system prompt.
 const IDENTITY_CONTEXT = "You are Claude Code, Anthropic's official CLI for Claude.";
+const ROLE_ENV = new Set(['AGENTRIX_BOOTSTRAP', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'ELECTRON_RUN_AS_NODE']);
 const NATIVE_CONTEXT = IDENTITY_CONTEXT + '\n'
   + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n';
 function privateSettings(value, signal) {
@@ -60,6 +61,9 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
   const bootstrap = spec.owner === 'gui' ? spec.bootstrapFile : null;
   const worker = spec.owner === 'dispatch', readOnly = worker && spec.readOnly;
   const resultServer = worker && spec.roleServer;
+  // The SDK serializes this descriptor into --mcp-config in the child's argv.
+  const roleServer = spec.roleServer && { type: 'stdio', ...spec.roleServer };
+  if (!worker && roleServer?.env) roleServer.env = Object.fromEntries(Object.entries(roleServer.env).filter(([name]) => ROLE_ENV.has(name.toUpperCase())));
   const workerDenied = readOnly ? READ_ONLY_DENIED : [...WORKER_DENIED, 'mcp__*'];
   const seatsNow = () => liveSeatMap(bootstrap) ?? spec.seatsMap;
   const reportSubagent = kind => async (input, toolUseId) => {
@@ -83,7 +87,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
         ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,
       spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
-    ...(spec.roleServer && { mcpServers: { [worker ? 'agentrix_role' : 'agentrix']: { type: 'stdio', ...spec.roleServer } } }),
+    ...(roleServer && { mcpServers: { [worker ? 'agentrix_role' : 'agentrix']: roleServer } }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",

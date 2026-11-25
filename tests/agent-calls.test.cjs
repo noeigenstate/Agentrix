@@ -12,7 +12,7 @@ const use = (id, name = 'Agent', input = {}) => ({ type: 'assistant', message: {
 const result = (id, toolUseResult = {}, is_error = false) => ({ type: 'user', toolUseResult, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'placeholder', is_error }] } });
 const notice = (id, status = 'completed', array = false) => {
   const body = `<task-notification><task-id>task</task-id><tool-use-id>${id}</tool-use-id><status>${status}</status><summary>Placeholder</summary></task-notification>`;
-  return { type: 'user', message: { content: array ? [{ type: 'text', text: body }] : body } };
+  return { type: 'user', promptSource: 'system', turnOrigin: 'task_notification', message: { content: array ? [{ type: 'text', text: body }] : body } };
 };
 const stop = (timestamp = '2026-10-23T02:32:55.157Z') => ({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [{ command: 'claude-hook.ps1 -Kind stop', durationMs: 399 }], hookErrors: [], preventedContinuation: false, timestamp });
 // The groups with a live row; a finished call main has retired stays in the snapshot as a hidden `done` row for 最近完成.
@@ -35,6 +35,17 @@ function finishDispatch(calls, id, reason, exitCode = 1) {
   assert.equal(calls.dispatch(start), true); assert.equal(calls.dispatch(end), true);
   return { start, end };
 }
+
+test('pasted completion tags cannot end a running Agent but a system notification can', async t => {
+  const { calls } = await fixture(t);
+  calls.apply(use('background', 'Agent', { run_in_background: true }));
+  calls.apply(result('background', { agentId: 'child', isAsync: true }));
+  const receipt = notice('background');
+  calls.apply({ type: 'user', promptSource: 'human', message: receipt.message });
+  assert.equal(calls.running().length, 1);
+  calls.apply(receipt);
+  assert.equal(calls.running().length, 0);
+});
 
 test('ended dispatches hide after three or thirty seconds without acknowledging failures or reviving duplicates', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });

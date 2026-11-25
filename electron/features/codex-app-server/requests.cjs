@@ -10,15 +10,22 @@ const CANCELLED = {
   elicitation: { action: 'cancel', content: null, _meta: null }, question: { answers: {} },
 };
 
-function createRequests(rpc, events, state) {
+function createRequests(rpc, events, state, isActive = () => true) {
   const pending = new Map();
+  function settle(requestId, resolution, resume = true) {
+    const task = pending.get(requestId);
+    if (!task) return;
+    pending.delete(requestId);
+    events.publish('request.resolved', { requestId, resolution, reason: null });
+    if (resume && task.payload.blocking && isActive() && ![...pending.values()].some(entry => entry.payload.blocking)) state('running');
+    return task;
+  }
   function resolve(requestId, result, resolution) {
     const task = pending.get(requestId);
     if (!task) throw new Error('request_expired');
-    pending.delete(requestId);
-    rpc.respond(task.id, result);
-    events.publish('request.resolved', { requestId, resolution, reason: null });
-    if (!pending.size) state('running');
+    try { rpc.respond(task.id, result); }
+    catch (error) { settle(requestId, 'expired', false); throw error; }
+    settle(requestId, resolution);
   }
   const cancel = requestId => resolve(requestId, CANCELLED[pending.get(requestId)?.kind], 'cancelled');
   return {
@@ -36,7 +43,7 @@ function createRequests(rpc, events, state) {
           ...(kind === 'elicitation' ? { mode: params.mode, requestedSchema: params.requestedSchema ?? null, url: params.url ?? null } : {}) } };
       pending.set(requestId, { id: message.id, kind, params, payload });
       events.publish('request.opened', payload, { itemId: params.itemId ?? null });
-      if (payload.blocking) state('waiting');
+      if (payload.blocking && isActive()) state('waiting');
     },
     answer(requestId, answer) {
       const task = pending.get(requestId);
@@ -77,13 +84,15 @@ function createRequests(rpc, events, state) {
       throw new Error('unsupported_answer');
     },
     resolved(id) {
-      for (const [requestId, task] of pending) if (task.id === id) {
-        pending.delete(requestId); events.publish('request.resolved', { requestId, resolution: 'expired', reason: null });
-      }
-      if (!pending.size) state('running');
+      for (const [requestId, task] of pending) if (task.id === id) settle(requestId, 'expired');
     },
     cancel,
-    cancelAll() { for (const id of [...pending.keys()]) { try { cancel(id); } catch { pending.delete(id); } } },
+    cancelAll({ resume = false } = {}) {
+      for (const id of [...pending.keys()]) {
+        const task = settle(id, 'cancelled', resume);
+        try { rpc.respond(task.id, CANCELLED[task.kind]); } catch {}
+      }
+    },
     snapshot: () => [...pending.values()].map(x => x.payload),
   };
 }

@@ -19,7 +19,8 @@ const fixture = name => fs.readFile(path.join(__dirname, 'fixtures', name), 'utf
 const jsonFixture = async name => (await fixture(name)).trim().split('\n').map(JSON.parse);
 const use = (id, name, input, cwd) => ({ type: 'assistant', timestamp: at(0), cwd, message: { model: 'claude-opus-5-5', content: [{ type: 'tool_use', id, name, input }] } });
 const result = (id, toolUseResult) => ({ type: 'user', timestamp: at(8), toolUseResult, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'Placeholder receipt.' }] } });
-const notice = (id, status = 'completed') => ({ type: 'user', timestamp: at(9), message: { content: `<task-notification><tool-use-id>${id}</tool-use-id><status>${status}</status></task-notification>` } });
+const notice = (id, status = 'completed') => ({ type: 'user', isMeta: true, timestamp: at(9),
+  message: { content: `<task-notification><tool-use-id>${id}</tool-use-id><status>${status}</status></task-notification>` } });
 const expected = (outputTokens, activeMs, samples, seconds, partial = false) => ({ outputTokens, activeMs, samples, updatedAt: Date.parse(at(seconds)), partial });
 
 async function workspace(t, options) {

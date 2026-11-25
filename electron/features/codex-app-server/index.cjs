@@ -82,6 +82,19 @@ function permissionsFailure(error, sent) {
 }
 
 const occupied = new Map();
+function releaseTurnInputs(entries, retry) {
+  for (const entry of entries) if (entry !== retry) delete entry.input;
+  entries.clear();
+}
+function replaceContextCwd(context, cwd, wireCwd) {
+  if (typeof context !== 'string' || !cwd || cwd === wireCwd) return context;
+  const forward = value => value.replace(/\\/g, '/');
+  const paths = new Map([[forward(cwd), forward(wireCwd)], [cwd, wireCwd]]);
+  const alternatives = [...paths.keys()].map(from => from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const delimiters = '[\\s"\'\x60<>(){}\\[\\],;:=]';
+  const bounded = new RegExp(`(^|${delimiters})(${alternatives})(?=$|[\\\\/]|${delimiters})`, 'g');
+  return context.replace(bounded, (_match, before, from) => before + paths.get(from));
+}
 function stopProcess(child, { preserveDescendants = false, onTreeStopFailure = () => {} } = {}) {
   if (!child) return Promise.resolve();
   // A CLI metadata child can inherit stdout after the app-server itself exits.
@@ -154,7 +167,7 @@ async function readiness(file, context, deps) {
 
 function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis,
   renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, accountKey,
-  appServerArgs = ['app-server', '--listen', 'stdio://'], onTreeStopFailure } = {}) {
+  appServerArgs = ['app-server', '--listen', 'stdio://'], onTreeStopFailure, stopChild = stopProcess } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -202,7 +215,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         return { id: thread.id, title: String(thread.name || thread.preview || '').slice(0, 200), at: Number.isSafeInteger(thread.updatedAt) ? thread.updatedAt * 1000 : null };
       } finally {
         signal?.removeEventListener('abort', cancel); rpc?.close();
-        try { await stopProcess(child); } finally { child?.dispose?.(); abort.abort(); }
+        try { await stopChild(child); } catch {}
+        finally { try { child?.dispose?.(); } finally { abort.abort(); } }
       }
     },
     create(initialSpec, emit) {
@@ -228,6 +242,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       const connectionAbort = new AbortController();
       const assertOpen = () => { if (closed) throw Object.assign(new Error('session_closed'), { code: 'closed' }); };
       let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
+      const turnEntries = new Set();
+      const canReset = spec.owner === 'gui' && spec.kind !== 'ssh' && !spec.remote && !!resetAtLimit;
       const setState = (value, reason = null) => {
         state = value;
         if (['stopping', 'stopped', 'failed', 'disconnected'].includes(value)) events.publish('context.compacting', { active: false });
@@ -314,10 +330,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           manualCommand = null; setState('idle');
           if (limited && outcome.terminalReason === 'usageLimitExceeded') {
             const entry = receipts.get(clientMessageId);
-            const safe = !executionSeen && !currentUsage && Array.isArray(turn.items) && turn.items.length === 0 && entry
+            const safe = !executionSeen && !currentUsage && Array.isArray(turn.items) && turn.items.length === 0 && entry?.input
               && ['queued', 'delivered'].includes(entry.status) && !entry.retried;
             if (!entry?.retried) void resetLimit(safe ? entry : null, turn.id);
           }
+          releaseTurnInputs(turnEntries, resetRetry?.entry);
         } else if (method === 'serverRequest/resolved') requests.resolved(params.requestId);
         else if (method === 'account/rateLimits/updated') {
           const scope = spec.scopeId || spec.runtimeSessionId, value = mergeLimits(scopes.get(scope), params, scope, now());
@@ -339,14 +356,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         }
       }
       async function resetLimit(entry, failedTurnId) {
-        if (spec.owner !== 'gui' || spec.kind === 'ssh' || spec.remote || !resetAtLimit || closed) return;
+        if (!canReset || closed) return;
         if (entry) resetRetry = { entry, turnId: failedTurnId };
         if (resetting) return;
         const reused = lastReset?.turnId === failedTurnId && lastReset.result.confirmed;
         if (reused && !entry) return;
         const generation = accountGeneration;
         const task = Promise.resolve().then(() => reused ? lastReset.result : resetAtLimit(spec, { atLimit: true, current: () => !closed && accountGeneration === generation })).then(async result => {
-          if (closed || generation !== accountGeneration) return;
+          if (!result || closed || generation !== accountGeneration) return;
           const candidate = resetRetry; resetRetry = null;
           const retryTurnId = candidate?.turnId ?? failedTurnId;
           entry = candidate?.entry;
@@ -369,9 +386,16 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             model: spec.model ?? null, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
           started(response.turn); inputReceipt(entry.id, 'delivered');
         }).catch(error => {
-          if (entry?.retried) inputReceipt(entry.id, error.uncertain ? 'unknown' : 'rejected');
+          if (!entry?.retried) return;
+          inputReceipt(entry.id, error.uncertain ? 'unknown' : 'rejected');
           if (!closed) events.publish('error', { code: 'reset_continue_failed', message: translate('自动重置后未能继续本条消息，请核对会话后继续。'), retryable: false, willRetry: false, stage: 'turn' });
-        }).finally(() => { if (resetting === task) resetting = null; });
+        }).finally(() => {
+          if (entry) delete entry.input;
+          if (resetting === task) {
+            if (resetRetry) delete resetRetry.entry.input;
+            resetting = null; resetRetry = null;
+          }
+        });
         resetting = task; await task;
       }
       async function connectThread(executable, env, onStage, isReconnecting) {
@@ -385,9 +409,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           onRequest: message => requests.open(message), onDisconnect: reason => {
             if (closed || isReconnecting()) return;
             permissionProbe = null; permissionEvidence = null; timedOutProbes = 0;
-            requests?.cancelAll(); setState('disconnected', reason);
+            requests?.cancelAll(); releaseTurnInputs(turnEntries); setState('disconnected', reason);
           } });
-        requests = createRequests(rpc, events, setState);
+        requests = createRequests(rpc, events, setState, () => !closed && active);
         // SSH resolves Codex before the handshake deadline starts.
         await child.opened;
         onStage('initialize');
@@ -474,8 +498,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (spec.kind !== 'ssh') wireHome = physicalDirectory(spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex'));
           assertOpen();
           if (resuming) bind(threadId);
-          const context = wireCwd === spec.cwd ? spec.context : spec.context?.replaceAll(spec.cwd, wireCwd)
-            .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
+          const context = replaceContextCwd(spec.context, spec.cwd, wireCwd);
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
           const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}),
@@ -533,7 +556,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             }
           } catch { }
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
-          await stop(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
+          try { await stop(); } catch {}
+          setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }
       }
       async function replayHistory() {
@@ -586,7 +610,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (['status', 'usage'].includes(name)) return observe(input, name);
         const fingerprint = createHash('sha256').update(JSON.stringify([input.text, input.images || []])).digest('hex'), prior = receipts.get(input.clientMessageId);
         if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.reject(new Error('message_id_conflict'));
-        if (receipts.size >= 2000) return Promise.reject(new Error('input_limit'));
+        if (receipts.size >= 2000) {
+          const oldest = [...receipts].find(([, entry]) => entry.settled && !entry.input && !turnEntries.has(entry));
+          if (!oldest) return Promise.reject(new Error('input_limit'));
+          receipts.delete(oldest[0]);
+        }
         const promise = sending.catch(() => {}).then(async () => {
           await changingOptions;
           if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
@@ -607,7 +635,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               if (skill) userInput.push({ type: 'skill', name: command[1], path: skill.path });
             }
             const steering = active;
-            const entry = receipts.get(clientId); entry.id = clientId; entry.input = userInput;
+            const entry = receipts.get(clientId); entry.id = clientId; turnEntries.add(entry);
+            if (canReset) entry.input = userInput;
             clientMessageId = clientId; origin = 'user';
             const base = { threadId: events.binding.providerSessionId, clientUserMessageId: clientId, input: userInput };
             const startTurn = () => rpc.request('turn/start', { ...base, model: spec.model ?? null, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
@@ -621,6 +650,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               if (read?.thread?.id !== events.binding.providerSessionId || read.thread.status?.type !== 'idle' || !['completed', 'failed', 'interrupted'].includes(previous?.status)) throw error;
               // Only an explicit rejected steer plus an idle thread proves the input did not execute.
               notification('turn/completed', { turn: previous });
+              turnEntries.add(entry);
+              if (canReset) entry.input = userInput;
               newTurn = true; result = await startTurn();
             }
             if (newTurn) started(result.turn);
@@ -628,16 +659,21 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             inputReceipt(clientId, 'delivered');
             return { clientMessageId: clientId, status: 'delivered' };
           } catch (error) {
+            const entry = receipts.get(clientId); turnEntries.delete(entry); delete entry.input;
             const status = error.uncertain ? 'unknown' : 'rejected';
             inputReceipt(clientId, status);
             if (error.uncertain) setState('disconnected', 'input_delivery_unknown');
             return { clientMessageId: clientId, status, ...(!error.uncertain && error.code === -32602 ? { reason: 'worker_ended' } : {}) };
           }
         });
-        receipts.set(input.clientMessageId, { fingerprint, promise });
+        const entry = { fingerprint, promise, settled: false };
+        receipts.set(input.clientMessageId, entry);
         // A refused local control never reached the provider. It may be corrected
         // and retried by the caller; accepted/uncertain requests stay deduplicated.
-        void promise.catch(() => { if (!receipts.get(input.clientMessageId)?.status) receipts.delete(input.clientMessageId); });
+        void promise.then(() => { entry.settled = true; }, () => {
+          entry.settled = true;
+          if (!entry.status) receipts.delete(input.clientMessageId);
+        });
         sending = promise; return promise;
       }
       const optionsSnapshot = () => ({ model: spec.model ?? threadResponse?.model ?? null,
@@ -768,6 +804,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (state !== 'idle') throw new Error(translate('请等待当前任务结束后再运行命令。'));
         if (name === 'compact' && argument) throw new Error(translate('这个命令不接受参数。'));
         if (!name && !argument) throw new Error(translate('请输入要运行的命令。'));
+        const entry = receipts.get(id); turnEntries.add(entry);
         clientMessageId = id; origin = 'user'; manualCommand = name || 'shell';
         const previousTurn = events.binding.turnId;
         try {
@@ -783,8 +820,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             // The owner's own command runs the real CLIs, not the planner's shims that the app-server's env carries.
             await rpc.request('thread/shellCommand', { ...params, command: spec.kind === 'ssh' ? argument : ownerShellCommand(argument, spec.env, shellOf({ platform, env: spec.env })) });
           }
+          if (!active) turnEntries.delete(entry);
           inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
         } catch (error) {
+          turnEntries.delete(entry);
           manualCommand = null; events.publish('context.compacting', { active: false });
           const uncertain = error.uncertain || events.binding.turnId !== previousTurn;
           if (uncertain) { inputReceipt(id, 'unknown'); setState('disconnected', 'input_delivery_unknown'); }
@@ -793,19 +832,19 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function interrupt() {
         if (closed || !rpc) return;
-        requests.cancelAll();
+        requests.cancelAll({ resume: true });
         if (active) await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId });
       }
       async function close({ preserveDescendants = false } = {}) {
         if (closed) return;
         closed = true; threadKnown(); settingsSeen?.(); connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
+        releaseTurnInputs(turnEntries);
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
         rpc?.close();
-        try { await stopProcess(child, { preserveDescendants, onTreeStopFailure }); }
+        try { await stopChild(child, { preserveDescendants, onTreeStopFailure }); }
         finally {
-          child?.dispose?.();
           if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);
-          setState('stopped');
+          try { child?.dispose?.(); } finally { setState('stopped'); }
         }
       }
       function readLimits() {
@@ -884,4 +923,4 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   };
 }
 
-module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess, elevatedSetupMessage, withSandboxServer, readiness };
+module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess, elevatedSetupMessage, withSandboxServer, readiness, replaceContextCwd, releaseTurnInputs };

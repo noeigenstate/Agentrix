@@ -56,7 +56,9 @@ function createDispatchIntake(deps) {
     if (event.type !== 'dispatch-account' && !DISPATCH_EVENTS.includes(event.type)) return false;
     if (event.version === 1) {
       const inbox = bindDispatchInbox(s, project);
-      void inbox.accept(event, acknowledge).then(() => inbox.sweep()).catch(() => inbox.refuse(event, 'dispatch.outbox_unreadable'));
+      void inbox.accept(event, acknowledge).then(result => {
+        if (result.accepted) return inbox.sweep(event.id);
+      }).catch(() => inbox.refuse(event, 'dispatch.outbox_unreadable'));
     } else applyDispatchEvent(s, project, event);
     return true;
   }

@@ -192,7 +192,7 @@ for (const end of ['reset', 'dispose', 'monitor']) {
     calls.apply(use('toolu_child', { run_in_background: true }));
     calls.apply(result(1));
     calls.remoteRecords({ child: { records: [], reset: true, partial: false, behind: true } });
-    calls.apply({ type: 'user', timestamp: new Date(at(4)).toISOString(), message: { content:
+    calls.apply({ type: 'user', isMeta: true, timestamp: new Date(at(4)).toISOString(), message: { content:
       '<task-notification><tool-use-id>toolu_child</tool-use-id><status>completed</status></task-notification>' } });
     assert.equal(finished.length, 0);
     if (end === 'monitor') {
@@ -319,7 +319,7 @@ test('current-generation terminal end proofs release signal-held rows with SSH c
     calls.apply(use('toolu_child', { run_in_background: !['completed', 'interrupt'].includes(proof) }));
     calls.subagent(signal('start', 'child', 1, { toolUseId: 'toolu_child' }));
     if (['TaskStop', 'KillShell'].includes(proof)) { calls.apply(toolRecord(proof, 2)); calls.apply(stopped(3)); }
-    else if (['killed', 'failed'].includes(proof)) calls.apply({ type: 'user', timestamp: new Date(at(3)).toISOString(), message: { content:
+    else if (['killed', 'failed'].includes(proof)) calls.apply({ type: 'user', isMeta: true, timestamp: new Date(at(3)).toISOString(), message: { content:
       `<task-notification><tool-use-id>toolu_child</tool-use-id><task-id>child</task-id><status>${proof}</status></task-notification>` } });
     else { const record = result(3); if (proof === 'interrupt') record.message.content[0].is_error = true; calls.apply(record); }
     assert.equal(calls.running().length, 0, proof);
@@ -328,7 +328,7 @@ test('current-generation terminal end proofs release signal-held rows with SSH c
     assert.equal(calls.running().length, 1, 'the original Agent result cannot end its continuation even when delivered later');
     calls.apply(toolRecord('TaskStop', 3, 'old-stop')); calls.apply(stopped(5, 'old-stop'));
     assert.equal(calls.running().length, 1, 'a stop issued before this generation cannot end it');
-    calls.apply({ type: 'user', timestamp: new Date(at(5)).toISOString(), message: { content:
+    calls.apply({ type: 'user', isMeta: true, timestamp: new Date(at(5)).toISOString(), message: { content:
       '<task-notification><tool-use-id>toolu_child</tool-use-id><task-id>child</task-id><status>killed</status></task-notification>' } });
     assert.equal(calls.running().length, 1, 'a notification for the original launch cannot end its continuation');
     calls.apply(toolRecord('TaskStop', 5, 'failed-stop'));

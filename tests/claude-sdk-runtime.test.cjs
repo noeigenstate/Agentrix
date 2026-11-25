@@ -5,6 +5,10 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+const { createClaudeSession } = require('../electron/features/claude-sdk/session.cjs');
+const { createSdkLoader } = require('../electron/features/claude-sdk/runtime.cjs');
+const { routeSettings } = require('../electron/features/claude-sdk/routing.cjs');
+const { runShell, shellExecutable } = require('../electron/features/claude-sdk/shell.cjs');
 const { createCredentials, apiEnvironment } = require('../electron/features/claude-sdk/credentials.cjs');
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
 const { createNormalizer } = require('../electron/features/claude-sdk/normalize.cjs');
@@ -175,10 +179,170 @@ test('unknown resume baselines never charge historical totals', t => {
   assert.equal(usage.record('old', { uuid: 'one', total_cost_usd: 20 }, { resume: true }).deltaUsdMicros, null);
   assert.equal(usage.summary().monthUsdMicros, null);
 });
-test('UTC month rollover keeps key-independent prior spend', t => {
-  let now = Date.UTC(2026, 10, 30, 23, 59); const usage = createUsage({ file: path.join(directory(t), 'usage.json'), now: () => now });
-  usage.record('s', { uuid: 'r', total_cost_usd: 1 }); assert.equal(usage.summary().month, '2026-11');
-  now = Date.UTC(2026, 11, 1); assert.equal(usage.summary().monthUsdMicros, 0);
+test('today and month roll over at local midnight while UTC is still in the previous month', t => {
+  const previous = process.env.TZ;
+  process.env.TZ = 'Asia/Shanghai';
+  t.after(() => { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; });
+  let now = Date.UTC(2026, 10, 30, 15, 59);
+  const usage = createUsage({ file: path.join(directory(t), 'usage.json'), now: () => now });
+  usage.record('s', { uuid: 'before', total_cost_usd: 1 });
+  assert.equal(usage.summary().month, '2026-11');
+  now += 60000;
+  assert.deepEqual(usage.summary(), { month: '2026-12', apiRecords: true, todayUsdMicros: 0, monthUsdMicros: 0, estimated: true });
+  usage.record('s', { uuid: 'after', total_cost_usd: 1.5 });
+  assert.equal(usage.summary().todayUsdMicros, 500000);
+  assert.equal(usage.summary().monthUsdMicros, 500000);
+});
+
+test('a failed SDK load can retry and concurrent callers share the successful load', async () => {
+  let tries = 0;
+  const sdk = {};
+  const load = createSdkLoader({ resourcesPath: __dirname, packaged: true, load: async () => {
+    if (++tries === 1) throw new Error('temporary SDK load failure');
+    return sdk;
+  } });
+  await assert.rejects(load(), /temporary SDK load failure/);
+  const first = load();
+  assert.equal(load(), first);
+  assert.equal(await first, sdk);
+  assert.equal(tries, 2);
+});
+
+function sessionFixture(t, { auto = true, configure, ...dependencies } = {}) {
+  const cwd = directory(t), fake = fakeSdk({ auto }), spec = { cwd, owner: 'gui', agent: 'claude', projectId: 'p', terminalId: 't',
+    runtimeSessionId: 'sdk-test', model: 'initial', effort: 'high', env: {} };
+  const query = fake.sdk.query, events = [];
+  if (configure) fake.sdk.query = input => Object.assign(query(input), configure());
+  let idle;
+  const ready = Promise.withResolvers();
+  const session = createClaudeSession(spec, event => {
+    events.push(event);
+    if (event.type === 'session.state' && event.payload.state === 'idle') idle?.resolve();
+    if (event.type === 'routing.updated' && event.payload.observed.model) ready.resolve();
+  }, { loadSdk: async () => fake.sdk, resolveExecutable: async () => process.execPath,
+    credentials: { read: () => key }, usage: { record: () => ({ snapshot: {}, deltaUsdMicros: 0 }) }, ...dependencies });
+  t.after(() => session.close());
+  return { fake, session, spec, events, ready: ready.promise, idle() { idle = Promise.withResolvers(); return idle.promise; } };
+}
+
+test('SDK input and shell receipt caches evict finished entries and continue to deduplicate recent IDs', async t => {
+  let commands = 0;
+  const f = sessionFixture(t, { runCommand: async () => {
+    ++commands;
+    return { exitCode: 0, stdout: 'synthetic output', stderr: '', closed: Promise.resolve() };
+  } });
+  await f.session.start();
+  const firstIdle = f.idle();
+  assert.equal((await f.session.send({ clientMessageId: 'first', text: 'test' })).status, 'queued');
+  await firstIdle;
+  for (let number = 0; number <= 2000; number++) {
+    const idle = f.idle();
+    assert.deepEqual(await f.session.shell('shell-' + number, 'synthetic command'), { exitCode: 0 });
+    await idle;
+  }
+  assert.deepEqual(await f.session.shell('shell-2000', 'synthetic command'), { exitCode: 0 });
+  assert.equal((await f.session.send({ clientMessageId: 'shell-2000', text: '!synthetic command' })).status, 'consumed');
+  assert.equal(commands, 2001);
+  assert.equal(f.fake.inputs.length, 2002);
+});
+
+test('failed SDK routing flags leave the declared seat retryable', async t => {
+  const models = [], next = { model: 'next', effort: 'medium', fast: true };
+  let updates = 0;
+  const f = sessionFixture(t, { configure: () => ({ setModel: async value => models.push(value),
+    applyFlagSettings: async () => { if (++updates === 1) throw new Error('flag update failed'); } }) });
+  await f.session.start();
+  const idle = f.idle();
+  await f.session.send({ clientMessageId: 'first', text: 'test' });
+  await idle;
+  await assert.rejects(f.session.applyRouting(next), /flag update failed/);
+  assert.equal(f.spec.model, 'initial');
+  assert.equal((await f.session.runOptions({})).effort, 'high');
+  assert.equal((await f.session.applyRouting(next)).effort, 'medium');
+  assert.deepEqual(models, ['next', 'initial', 'next']);
+});
+
+test('failed retirement of a background task after credential change returns a rejected receipt', async t => {
+  let generation = 1;
+  const f = sessionFixture(t, { auto: false, credentialVersion: () => generation,
+    configure: () => ({ stopTask: async () => { throw new Error('background_stop_unconfirmed'); } }) });
+  await f.session.start();
+  const idle = f.idle();
+  await f.session.send({ clientMessageId: 'first', text: 'test' });
+  await f.ready;
+  f.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'task', run_id: 'job' });
+  f.fake.emit({ type: 'result', uuid: 'result', user_message_uuid: 'first', subtype: 'success', terminal_reason: 'completed', total_cost_usd: 0 });
+  await idle;
+  generation++;
+  assert.deepEqual(await f.session.send({ clientMessageId: 'next', text: 'test' }),
+    { status: 'rejected', reason: '无法确认后台任务已经停止，暂时无法使用新密钥。' });
+  assert.equal(f.fake.inputs.length, 1);
+});
+
+test('input gets a rejection when a route change aborts initialization and the route subsequently returns', async t => {
+  let reads = 0;
+  const f = sessionFixture(t, { canContinue: () => ++reads !== 2 });
+  await f.session.start();
+  assert.deepEqual(await f.session.send({ clientMessageId: 'first', text: 'test' }), { status: 'rejected' });
+  assert.equal(f.fake.inputs.length, 0);
+  const idle = f.idle();
+  assert.equal((await f.session.send({ clientMessageId: 'second', text: 'test' })).status, 'queued');
+  await idle;
+  assert.equal(f.fake.inputs.length, 1);
+});
+
+test('a failed policy audit write keeps the decision and the next write saves both entries', async t => {
+  const { runtime, spec, fake, dir } = setup(t, { auto: false });
+  const file = path.join(dir, 'policy-audit.json'), write = fs.writeFileSync;
+  let failed = false;
+  t.mock.method(fs, 'writeFileSync', (target, ...args) => {
+    if (!failed && String(target).startsWith(file + '.')) { failed = true; throw Object.assign(new Error('busy'), { code: 'EBUSY' }); }
+    return write(target, ...args);
+  });
+  const worker = runtime.create({ ...spec, owner: 'dispatch' }, () => {});
+  t.after(() => worker.close());
+  await worker.start();
+  await worker.send({ clientMessageId: 'first', text: 'test' });
+  const hook = fake.calls[0].options.hooks.PreToolUse[0].hooks[0];
+  assert.equal(await hook({ tool_name: 'Bash', tool_input: { command: 'echo first' } }).then(value => value.hookSpecificOutput?.permissionDecision ?? 'allow'), 'allow');
+  await hook({ tool_name: 'Bash', tool_input: { command: 'echo second' } });
+  assert.equal(failed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).map(decision => decision.behavior), ['allow', 'allow']);
+});
+
+test('Windows looks for project credential overrides through a case-varied root', { skip: process.platform !== 'win32' }, t => {
+  const root = directory(t), cwd = path.join(root, 'subproject'), settings = path.join(root, '.claude');
+  fs.mkdirSync(cwd); fs.mkdirSync(settings);
+  fs.writeFileSync(path.join(settings, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'synthetic-override' } }));
+  assert.throws(() => routeSettings({ cwd, worktree: root.toUpperCase(), env: {} }), { code: 'project_api_key_override' });
+});
+
+test('a locked shell scratch directory still resolves the close receipt', async t => {
+  const remove = fs.rmSync;
+  let blocked;
+  t.mock.method(fs, 'rmSync', (file, options) => {
+    if (path.basename(file).startsWith('agentrix-shell-')) { blocked = file; throw Object.assign(new Error('locked'), { code: 'EBUSY' }); }
+    return remove(file, options);
+  });
+  t.after(() => { if (blocked) remove(blocked, { recursive: true, force: true }); });
+  const result = await runShell({ cwd: os.tmpdir(), env: { ...process.env, CLAUDE_CODE_GIT_BASH_PATH: process.execPath },
+    command: 'exit 0', signal: new AbortController().signal, output() {} });
+  await result.closed;
+  assert.ok(blocked);
+  assert.equal(typeof result.exitCode, 'number');
+});
+
+test('Git Bash lookup bounds the Git probe and falls back to the actual Git installation on PATH', t => {
+  const root = directory(t), bin = path.join(root, 'bin'), cmd = path.join(root, 'cmd');
+  const bash = path.join(bin, 'bash.exe');
+  fs.mkdirSync(bin); fs.mkdirSync(cmd);
+  fs.writeFileSync(bash, 'synthetic');
+  fs.writeFileSync(path.join(cmd, 'git.exe'), 'synthetic');
+  t.mock.method(require('node:child_process'), 'execFileSync', (file, args, options) => {
+    assert.equal(file, 'git'); assert.deepEqual(args, ['--exec-path']); assert.equal(options.timeout, 2000);
+    throw Object.assign(new Error('synthetic timeout'), { code: 'ETIMEDOUT' });
+  });
+  assert.equal(shellExecutable({ Path: cmd }, { platform: 'win32' }), bash);
 });
 test('normalizer merges delta and final snapshots and associates tool results', () => {
   const events = [], normalize = createNormalizer((type, payload, extra) => events.push({ type, payload, ...extra }));

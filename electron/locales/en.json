@@ -735,6 +735,7 @@
   "正在保存…": "Saving…",
   "密钥已加密保存在本机。": "The key is saved, encrypted, on this machine.",
   "密钥已清除。": "The key was removed.",
+  "无法确认后台任务已经停止，暂时无法使用新密钥。": "The new key cannot be used until the background tasks are confirmed stopped.",
   "启动示例：": "To start it: ",
   "一句话总结用 1–3B 的小模型就够，例如 qwen2.5:1.5b、qwen2.5:3b、gemma2:2b、phi3:mini。": "A 1–3B model is enough for a one-sentence summary, for example qwen2.5:1.5b, qwen2.5:3b, gemma2:2b or phi3:mini.",
   "测试总结": "Test the summary",

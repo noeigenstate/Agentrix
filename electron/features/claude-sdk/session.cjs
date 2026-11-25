@@ -23,7 +23,7 @@ async function waitWithin(task, milliseconds) {
   finally { clearTimeout(timer); }
 }
 function createClaudeSession(spec, emit, dependencies) {
-  const { loadSdk, resolveExecutable, credentials, usage, now = Date.now, audit,
+  const { loadSdk, resolveExecutable, credentials, usage, now = Date.now, audit, runCommand = runShell,
     onCost = () => {}, observe = () => {}, onSession = () => {} } = dependencies;
   // What this session saw of its route, told to the resolver with the generation its query began in.
   const failed = (code, error, observed) => observe({ kind: 'failure', code, message: error?.message, observed });
@@ -90,6 +90,12 @@ function createClaudeSession(spec, emit, dependencies) {
     stopSubagents(run);
     run.queue.close(); run.abort.abort();
     try { run.query.close(); } catch { }
+  }
+  async function renewCredentials(run) {
+    try { await stopBackground(); }
+    catch { return false; }
+    cancelQuery(run, 'credentials_changed'); await run.task;
+    return true;
   }
   function unknownInput() {
     for (const [id, status] of sent) if (!['consumed', 'rejected'].includes(status)) receipt(id, 'unknown');
@@ -429,6 +435,7 @@ function createClaudeSession(spec, emit, dependencies) {
     return { clientMessageId, status: 'consumed', local: JSON.parse(clean(JSON.stringify(local))) };
   }
   async function send({ clientMessageId, text, images = [] }, shellContent) {
+    const blockedKey = '无法确认后台任务已经停止，暂时无法使用新密钥。';
     if (!shellContent && spec.owner !== 'dispatch' && routingText(text)) throw routingOwned();
     const command = !shellContent && spec.owner !== 'dispatch' && typeof text === 'string' ? panelCommand(text) : null;
     if (command) return panel(command, images, clientMessageId);
@@ -441,7 +448,6 @@ function createClaudeSession(spec, emit, dependencies) {
       else throw providerFailure;
     }
     if (!canContinue()) return { status: 'rejected' };
-    if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     if (/^\/(?:clear|reset|new)(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
     let content = images.length ? [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(image => {
       const [, media_type, data] = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(image) || [];
@@ -451,14 +457,23 @@ function createClaudeSession(spec, emit, dependencies) {
     if (active?.closing) await active.task;
     if (active && active.keyVersion !== dependencies.credentialVersion?.()) {
       if (active.busy) return { status: 'rejected' };
-      await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task;
+      if (!await renewCredentials(active)) return { status: 'rejected', reason: blockedKey };
     }
     if (!active) await prepare(false);
     if (closed || stopping) throw new Error('会话已停止。');
-    if (!canContinue()) return { status: 'rejected' };
+    if (!active || !canContinue()) return { status: 'rejected' };
     // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
-    if (active.keyVersion !== dependencies.credentialVersion?.()) { await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }, shellContent); }
+    if (active.keyVersion !== dependencies.credentialVersion?.()) {
+      if (!await renewCredentials(active)) return { status: 'rejected', reason: blockedKey };
+      return send({ clientMessageId, text, images }, shellContent);
+    }
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
+    if (sent.size >= 2000) {
+      const inFlight = new Set((active.turnInputs || []).map(input => input.clientMessageId));
+      const oldest = [...sent.keys()].find(id => !inFlight.has(id));
+      if (oldest === undefined) throw new Error('会话消息过多，请启动新会话。');
+      sent.delete(oldest);
+    }
     // Settings invalidate failures while owner queries stay open at idle. An explicit
     // new turn observes the new generation without letting an old in-flight failure rearm it.
     if (!active.busy) active.generation = dependencies.generation?.();
@@ -533,12 +548,18 @@ function createClaudeSession(spec, emit, dependencies) {
     } catch (error) { error.message = clean(error.message); throw error; }
   }
   async function applyRouting({ model, effort, fast }) {
-    Object.assign(spec, { model, effort, fast });
     const run = active;
     if (run?.initialized && !run.closing) {
-      await run.query.setModel(model || undefined);
-      await run.query.applyFlagSettings({ effortLevel: effort || null, fastMode: fast === true });
+      try {
+        await run.query.setModel(model || undefined);
+        await run.query.applyFlagSettings({ effortLevel: effort || null, fastMode: fast === true });
+      } catch (error) {
+        try { await run.query.setModel(spec.model || undefined); } catch {}
+        try { await run.query.applyFlagSettings({ effortLevel: spec.effort || null, fastMode: spec.fast === true }); } catch {}
+        throw error;
+      }
     }
+    Object.assign(spec, { model, effort, fast });
     return optionsSnapshot();
   }
   async function runOptions(patch) {
@@ -553,7 +574,11 @@ function createClaudeSession(spec, emit, dependencies) {
       return previous.task;
     }
     if (state !== 'idle' || shellAbort || closed || preparing) throw new Error('当前正在工作，请等待空闲后再运行命令。');
-    if (shells.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
+    if (shells.size >= 2000) {
+      const oldest = [...shells].find(([, entry]) => entry.settled && !entry.reject);
+      if (!oldest) throw new Error('会话消息过多，请启动新会话。');
+      shells.delete(oldest[0]);
+    }
     shellAbort = new AbortController();
     const job = { abort: shellAbort }; shellControllers.add(job);
     const itemId = `shell:${clientMessageId}`, abort = shellAbort;
@@ -577,7 +602,7 @@ function createClaudeSession(spec, emit, dependencies) {
     };
     card('running'); setState('running');
     // The owner's own command: the session's env without the planner's shims (shellEnv), so a typed claude is the real CLI.
-    const task = runShell({ cwd: spec.cwd, env: spec.shellEnv || spec.env || process.env, command, signal: abort.signal,
+    const task = runCommand({ cwd: spec.cwd, env: spec.shellEnv || spec.env || process.env, command, signal: abort.signal,
       output: ({ stdout, stderr, combined }) => card('running', combined ?? stdout + stderr) }).then(async result => {
       job.closed = result.closed;
       job.returned = true;
@@ -596,6 +621,7 @@ function createClaudeSession(spec, emit, dependencies) {
       }
       return { exitCode: result.exitCode };
     }).catch(error => { if (job.returned) throw rejected(error); card('failed'); throw error; }).finally(() => {
+      shells.get(clientMessageId).settled = true;
       if (!sent.has(clientMessageId)) delete shells.get(clientMessageId)?.reject;
       if (shellAbort === abort) shellAbort = null;
       if (!closed && !stopping && !active?.busy) setState('idle');

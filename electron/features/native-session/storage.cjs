@@ -13,15 +13,31 @@ function recoverJson(file, fallback) {
   warnings.set(resolved, [message, quarantined ? '损坏的文件已隔离保留。' : '损坏的文件无法隔离，原文件已保留。']);
   return structuredClone(fallback);
 }
+const retryableRead = new Set(['EBUSY', 'EPERM', 'EMFILE']);
+const retryWait = new Int32Array(new SharedArrayBuffer(4));
+function readContents(file) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const fd = fs.openSync(file, 'r');
+      try { return fs.fstatSync(fd).size > 16 * 1024 * 1024 ? '' : fs.readFileSync(fd, 'utf8'); }
+      finally { fs.closeSync(fd); }
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      if (!retryableRead.has(error.code) || attempt === 3) throw error;
+      Atomics.wait(retryWait, 0, 0, 10 * 2 ** attempt);
+    }
+  }
+}
 function readJson(file, fallback, { validate = () => true } = {}) {
-  try {
-    if (fs.statSync(file).size > 16 * 1024 * 1024) return recoverJson(file, fallback);
-    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return validate(value) ? value : recoverJson(file, fallback);
-  } catch (error) {
-    if (error.code === 'ENOENT') return structuredClone(fallback);
+  const text = readContents(file);
+  if (text === null) return structuredClone(fallback);
+  let value;
+  try { value = JSON.parse(text.replace(/^\uFEFF/, '')); }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return recoverJson(file, fallback);
   }
+  return validate(value) ? value : recoverJson(file, fallback);
 }
 function recoveryWarnings(directory, clear = false) {
   const parent = path.resolve(directory), found = [...warnings].filter(([file]) => path.dirname(file) === parent);

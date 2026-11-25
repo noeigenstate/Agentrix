@@ -1,4 +1,5 @@
 const net = require('node:net');
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -18,6 +19,16 @@ const status = value => ['queued', 'delivered', 'consumed', 'rejected', 'unknown
 const registrationCodes = new Set(['dispatch.session_mismatch', 'dispatch.control_unbound', 'dispatch.unknown_run',
   'dispatch.project_mismatch', 'dispatch.duplicate_run']);
 const leadModes = new Set(['native', 'terminal', 'codex']);
+function makeReceiptRoom(receipts, limit) {
+  if (receipts.size < limit) return true;
+  const oldest = [...receipts].find(([, entry]) => entry.settled);
+  return !!oldest && receipts.delete(oldest[0]);
+}
+function rememberReceipt(receipts, id, signature, task) {
+  const receipt = { signature, settled: false, promise: task.finally(() => { receipt.settled = true; }) };
+  receipts.set(id, receipt);
+  return receipt.promise;
+}
 function frames(socket, receive, disconnected) {
   let queue = [], bytes = 0, blocked = false, ended = false;
   const flush = () => {
@@ -55,7 +66,13 @@ function frames(socket, receive, disconnected) {
 // receives it, so a local helper names a worker's account as main does; an SSH host's account keeps its own channel.
 function createDispatchControl({ resolveRun, accountKey = processAccountKey, now = Date.now }) {
   const clients = new Map(), handlers = new Map(), sockets = new Set(), receipts = new Map();
-  let server, address;
+  let server, address, socketDirectory;
+  function closeListener(listener) {
+    if (!listener) return;
+    const directory = socketDirectory;
+    socketDirectory = null;
+    listener.close(() => { if (directory) { try { fs.rmdirSync(directory); } catch {} } });
+  }
   function accept(socket, registration) {
     sockets.add(socket);
     let client, registering = false, send;
@@ -88,7 +105,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           return;
         }
         if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run', run.leadMode);
-        client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), brokerRequested: false, supportsFinish: value.finishProtocol === 1 };
+        client = { run, send, pending: new Map(), control: null, requests: new Map(), delivered: new Map(), brokerRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
         send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}) });
         return;
@@ -107,11 +124,13 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         const task = client.pending.get(value.messageId);
         if (task) { clearTimeout(task.timer); client.pending.delete(value.messageId); task.resolve({ messageId: value.messageId, status: value.status }); }
       } else if (value.type === 'request' && validId(value.requestId) && typeof value.method === 'string') {
-        if (client.requests.has(value.requestId) || client.requests.size >= 4000) return socket.destroy();
-        client.requests.add(value.requestId);
+        if (client.requests.has(value.requestId) || !makeReceiptRoom(client.requests, 4000)) return socket.destroy();
+        const request = { settled: false };
+        client.requests.set(value.requestId, request);
         const broker = brokerMethods.has(value.method);
         if (broker) {
           if (workerOf(client.run.agent)?.brokerMethod !== value.method || client.brokerRequested) {
+            request.settled = true;
             return send({ type: 'result', requestId: value.requestId, ok: false, error: 'run_binding_rejected' });
           }
           client.brokerRequested = true;
@@ -121,12 +140,11 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           if (!client.control || !validId(payload?.messageId) || !['intervene', 'stop'].includes(payload.type)) throw new Error('control_unavailable');
           const previous = client.delivered.get(payload.messageId), signature = JSON.stringify(payload);
           if (previous) { if (previous.signature !== signature) throw new Error('message_id_conflict'); return previous.promise; }
-          if (client.delivered.size >= 2000) throw new Error('control_limit');
-          const promise = Promise.resolve().then(() => client.control(payload));
-          client.delivered.set(payload.messageId, { signature, promise }); return promise;
+          if (!makeReceiptRoom(client.delivered, 2000)) throw new Error('control_limit');
+          return rememberReceipt(client.delivered, payload.messageId, signature, Promise.resolve().then(() => client.control(payload)));
         } : handlers.get(value.method);
-        if (!handler) return send({ type: 'result', requestId: value.requestId, ok: false, error: 'unsupported_request' });
         try {
+          if (!handler) return send({ type: 'result', requestId: value.requestId, ok: false, error: 'unsupported_request' });
           const result = await handler(client.run, value.payload, {
             supportsFinish: client.supportsFinish,
             emit: event => send({ type: 'event', requestId: value.requestId, event }),
@@ -134,7 +152,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           });
           send({ type: 'result', requestId: value.requestId, ok: true, value: result });
         } catch (error) { send({ type: 'result', requestId: value.requestId, ok: false, error: error.message === 'control_unavailable' ? 'control_unavailable' : 'run_failed' }); }
-        finally { if (broker) client.control = null; }
+        finally { request.settled = true; if (broker) client.control = null; }
       }
     };
     send = frames(socket, value => { void handle(value).catch(() => socket.destroy()); }, () => {
@@ -154,11 +172,21 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
     async listen() {
       if (server) return { address };
       const name = `agx-control-${randomUUID()}`;
-      address = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : path.join(os.tmpdir(), `${name}.sock`);
-      if (process.platform !== 'win32' && Buffer.byteLength(address) > 100) address = `/tmp/${name}.sock`;
+      if (process.platform === 'win32') address = `\\\\.\\pipe\\${name}`;
+      else {
+        const prefix = path.join(os.tmpdir(), 'agx-control-');
+        socketDirectory = fs.mkdtempSync(Buffer.byteLength(prefix) + 18 > 100 ? '/tmp/agx-control-' : prefix);
+        address = path.join(socketDirectory, 'control.sock');
+      }
       server = net.createServer(socket => accept(socket));
-      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(address, resolve); });
-      if (process.platform !== 'win32') require('node:fs').chmodSync(address, 0o600);
+      try {
+        await new Promise((resolve, reject) => { server.once('error', reject); server.listen(address, resolve); });
+        if (socketDirectory) fs.chmodSync(address, 0o600);
+      } catch (error) {
+        const failed = server; server = null;
+        closeListener(failed);
+        throw error;
+      }
       return { address };
     },
     onRequest(type, handler) { handlers.set(type, handler); return () => handlers.delete(type); },
@@ -166,7 +194,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
       if (!validId(control?.messageId) || !['intervene', 'stop'].includes(control.type) || control.type === 'intervene' && (typeof control.text !== 'string' || !control.text.trim() || control.text.length > 4000)) return Promise.reject(new Error('invalid_control'));
       const key = `${runId}:${control.messageId}`, signature = JSON.stringify(control), prior = receipts.get(key);
       if (prior) return prior.signature === signature ? prior.promise : Promise.reject(new Error('message_id_conflict'));
-      if (receipts.size >= 10000) return Promise.reject(new Error('control_limit'));
+      if (!makeReceiptRoom(receipts, 10000)) return Promise.reject(new Error('control_limit'));
       const client = clients.get(runId);
       const promise = !client ? Promise.resolve({ messageId: control.messageId, status: 'queued' }) : new Promise(resolve => {
         const timer = setTimeout(() => { client.pending.delete(control.messageId); resolve({ messageId: control.messageId, status: 'unknown' }); }, 3000);
@@ -176,9 +204,9 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           client.send({ type: 'control.push', messageId: control.messageId, at: now() });
         } catch { clearTimeout(timer); client.pending.delete(control.messageId); resolve({ messageId: control.messageId, status: 'unknown' }); }
       });
-      receipts.set(key, { signature, promise }); return promise;
+      return rememberReceipt(receipts, key, signature, promise);
     },
-    close() { for (const socket of sockets) socket.destroy(); server?.close(); },
+    close() { for (const socket of sockets) socket.destroy(); closeListener(server); },
   };
 }
 

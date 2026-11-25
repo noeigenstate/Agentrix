@@ -97,31 +97,38 @@ class DispatchInbox {
     for (let seq = (run.reclaimed || 0) + 1; seq <= ack.seq; seq++) await fs.rm(path.join(folder, `${seq}.json`), { force: true });
     run.reclaimed = ack.seq;
   }
-  sweep() { return this.enqueue(() => this.scan()); }
-  async scan() {
+  sweep(runId) { return this.enqueue(() => this.scan(runId)); }
+  async scan(runId) {
     if (!this.directory) return;
-    let folders;
     try {
       const stat = await fs.lstat(this.directory);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('dispatch.outbox_unreadable');
-      folders = await fs.readdir(this.directory, { withFileTypes: true });
+      if (runId !== undefined) {
+        if (uuid(runId)) await this.scanRun(runId);
+        return;
+      }
+      const folders = await fs.readdir(this.directory, { withFileTypes: true });
+      for (const folder of folders) {
+        if (this.disposed) return;
+        if (uuid(folder.name) && folder.isDirectory() && !folder.isSymbolicLink()) await this.scanRun(folder.name);
+      }
     } catch (error) { if (error.code !== 'ENOENT') this.refuse(null, 'dispatch.outbox_unreadable'); return; }
-    for (const folder of folders) {
-      if (this.disposed) return;
-      if (!uuid(folder.name) || !folder.isDirectory() || folder.isSymbolicLink()) continue;
-      const directory = path.join(this.directory, folder.name);
-      try {
-        const files = (await fs.readdir(directory)).filter(file => /^[1-9]\d*\.json$/.test(file))
-          .sort((a, b) => Number(a.slice(0, -5)) - Number(b.slice(0, -5)));
-        for (const file of files) {
-          try {
-            const frame = await readFrame(path.join(directory, file));
-            if (frame.id !== folder.name || frame.seq !== Number(file.slice(0, -5))) this.refuse(frame, 'dispatch.invalid_event');
-            else await this.receive(frame);
-          } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id: folder.name, seq: Number(file.slice(0, -5)) }, 'dispatch.outbox_unreadable'); }
-        }
-      } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id: folder.name }, 'dispatch.outbox_unreadable'); }
-    }
+  }
+  async scanRun(id) {
+    const directory = path.join(this.directory, id);
+    try {
+      const stat = await fs.lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+      const sequences = (await fs.readdir(directory)).filter(file => /^[1-9]\d*\.json$/.test(file))
+        .map(file => Number(file.slice(0, -5))).filter(Number.isSafeInteger).sort((a, b) => a - b);
+      for (const seq of sequences) {
+        try {
+          const frame = await readFrame(path.join(directory, seq + '.json'));
+          if (frame.id !== id || frame.seq !== seq) this.refuse(frame, 'dispatch.invalid_event');
+          else await this.receive(frame);
+        } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id, seq }, 'dispatch.outbox_unreadable'); }
+      }
+    } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id }, 'dispatch.outbox_unreadable'); }
   }
   dispose() { this.disposed = true; clearInterval(this.timer); }
 }

@@ -91,7 +91,7 @@ const result = (id, toolUseResult, at = 1100, { error = false, content = '' } = 
   message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: error, content }] } });
 function notice(id, at = 2000, { toolId = '', status = 'completed', type = 'queue-operation', operation = 'enqueue' } = {}) {
   const content = `<task-notification><task-id>${id}</task-id>${toolId ? `<tool-use-id>${toolId}</tool-use-id>` : ''}<status>${status}</status><output-file><home>/tasks/output.txt</output-file></task-notification>`;
-  return { type, timestamp: stamp(at), ...(type === 'queue-operation' ? { content, operation } : { message: { content } }) };
+  return { type, timestamp: stamp(at), ...(type === 'queue-operation' ? { content, operation } : { isMeta: true, message: { content } }) };
 }
 function fixture(terminalId = 'terminal-1') {
   // Load inside each case so the baseline reports every missing behavior, rather than one file-load failure.

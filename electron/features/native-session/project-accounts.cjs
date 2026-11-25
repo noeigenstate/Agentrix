@@ -1,7 +1,7 @@
 // Usage requests from the visible pane are the focus signal. Subscriptions live
 // only for that read: the existing account service owns cache, interval and backoff.
 const { retainAccount } = require('../agents/agent-usage.cjs');
-function createProjectAccounts({ codex, readClaude }) {
+function createProjectAccounts({ codex, readClaude, timers = globalThis, readTimeoutMs = 30000 }) {
   let current, generation = 0, serial = Promise.resolve(), subscription, cancel, claudeCache;
   // The Codex scope each project's reads retain, until the project is removed or reads another.
   const scopes = new Map();
@@ -33,17 +33,27 @@ function createProjectAccounts({ codex, readClaude }) {
         if (token !== generation) return null;
         let account = empty('none');
         if (options.cli.codex.status === 'ok') {
-          account = await new Promise(resolve => {
-            cancel = () => resolve(null);
-            subscription = codex.watch({ cwd: project.restore?.cwd || project.path, env: options.env,
-              accountLaunch: 'project-open-v1', retainCache: true }, value => {
-              if (value.resetQuery?.state !== 'loading') resolve(value);
-            });
-            if (subscription.key && scopes.get(project.id) !== subscription.key) { release(project.id); scopes.set(project.id, subscription.key); }
+          let deadline;
+          const expired = new Promise(resolve => {
+            deadline = timers.setTimeout(resolve, readTimeoutMs);
           });
-          const pending = codex.entries.get(subscription?.key)?.readPromise;
-          subscription?.dispose(); subscription = null; cancel = null;
-          await pending;
+          try {
+            const result = new Promise(resolve => {
+              cancel = resolve;
+              subscription = codex.watch({ cwd: project.restore?.cwd || project.path, env: options.env,
+                accountLaunch: 'project-open-v1', retainCache: true }, value => {
+                if (value.resetQuery?.state !== 'loading') resolve(value);
+              });
+              if (subscription.key && scopes.get(project.id) !== subscription.key) { release(project.id); scopes.set(project.id, subscription.key); }
+            });
+            account = await Promise.race([result, expired]) ?? current?.value?.codex ?? account;
+            const pending = codex.entries.get(subscription?.key)?.readPromise;
+            subscription?.dispose(); subscription = null;
+            await Promise.race([pending, expired]);
+          } finally {
+            timers.clearTimeout(deadline);
+            subscription?.dispose(); subscription = null; cancel = null;
+          }
         }
         if (token !== generation) return null;
         current.value = { claude, codex: account };

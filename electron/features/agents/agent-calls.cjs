@@ -9,7 +9,7 @@ const { agentSettings } = require('./agent-settings.cjs');
 const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
 const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
-const { BackgroundTasks, attach } = require('./background-tasks.cjs');
+const { BackgroundTasks, attach, taskNotificationRecord } = require('./background-tasks.cjs');
 const { agentDescription, callSeat, declaredSeat, seatExpectation, CLAUDE_ALIAS, CLAUDE_EFFORT } = require('./call-seat.cjs');
 const { LOST_WORK_TIMEOUT } = require('../../completion-work.cjs');
 // Host processes can restart while their terminal's dispatched workers keep running.
@@ -644,7 +644,7 @@ class AgentCalls {
     // An enqueue ends the worker; its delivered notification starts the lead's review round.
     let hasNotification = false;
     const queued = record.type === 'queue-operation';
-    if (record.type === 'user' || (queued && ['enqueue', 'remove'].includes(record.operation)) || record.attachment?.type === 'queued_command') {
+    if (taskNotificationRecord(record)) {
       const notificationContent = queued ? text(record.content) : record.attachment?.prompt ?? content;
       const body = typeof notificationContent === 'string' ? notificationContent : (Array.isArray(notificationContent) ? notificationContent.filter(block => block.type === 'text').map(block => text(block.text)).join('\n') : '');
       for (const [notification] of body.matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {

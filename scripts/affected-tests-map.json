@@ -385,11 +385,6 @@
       "reason": "Only main's terminal commands need the registry. The carried helper imports the routing predicates without loading it.",
       "digest": "1e113bd8e332135d2c21adff2828e544804a88feb185500cfd2ae1e86c97a0e6"
     },
-    "electron/features/agents/dispatch-control.cjs": {
-      "targets": [],
-      "reason": "The control listener loads only Node fs for Unix socket permissions.",
-      "digest": "fe85cf284f722b10c26dceaba5e9f95f64c23db4fcfa69b996e6084118ab0103"
-    },
     "electron/features/lab/sandbox.cjs": {
       "targets": [
         "electron/features/lab/sandbox-win32.cjs"
@@ -410,7 +405,7 @@
       "digest": "480a9485c18387f864232cf252e7ad9f89fda4de71712eeddf386f3026512ff0"
     },
     "electron/features/claude-sdk/runtime.cjs": {
-      "digest": "5514a683472814e99f5536a593b1f3b9875b04f709de90992715e45115f083c5",
+      "digest": "d7cd71fb870ef0459ba1077a65b7cda87ba713bd14b3d11d70729fad8ec68bf7",
       "targets": [],
       "reason": "Loads the installed external Agent SDK; dependency changes force full coverage."
     },

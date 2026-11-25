@@ -102,7 +102,7 @@ function createRouter({
       || record.failures?.length && event.type === 'session.state' && event.payload.state === 'failed')) {
       (record.failures ||= []).push(event); return;
     }
-    if (event.providerSessionId && !record.lock) {
+    if (event.providerSessionId && !record.lock && !record.releasing) {
       record.lock = `${agent}:${event.providerSessionId}`; occupied.add(record.lock);
     }
     if (!deferHistory) rememberSession(record, event.providerSessionId);
@@ -122,11 +122,22 @@ function createRouter({
     record.stream.publish(event.type, event.payload, { itemId: event.itemId, replay: event.replay, occurredAtMs: event.occurredAtMs });
     switches.observe(id);
   }
+  function releaseLock(record) {
+    if (record.lock) occupied.delete(record.lock);
+    record.lock = null;
+  }
+  async function closeRecord(record) {
+    record.releasing = true;
+    record.closing ||= Promise.resolve().then(() => record.runtime.close()).finally(() => {
+      releaseLock(record); record.closeSettled = true;
+    });
+    return record.closing;
+  }
   async function failStart(id, record, error, resume) {
     const { spec, runtime, nativePolicy, stream } = record, { agent } = spec;
-    if (record.lock) occupied.delete(record.lock);
+    record.releasing = true;
+    releaseLock(record);
     if (nativePolicy.startupMessage) {
-      record.lock = null;
       record.startupFailed = true;
       if (remoteNative(spec) && resume && nativePolicy.invalidateResume?.(error)) invalidateSession(id, spec.providerSessionId, agent);
       try { await runtime.close(); } catch { }
@@ -141,7 +152,8 @@ function createRouter({
       const notice = error.beforeInput ? error.message : error.code || error.message;
       stream.publish('path.changed', { previous: nativePolicy.path, selected: target, reason: notice });
       terminalStreams.set(id, stream);
-      await runtime.close(); sessions.delete(id); await terminal(spec, notice);
+      try { await closeRecord(record); } catch { throw error; }
+      sessions.delete(id); await terminal(spec, notice);
       terminalStreams.set(id, stream); pathChanged(agent, target, notice); changed();
       return { runtimeSessionId: spec.runtimeSessionId };
     }
@@ -167,7 +179,10 @@ function createRouter({
       const previous = sessions.get(id);
       if (previous && !ended.has(previous.runtime.snapshot().state)) throw new Error('请先停止当前会话。');
       switches.forget(id);
-      if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
+      if (previous) {
+        try { if (!previous.closeSettled) await closeRecord(previous); }
+        finally { sessions.delete(id); }
+      }
       if (nativePolicy.refresh) await nativePolicy.refresh(native);
       nativePolicy.claimTrial?.(native, spec, config);
       const decision = nativePolicy.select?.(native, spec, id, config, {}) ?? { path: nativePolicy.path, wire: null };
@@ -180,8 +195,8 @@ function createRouter({
       }
       const lock = spec.providerSessionId ? `${agent}:${spec.providerSessionId}` : null;
       if (lock && occupied.has(lock)) throw new Error('该会话正在其他终端运行。');
-      if (lock) occupied.add(lock);
       const record = makeRecord(spec); record.lock = lock;
+      if (lock) occupied.add(lock);
       const runtime = record.runtime; sessions.set(id, record);
       let startup;
       try { startup = await runtime[resume ? 'resume' : 'start'](spec); }
@@ -236,9 +251,8 @@ function createRouter({
       const message = reason === '原会话恢复失败，草稿已保留，请重新启动会话。' ? reason : 'API 路径已不可用，会话已停止；未发送的内容已保留。';
       if (session.record) {
         session.record.retiring = true;
-        await session.record.runtime.close();
+        await closeRecord(session.record);
         session.record.stream.publish('session.state', { state: 'stopped', reason: message });
-        if (session.record.lock) occupied.delete(session.record.lock);
       } else retireTerminal(session, message);
       return { reason: message };
     },
@@ -257,7 +271,7 @@ function createRouter({
           if (transition.discardBackground) await old?.runtime.stopBackground?.();
           if (!currentChange()) throw new Error('session_changed');
           await prepared.commit();
-          sessions.delete(id); if (old?.lock) occupied.delete(old.lock);
+          sessions.delete(id); if (old) releaseLock(old);
           const stream = eventStream(spec);
           stream.provider(spec.providerSessionId); terminalStreams.set(id, stream);
           carryHistory(previousStream, stream);
@@ -306,7 +320,7 @@ function createRouter({
           if (prepared && Object.hasOwn(prepared, 'providerSessionId')) spec.providerSessionId = prepared.providerSessionId;
         }
         if (record.runtime.snapshot().state !== 'idle') throw new Error('resume_not_idle');
-      } catch (error) { await cancel(); throw error; }
+      } catch (error) { await cancel().catch(() => {}); throw error; }
       record.handoff = handoff;
       return { session: { identity: record, record, spec, path: target }, cancel, async commit() {
         await activateNative(spec, handoff, transition);
@@ -362,9 +376,15 @@ function createRouter({
       const record = sessions.get(id);
       if (!record?.runtime.applyRouting || ended.has(record.runtime.snapshot().state)) return null;
       const { model = null, effort = null, fast = false } = seat;
-      if (record.spec.model === model && record.spec.effort === effort && (record.spec.fast === true) === fast) return null;
-      Object.assign(record.spec, { model, effort, fast });
-      return record.runtime.applyRouting({ model, effort, fast });
+      const update = Promise.resolve(record.routing).catch(() => {}).then(async () => {
+        if (sessions.get(id) !== record || record.releasing || ended.has(record.runtime.snapshot().state)) return null;
+        if (record.spec.model === model && record.spec.effort === effort && (record.spec.fast === true) === fast) return null;
+        const result = await record.runtime.applyRouting({ model, effort, fast });
+        Object.assign(record.spec, { model, effort, fast });
+        return result;
+      });
+      record.routing = update;
+      return update;
     },
     async shell(id, runtimeSessionId, clientMessageId, command) {
       const record = current(id, runtimeSessionId);
@@ -408,7 +428,10 @@ function createRouter({
         // that its still-active old binding survived the transition.
         try { await previous.runtime.close(); } catch { }
         return { runtimeSessionId: spec.runtimeSessionId };
-      } catch (error) { if (next && sessions.get(id) !== next) await next.runtime.close(); throw error; }
+      } catch (error) {
+        if (next && sessions.get(id) !== next) await closeRecord(next).catch(() => {});
+        throw error;
+      }
       finally { finishPreparation?.(!!next && sessions.get(id) === next); busy.delete(id); }
     },
     async commands(id, runtimeSessionId) {
@@ -442,7 +465,7 @@ function createRouter({
       if (!observation) { switches.input(id, runtimeSessionId); record.ownerStopped = false; }
       try {
         const receipt = await record.runtime.send(message);
-        return receipt.status === 'rejected' && !record.inputs.has(message.clientMessageId) ? unsent(record, message, 'input_rejected') : receipt;
+        return receipt.status === 'rejected' && !record.inputs.has(message.clientMessageId) ? unsent(record, message, receipt.reason || 'input_rejected') : receipt;
       }
       catch (error) {
         if (nativePolicy.fallback?.(error, settings.get()) !== 'terminal') {
@@ -470,7 +493,7 @@ function createRouter({
       }
       return current(id, runtimeSessionId).runtime.answer(requestId, answer);
     },
-    async stop(id, runtimeSessionId) { const record = current(id, runtimeSessionId); switches.forget(id); await record.runtime.close(); if (record.lock) occupied.delete(record.lock); },
+    async stop(id, runtimeSessionId) { const record = current(id, runtimeSessionId); switches.forget(id); await closeRecord(record); },
     tokenRate(id, runtimeSessionId) { return current(id, runtimeSessionId).runtime.tokenRate?.() || null; },
     snapshot(id) {
       const record = sessions.get(id);
@@ -518,8 +541,8 @@ function createRouter({
       const pending = historyReads.get(id); pending?.abort.abort(); historyReads.delete(id);
       switches.forget(id);
       const record = sessions.get(id); sessions.delete(id); terminalStreams.delete(id);
-      if (record) { await record.runtime.close(); if (record.lock) occupied.delete(record.lock); }
-      if (pending) await pending.task.catch(() => {});
+      try { if (record) await closeRecord(record); }
+      finally { if (pending) await pending.task.catch(() => {}); }
     },
     async close() {
       closed = true; unsubscribeAvailability?.();

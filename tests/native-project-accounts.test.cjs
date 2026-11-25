@@ -8,6 +8,26 @@ const { readClaudeAccountCache } = require('../electron/features/agents/agent-us
 const { createProjectAccounts } = require('../electron/features/native-session/project-accounts.cjs');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('a loading account watcher and a hung reader cannot block the next read', async () => {
+  const subscribed = Promise.withResolvers(), ready = { connection: { kind: 'subscription' }, resetQuery: { state: 'ready' } };
+  let expire, watches = 0, disposed = 0;
+  const codex = { entries: new Map([['scope', { readPromise: new Promise(() => {}) }]]), releaseCache() {},
+    watch(_options, changed) {
+      changed(++watches === 1 ? { resetQuery: { state: 'loading' } } : ready);
+      subscribed.resolve();
+      return { key: 'scope', dispose() { ++disposed; } };
+    } };
+  const accounts = createProjectAccounts({ codex, timers: { setTimeout(fn) { expire = fn; }, clearTimeout() {} } });
+  const project = { id: 'project', path: os.tmpdir() }, options = { env: {}, cli: { claude: { status: 'missing' }, codex: { status: 'ok' } } };
+  const first = accounts.read(project, options);
+  await subscribed.promise;
+  expire();
+  assert.equal((await first).codex.connection.kind, 'none');
+  codex.entries.clear();
+  assert.equal((await accounts.read(project, options)).codex, ready);
+  assert.equal(disposed, 2);
+});
+
 test('focused account reads share fresh cache, isolate projects, and never poll in the background', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000 });
   const reads = [];

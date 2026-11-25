@@ -100,8 +100,8 @@
     "id": "electron/features/claude-sdk/session.cjs:c9cafb77d8c43bbce1f12637"
   },
   {
-    "text": "execFileSync('git', ['--exec-path'], { env, windowsHide: true, encoding: 'utf8' })",
-    "id": "electron/features/claude-sdk/shell.cjs:b6748e3be2e7a4318abe7f0a"
+    "text": "childProcess.execFileSync('git', ['--exec-path'], { env, windowsHide: true, encoding: 'utf8', timeout: 2000 })",
+    "id": "electron/features/claude-sdk/shell.cjs:d44b396eebbdc9c694eb9c51"
   },
   {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'],\n          { windowsHide: true, timeout: 5000 }, error => { if (error) child.kill('SIGKILL'); done(); })",

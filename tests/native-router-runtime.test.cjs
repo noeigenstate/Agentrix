@@ -6,11 +6,47 @@ const path = require('node:path');
 const { choosePath } = require('../electron/features/native-session/routing.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { createSettings } = require('../electron/features/native-session/settings.cjs');
+const { readJson, recoveryWarnings } = require('../electron/features/native-session/storage.cjs');
 const { registerIpc } = require('../electron/features/native-session/ipc.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { validEvent } = require('../electron/features/native-session/validate.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { terminalPreparation, completeSwitch } = require('./fixtures/native-switch.cjs');
+
+test('native storage retries temporary reads, propagates persistent errors and only isolates invalid content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-json-read-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'settings.json'), fallback = { version: 0 }, valid = value => value?.version === 1;
+  assert.deepEqual(readJson(file, fallback), fallback);
+  fs.writeFileSync(file, '\uFEFF{"version":1}');
+  const open = fs.openSync; let attempts = 0, failures = ['EBUSY', 'EPERM', 'EMFILE'];
+  t.mock.method(fs, 'openSync', (filename, ...args) => {
+    if (filename === file) {
+      ++attempts;
+      const code = failures.shift();
+      if (code) throw Object.assign(new Error(code), { code });
+    }
+    return open(filename, ...args);
+  });
+  assert.deepEqual(readJson(file, fallback, { validate: valid }), { version: 1 });
+  assert.equal(attempts, 4);
+  for (const code of ['EBUSY', 'EPERM', 'EMFILE', 'EACCES']) {
+    attempts = 0; failures = Array(4).fill(code);
+    assert.throws(() => readJson(file, fallback), { code });
+    assert.equal(attempts, code === 'EACCES' ? 1 : 4);
+    assert.deepEqual(fs.readdirSync(root), ['settings.json']);
+    assert.deepEqual(recoveryWarnings(root), []);
+  }
+  failures = [];
+  assert.equal(fs.readFileSync(file, 'utf8'), '\uFEFF{"version":1}');
+  for (const content of ['{', '{"version":2}']) {
+    fs.writeFileSync(file, content);
+    assert.deepEqual(readJson(file, fallback, { validate: valid }), fallback);
+    assert.equal(fs.existsSync(file), false);
+  }
+  assert.deepEqual(fs.readdirSync(root).map(name => fs.readFileSync(path.join(root, name), 'utf8')).sort(), ['{', '{"version":2}']);
+  assert.ok(recoveryWarnings(root, true).length);
+});
 
 for (const setting of ['api-then-terminal', 'api-only', 'terminal-only']) test(`Claude routing obeys ${setting} for available and unavailable API`, () => {
   for (const status of ['ready', 'no_key', 'account_limit', 'rate_limited', 'credits_exhausted', 'native_cli_required']) {
@@ -27,7 +63,7 @@ test('an explicit shell resume with no matching history refuses instead of start
   await assert.rejects(f.router.start('t', { agent: 'codex', resume: true, launch: { resume: true, latest: true } }), /没有找到可恢复的 Codex 会话/);
   assert.equal(f.created.length, 0); assert.equal(f.terminals.length, 0);
 });
-function fixture(config = {}) {
+function fixture(config = {}, resolveSpec = (id, agent) => ({ projectId: 'p', terminalId: id, cwd: '/fake', agent })) {
   const events = [], terminals = [], created = [], settings = { get: () => ({ claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null, ...config }) };
   const claude = { facts: () => [], usage: { summary: () => ({ month: '2026-11', todayUsdMicros: 0, monthUsdMicros: 0, estimated: true }) },
     credentials: { clear: () => ({ saved: false }) }, create(spec, emit) {
@@ -38,10 +74,60 @@ function fixture(config = {}) {
         snapshot() { return { ...stream.snapshot(), state }; }, async close() { state = 'stopped'; } };
       created.push({ spec, runtime }); return runtime;
     } };
-  const router = createRouter({ claude, codex: claude, settings, resolveSpec: (id, agent) => ({ projectId: 'p', terminalId: id, cwd: '/fake', agent }),
+  const router = createRouter({ claude, codex: claude, settings, resolveSpec,
     prepareTerminal: terminalPreparation(spec => terminals.push([spec])), terminal: async (...args) => terminals.push(args), emit() {} });
   return { router, claude, terminals, created, settings, events };
 }
+for (const action of ['stop', 'forget', 'replace']) test(`a failing runtime close releases the thread during ${action}`, async t => {
+  const { router, created } = fixture({}, id => ({ projectId: 'p', terminalId: id, cwd: '/fake', providerSessionId: 'existing' }));
+  t.after(() => router.close());
+  const first = await router.start('t', { agent: 'codex', resume: true });
+  const runtime = created[0].runtime, close = runtime.close;
+  if (action === 'replace') await close();
+  runtime.close = async () => { await close(); runtime.close = close; throw new Error('process_stop_timeout'); };
+  const retiring = action === 'replace' ? router.start('t', { agent: 'codex', resume: true }) : router[action]('t', first.runtimeSessionId);
+  await assert.rejects(retiring, { message: 'process_stop_timeout' });
+  const next = await router.start('other', { agent: 'codex', resume: true });
+  assert.equal(router.snapshot('other').runtimeSessionId, next.runtimeSessionId);
+});
+
+test('a runtime construction error leaves the restored thread free for another terminal', async t => {
+  const { router, claude } = fixture({}, id => ({ projectId: 'p', terminalId: id, cwd: '/fake', providerSessionId: 'existing' }));
+  t.after(() => router.close());
+  const create = claude.create;
+  claude.create = () => { throw new Error('synthetic_storage_failure'); };
+  await assert.rejects(router.start('t', { agent: 'codex', resume: true }), { message: 'synthetic_storage_failure' });
+  claude.create = create;
+  assert.ok((await router.start('other', { agent: 'codex', resume: true })).runtimeSessionId);
+});
+
+test('the router retries the same seat after a rejected routing update', async t => {
+  const { router, created } = fixture();
+  t.after(() => router.close());
+  await router.start('t', { agent: 'codex' });
+  const { spec, runtime } = created[0], routing = { model: 'synthetic', effort: 'medium', fast: true };
+  let calls = 0;
+  runtime.applyRouting = async value => { if (++calls === 1) throw new Error('rpc_failed'); return value; };
+  await assert.rejects(router.applyRouting('t', routing), { message: 'rpc_failed' });
+  assert.equal(spec.model, undefined);
+  assert.deepEqual(await router.applyRouting('t', routing), routing);
+  assert.equal(spec.model, routing.model);
+  assert.equal(await router.applyRouting('t', routing), null);
+  assert.equal(calls, 2);
+});
+
+test('a rejected native input keeps its reason when the router records the unsent draft', async t => {
+  const { router, created } = fixture();
+  t.after(() => router.close());
+  const { runtimeSessionId } = await router.start('t', { agent: 'claude' });
+  const rejected = { status: 'rejected', reason: 'synthetic reason' };
+  created[0].runtime.send = async () => rejected;
+  const input = { clientMessageId: 'unsent', text: 'keep this' };
+  assert.deepEqual(await router.send('t', runtimeSessionId, input), rejected);
+  const item = router.snapshot('t').events.find(event => event.itemId === input.clientMessageId);
+  assert.equal(item.payload.content.text, input.text);
+  assert.equal(item.payload.content.unsent, true);
+});
 test('an owner Claude quota refusal under API-only cannot move a running Codex off app-server', async t => {
   const { router, claude } = fixture({ claudePath: 'api-only' }); t.after(() => router.close());
   claude.facts = () => [{ name: 'limit', reason: { code: 'claude.credits_exhausted' } }];

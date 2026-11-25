@@ -1,15 +1,24 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn, execFileSync, execFile } = require('node:child_process');
+const childProcess = require('node:child_process');
+const { spawn, execFile } = childProcess;
 
-function shellExecutable(env) {
-  if (process.platform !== 'win32') return '/bin/bash';
+function shellExecutable(env, { platform = process.platform } = {}) {
+  if (platform !== 'win32') return '/bin/bash';
   if (env.CLAUDE_CODE_GIT_BASH_PATH) return env.CLAUDE_CODE_GIT_BASH_PATH;
   // Use Git's Bash, as the installed CLI does on Windows; do not silently change shell syntax to cmd.
-  const directory = execFileSync('git', ['--exec-path'], { env, windowsHide: true, encoding: 'utf8' }).trim();
-  const executable = path.resolve(directory, '../../../bin/bash.exe');
-  if (!fs.existsSync(executable)) throw new Error('找不到命令使用的 Bash。');
-  return executable;
+  try {
+    const directory = childProcess.execFileSync('git', ['--exec-path'], { env, windowsHide: true, encoding: 'utf8', timeout: 2000 }).trim();
+    const executable = path.resolve(directory, '../../../bin/bash.exe');
+    if (directory && fs.existsSync(executable)) return executable;
+  } catch {}
+  const folders = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1]?.split(';') || [];
+  for (const folder of folders) {
+    if (!folder || !fs.existsSync(path.join(folder, 'git.exe'))) continue;
+    const bash = [path.join(folder, 'bash.exe'), path.resolve(folder, '../bin/bash.exe'), path.resolve(folder, '../../bin/bash.exe')].find(file => fs.existsSync(file));
+    if (bash) return bash;
+  }
+  throw new Error('找不到命令使用的 Bash。');
 }
 
 function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
@@ -25,7 +34,8 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
     const cleanup = () => {
       clearTimeout(timer); clearTimeout(drain); clearInterval(poll);
       signal.removeEventListener('abort', stop);
-      fs.rmSync(directory, { recursive: true, force: true }); finishClose();
+      try { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 }); } catch {}
+      finishClose();
     };
     const result = code => {
       if (settled) return;
@@ -79,4 +89,4 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
   });
 }
 
-module.exports = { runShell };
+module.exports = { runShell, shellExecutable };
