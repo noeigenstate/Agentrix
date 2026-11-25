@@ -184,16 +184,20 @@
     "id": "electron/features/lab/sandbox-win32.cjs:1d21906143a54f2f6eacb749"
   },
   {
-    "text": "this.launch(args, options)",
-    "id": "electron/features/lab/session.cjs:017142ed0cfb5a29cc2426ff"
+    "text": "this.launch(args, options.jsonl ? { ...options, onLine: undefined, onEvent: event => options.onLine(JSON.stringify(event)) } : options)",
+    "id": "electron/features/lab/session.cjs:2b756659cc30a26d843c55cf"
   },
   {
-    "text": "this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,\n      signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {\n        entry.activityAt = now();\n        if (line.startsWith(`[dispatch] started ${id} `)) entry.startedLine ||= line.slice(0, 8192);\n        else if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line.slice(0, 8192);\n        else if (line.startsWith(`[dispatch] failed to start ${id}:`) || line.startsWith('[dispatch] failed:')\n          || line.startsWith(`[dispatch] request ${id} `) || line.startsWith('[dispatch] request:')) {\n          entry.messages.push(line.slice(0, 4096));\n          if (entry.messages.length > 16) entry.messages.shift();\n          if (line.startsWith('[dispatch] failed')) entry.error ||= line.slice(0, 1000);\n        }\n        for (const listener of entry.listeners) listener();\n      } })",
-    "id": "electron/features/lab/session.cjs:333200476cf3da601781c3e3"
+    "text": "this.launch(workerArgs, { ...options, onLine: undefined, dispatchId: id,\n      signal: AbortSignal.any([control.signal, this.controller.signal]), onEvent: event => {\n        if (event.id !== id && event.type !== 'dispatch.failed') return;\n        entry.activityAt = now();\n        if (event.type === 'dispatch.started') entry.started ||= event;\n        else if (event.type === 'dispatch.ended') entry.ended = event;\n        else if (['dispatch.start-failed', 'dispatch.failed', 'dispatch.request'].includes(event.type)) {\n          const message = boundedDispatchMessage(event);\n          entry.messages.push(message);\n          if (entry.messages.length > 16) entry.messages.shift();\n          if (event.type !== 'dispatch.request') entry.failure ||= message;\n        }\n        for (const listener of entry.listeners) listener();\n      } })",
+    "id": "electron/features/lab/session.cjs:6187f9844daa3937e5120634"
   },
   {
     "text": "backend.resolveExecutable(executable.file, env)",
     "id": "electron/features/lab/session.cjs:b65afab70924c94e3cc63f4d"
+  },
+  {
+    "text": "this.launch(args, options)",
+    "id": "electron/features/lab/session.cjs:017142ed0cfb5a29cc2426ff"
   },
   {
     "text": "this.launch([], { ...options, network, command: { file, args } })",
@@ -436,8 +440,8 @@
     "id": "integration/dispatch.cjs:0d06e497f7ec9a5ac21b7973"
   },
   {
-    "text": "run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback })",
-    "id": "integration/dispatch.cjs:d5279f2d0a2f8d4bbaad586f"
+    "text": "run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached,\n      startTimeout: 60000, roleFallback: entry.roleFallback, roleArtifacts })",
+    "id": "integration/dispatch.cjs:aa7c4cd929f0b37b505c9352"
   },
   {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",
@@ -460,8 +464,8 @@
     "id": "integration/dispatch.cjs:27e157b394c93d77890e1b77"
   },
   {
-    "text": "resolveExecutable(options.agent, commandOf(effective), env, claudeFile)",
-    "id": "integration/dispatch.cjs:36dea3d6c467d1fe60d025ae"
+    "text": "resolveExecutable(options.agent, commandOf({ ...effective, roleConfig }), env, claudeFile)",
+    "id": "integration/dispatch.cjs:1873dcf6e76c688644e0b963"
   },
   {
     "text": "launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,\n        detached: process.platform !== 'win32' })",

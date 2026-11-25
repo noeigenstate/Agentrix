@@ -333,6 +333,8 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.equal(policy.sandbox, 'read-only'); assert.equal(policy.serviceTier, 'fast');
   assert.equal(policy.config.model_reasoning_effort, 'max');
   assert.deepEqual(policy.config.mcp_servers.agentrix_role.args.slice(1, 3), ['mcp-role', start.id]);
+  // With approvals off Codex refuses unapproved MCP calls (seen on Codex 0.170): only finish_role is pre-approved.
+  assert.deepEqual(policy.config.mcp_servers.agentrix_role.tools, { finish_role: { approval_mode: 'approve' } });
   assert.equal(capture.requests.find(request => request.method === 'turn/start' && request.params.threadId).params.input.at(-1).type, 'localImage');
   assert.ok(!log.includes('[dispatch]'));
   assert.equal(await fs.readFile(path.join(f.directory, 'codex/config.toml'), 'utf8'), 'service_tier = "flex"\n');
