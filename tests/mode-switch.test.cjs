@@ -33,14 +33,14 @@ test('the mode note names the new mode, and a conductor is sent to its instructi
 test('conductor startup and mode switching both give the lead the role escalation rules', () => {
   const startup = conductor => skillInstructions({ conductor, skills: [], globalFolder: '<home>/skills' });
   for (const text of [startup(true), modeNote(true)]) {
-    assert.match(text, /## Needs decision, decide and continue or restart the role with your decision/);
+    assert.match(text, /Read needsDecision from role_result\. Decide each listed question and continue or restart the role with your decision/);
     assert.match(text, /Ask the owner only about irreversible or outward-facing actions.+or product decisions they have not delegated/);
     assert.match(text, /Ask once with options and a recommendation/);
     assert.match(text, /Claude roles can run commands and tests.*never commit, push, or run git reset --hard.*Read-only roles must leave project files untouched/);
     assert.match(text, /Let the role decide whether to run tests and which task-related tests to run/);
-    assert.match(text, /## Needs approval, do the refused action yourself if allowed, or ask the owner once and restart the role with a wider allowance if approved/);
+    assert.match(text, /For each needsApproval entry in role_result, do the refused action yourself if allowed, or ask the owner once and restart the role with a wider allowance if approved/);
   }
-  for (const text of [startup(false), modeNote(false)]) assert.doesNotMatch(text, /## Needs (decision|approval)/);
+  for (const text of [startup(false), modeNote(false)]) assert.doesNotMatch(text, /needsDecision|needsApproval/);
 });
 
 test('SSH conductor notes describe the tool connection and the lack of interactive role menus', () => {

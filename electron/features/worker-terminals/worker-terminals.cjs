@@ -245,7 +245,9 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() }), platform);
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
     fs.writeFileSync(settings, workerHookSettings(w.hooks, w.spec.fast), { mode: 0o600 });
-    const { args: toolArgs, mode } = workerPolicy(readOnly, platform);
+    const roleConfig = w.spec.roleServer && path.join(w.folder, 'role-mcp.json');
+    const { args: toolArgs, mode, mcpConfig } = workerPolicy(readOnly, platform, roleConfig, w.spec.roleServer);
+    if (mcpConfig) fs.writeFileSync(roleConfig, JSON.stringify(mcpConfig), { mode: 0o600 });
     const args = [...toolArgs, ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
       '--permission-mode', mode,
       ...(w.spec.model ? ['--model', w.spec.model] : []), ...(w.spec.effort ? ['--effort', w.spec.effort] : [])];

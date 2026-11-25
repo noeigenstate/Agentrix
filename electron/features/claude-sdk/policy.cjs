@@ -3,6 +3,7 @@ const path = require('node:path');
 const { matches } = require('../../boundaries.cjs');
 const { deniedAction } = require('../agents/start-failure.cjs');
 const { READ_TOOLS, EDIT_TOOLS, forbiddenGit } = require('../claude-runtime/decide.cjs');
+const FINISH_ROLE_TOOL = 'mcp__agentrix_role__finish_role';
 const DENIALS = {
   unsupported_tool: '此角色不允许使用该工具。',
   read_only: '此角色是只读的，不能使用编辑工具。',
@@ -33,6 +34,11 @@ function toolIntent(toolName, input, cwd) {
 function createPolicy(spec, audit = () => {}) {
   const root = realTarget(spec.worktree || spec.cwd);
   return (name, input) => {
+    if (spec.owner === 'dispatch' && spec.roleServer && name === FINISH_ROLE_TOOL) {
+      const decision = { behavior: 'allow', reasonCode: 'allowed', reason: 'The role can submit its result.' };
+      audit({ toolName: name, operation: 'report', ...decision });
+      return decision;
+    }
     const intent = toolIntent(name, input, root);
     let reasonCode = 'allowed';
     if (spec.owner !== 'dispatch') return { behavior: 'defer', reasonCode: 'owner', reason: '由 Claude Code 权限规则决定。' };
@@ -59,4 +65,4 @@ function createPolicy(spec, audit = () => {}) {
     return decision;
   };
 }
-module.exports = { createPolicy, toolIntent, workerTools };
+module.exports = { createPolicy, toolIntent, workerTools, FINISH_ROLE_TOOL };

@@ -493,7 +493,7 @@
       "reason": "Intercept resolves the helper, lead reader and terminal facets in source, packaged and SSH layouts. Packaged and SSH copies use the generated launcher envelope."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "34a9382544afc8938835529ed794dcf603e881839303afa0275e280c325bb4d6",
+      "digest": "4ba5b38401283ffaecf9953ab6f91423a6f2a114a8fade17c8890ea2b40327d8",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
@@ -518,9 +518,10 @@
     },
     "integration/role-artifacts.cjs": {
       "targets": [
-        "./electron/session-files.cjs"
+        "./electron/session-files.cjs",
+        "./electron/features/agents/dispatch-events.cjs"
       ],
-      "reason": "The packaged role artifact helper reads the copy carried by dispatch.runtimeFiles. Source checkouts import the original module."
+      "reason": "The packaged role artifact helper uses the carried session-file and result wire helpers. Source checkouts import the original modules."
     }
   },
   "ignored": [

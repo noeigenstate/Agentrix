@@ -122,7 +122,7 @@ Agentrix decides how each role runs and is billed; billing follows the run mode 
 - **A Claude lead's Claude roles follow the lead's run mode and never cross:** a native-mode lead's roles are billed to
   the API and never fall back to the subscription; a terminal-mode lead's roles run on the subscription.
 - **A Claude role of a terminal-mode lead** never appears in the grid and never arms a completion notification.
-  Permission requests are denied automatically; the role continues and lists refused actions under `## Needs approval`.
+  Permission requests are denied automatically; the role continues and reports refused actions in `role_result.needsApproval`.
   You answer question and plan menus with `answer_role` unless the owner presses a key in the role's terminal first.
 
 ### Calling roles

@@ -10,6 +10,7 @@ const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
 const { createNormalizer } = require('../electron/features/claude-sdk/normalize.cjs');
 const { createRequests } = require('../electron/features/claude-sdk/requests.cjs');
 const { createPolicy } = require('../electron/features/claude-sdk/policy.cjs');
+const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const key = 'sk-ant-api03-fake-test-value-never-real';
 const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from([...value].reverse().join('')), decryptString: value => [...value.toString()].reverse().join('') };
@@ -213,6 +214,25 @@ test('read-only workers use the same shell policy and deny edits', t => {
   assert.equal(policy('PowerShell', { command: 'Write-Output test' }).behavior, 'deny');
   assert.equal(policy('Write', { file_path: path.join(dir, 'file') }).behavior, 'deny');
   assert.equal(createPolicy({ owner: 'dispatch', cwd: dir, allow: ['**'] })('Edit', { file_path: path.join(dir, 'SKILL.md') }).reasonCode, 'skill_not_authorized');
+});
+
+test('an SDK worker with a result server admits only finish_role among MCP tools', async t => {
+  const cwd = directory(t), abort = new AbortController();
+  t.after(() => abort.abort());
+  const roleServer = { command: process.execPath, args: ['dispatch.cjs', 'mcp-role'], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  const spec = { owner: 'dispatch', cwd, readOnly: true, roleServer };
+  const policy = createPolicy(spec);
+  const options = queryOptions(spec, { key, executable: process.execPath, abort, policy });
+  assert.equal(options.permissionMode, 'dontAsk');
+  assert.equal(options.strictMcpConfig, true);
+  assert.deepEqual(options.mcpServers, { agentrix_role: { type: 'stdio', ...roleServer } });
+  assert.deepEqual(options.allowedTools, ['mcp__agentrix_role__finish_role']);
+  assert.ok(!options.disallowedTools.includes('mcp__*'));
+  const hook = options.hooks.PreToolUse[0].hooks[0];
+  for (const [tool_name, behavior] of [['mcp__agentrix_role__finish_role', 'allow'], ['mcp__agentrix_role__other', 'deny'], ['mcp__other__finish_role', 'deny']]) {
+    assert.equal((await hook({ tool_name, tool_input: {} })).hookSpecificOutput.permissionDecision, behavior);
+  }
+  assert.equal(createPolicy({ ...spec, roleServer: null })('mcp__agentrix_role__finish_role', {}).behavior, 'deny');
 });
 
 test('a read-only SDK role exposes Bash and automatically refuses disallowed requests', async t => {

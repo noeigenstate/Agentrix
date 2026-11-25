@@ -3,12 +3,20 @@ const { existsSync, lstatSync, readFileSync, writeFileSync } = require('node:fs'
 const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { isOwnedDirectory } = existsSync(path.join(__dirname, 'electron'))
+const packaged = existsSync(path.join(__dirname, 'electron'));
+const { isOwnedDirectory } = packaged
   ? require('./electron/session-files.cjs') : require('../electron/session-files.cjs');
+const { readRoleResult } = packaged
+  ? require('./electron/features/agents/dispatch-events.cjs') : require('../electron/features/agents/dispatch-events.cjs');
 
 const PREFIX = 'agentrix-role-';
 const NAME = /^agentrix-role-[A-Za-z0-9]{6}$/;
 const MARKER = '.agentrix-role';
+const RUN_ID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+const ROLE_RESULT_SERVER = 'agentrix_role';
+const RESULT_FILE = 'result.json';
+const FORMAT = 'agentrix.role-result';
+const ANSWER_BYTES = 200 * 1024;
 const DAY = 86400000;
 const RETENTION = 7 * DAY;
 const ORPHAN_RETENTION = 30 * DAY;
@@ -38,6 +46,108 @@ async function readStamp(folder, name, limit) {
     const { bytesRead } = await handle.read(buffer);
     return bytesRead <= limit ? buffer.toString('utf8', 0, bytesRead) : null;
   } finally { await handle.close(); }
+}
+
+const string = { type: 'string' };
+const list = (items, maxItems) => ({ type: 'array', items, ...(maxItems && { maxItems }) });
+const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
+const finishRole = {
+  name: 'finish_role',
+  description: 'Save your final role answer and any decisions, approvals, findings and verification for the lead.',
+  inputSchema: object({
+    answer: { ...string, minLength: 1, maxLength: ANSWER_BYTES, description: 'Final Markdown answer, at most 200 KiB in UTF-8.' },
+    needsDecision: list(object({ question: string, options: list(object({ label: string, effect: string })), recommendation: string })),
+    needsApproval: list(object({ action: string, reason: string })),
+    findings: list({ ...string, maxLength: 1000 }, 20),
+    skillProposals: list(string),
+    verification: object({
+      ran: list(object({ command: string, result: { ...string, enum: ['pass', 'fail', 'skipped'] }, note: string })),
+      unverified: list(string),
+    }),
+  }, ['answer']),
+};
+
+function validInput(value, schema) {
+  if (schema.type === 'string') return typeof value === 'string' && value.length >= (schema.minLength ?? 0)
+    && (schema.maxLength === undefined || [...value].length <= schema.maxLength) && (!schema.enum || schema.enum.includes(value));
+  if (schema.type === 'array') return Array.isArray(value) && value.length <= (schema.maxItems ?? Infinity)
+    && value.every(item => validInput(item, schema.items));
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && schema.required.every(key => Object.hasOwn(value, key))
+    && Object.entries(value).every(([key, field]) => Object.hasOwn(schema.properties, key) && validInput(field, schema.properties[key]));
+}
+
+async function checkResultFolder(folder, runId) {
+  if (!RUN_ID.test(runId) || typeof folder !== 'string' || !path.isAbsolute(folder) || !NAME.test(path.basename(folder))
+    || !privateFolder(await fs.lstat(folder)) || path.relative(folder, await fs.realpath(folder))
+    || !RUN_ID.test(await readStamp(folder, MARKER, 36))) throw new Error('Invalid role result directory or run ID');
+}
+
+function roleResultServer(dispatchPath, runId, folder) {
+  return { command: process.execPath, args: [dispatchPath, 'mcp-role', runId, folder], env: { ELECTRON_RUN_AS_NODE: '1' } };
+}
+
+async function readRoleResultFile(folder, runId) {
+  const file = path.join(folder, RESULT_FILE);
+  const stat = await fs.lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!stat) return null;
+  if (!stat.isFile()) throw new Error('Unreadable role result');
+  const handle = await fs.open(file, 'r');
+  try {
+    if (!sameFile(stat, await handle.stat())) throw new Error('Role result changed while opening');
+    const result = readRoleResult(await handle.readFile('utf8'));
+    if (result.runId !== runId) throw new Error('Role result belongs to a different run');
+    return result;
+  } finally { await handle.close(); }
+}
+
+async function writeRoleResult(folder, result) {
+  const text = JSON.stringify(result) + '\n';
+  readRoleResult(result);
+  const temporary = path.join(folder, `.${RESULT_FILE}-${randomUUID()}`);
+  const handle = await fs.open(temporary, 'wx', 0o600);
+  try {
+    try { await handle.writeFile(text); } finally { await handle.close(); }
+    await fs.rename(temporary, path.join(folder, RESULT_FILE));
+  } finally { await fs.rm(temporary, { force: true }); }
+}
+
+function createRoleResultTools({ folder, runId, now = Date.now }) {
+  let tail = Promise.resolve();
+  function finish_role(input) {
+    const request = tail.then(async () => {
+      if (!validInput(input, finishRole.inputSchema) || !input.answer.trim() || Buffer.byteLength(input.answer) > ANSWER_BYTES) {
+        throw new Error('Invalid finish_role arguments: provide an answer up to 200 KiB in UTF-8 and use the listed field shapes and limits.');
+      }
+      await checkResultFolder(folder, runId);
+      const previous = await readRoleResultFile(folder, runId);
+      const calls = (previous?.calls ?? 0) + 1;
+      await writeRoleResult(folder, { format: FORMAT, version: 1, runId, source: 'finish-role',
+        needsDecision: [], needsApproval: [], findings: [], ...input, calls, at: now() });
+      return { saved: true, calls };
+    });
+    tail = request.catch(() => {});
+    return request;
+  }
+  return { list: () => [finishRole], tools: { finish_role } };
+}
+
+async function settleRoleResult({ folder, runId, answer, legacyDecision, now = Date.now }) {
+  if (folder) {
+    await checkResultFolder(folder, runId);
+    const saved = await readRoleResultFile(folder, runId);
+    if (saved?.source === 'finish-role') return saved;
+  }
+  const result = { format: FORMAT, version: 1, runId, source: legacyDecision?.(answer) ? 'legacy-heading' : 'final-text',
+    answer, needsDecision: null, needsApproval: [], findings: [], calls: 0, at: now() };
+  if (folder) await writeRoleResult(folder, result);
+  return result;
+}
+
+const roleNeedsDecision = ({ source, needsDecision }) => source === 'legacy-heading' ? true : needsDecision === null ? null : needsDecision.length > 0;
+
+function roleResultFields({ format, version, runId, ...result }) {
+  return { ...result, ...(result.source !== 'finish-role' && { notice: '未调用 finish_role' }),
+    ...(result.source === 'legacy-heading' && { legacyNeedsDecision: true }) };
 }
 
 async function stampRoleArtifacts({ folder, token }, state, now = Date.now()) {
@@ -73,7 +183,7 @@ async function inspectRole(folder, now) {
   const identity = await fs.lstat(folder);
   if (!privateFolder(identity) || await fs.realpath(folder) !== folder) return null;
   const token = await readStamp(folder, MARKER, 36);
-  if (!token || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(token)) return null;
+  if (!token || !RUN_ID.test(token)) return null;
   const stamp = await readStamp(folder, MARKER + '-ended', 53);
   const ended = stamp?.startsWith(token + ':') ? Number(stamp.slice(37)) : null;
   const settled = Number.isSafeInteger(ended) && ended > 0 && ended <= now;
@@ -121,4 +231,5 @@ async function sweepRoleArtifacts(root, { now = Date.now(), maxFolders = MAX_FOL
   } catch { /* A missing or unreadable temp root does not block MCP. */ }
 }
 
-module.exports = { createRoleArtifacts, stampRoleArtifacts, trackRoleProcess, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION };
+module.exports = { createRoleArtifacts, stampRoleArtifacts, trackRoleProcess, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION,
+  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleResultFields };

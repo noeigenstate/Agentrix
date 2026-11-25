@@ -1,7 +1,7 @@
 const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
-const { workerTools } = require('./policy.cjs');
+const { workerTools, FINISH_ROLE_TOOL } = require('./policy.cjs');
 const { READ_ONLY_MODE, READ_ONLY_DENIED, WORKER_DENIED } = require('../claude-runtime/decide.cjs');
 const { seatHookOutput, observedAgentSeat, liveSeatMap } = require('../skills/agent-seat.cjs');
 const fs = require('node:fs');
@@ -58,7 +58,9 @@ function routeAgentSeat(input, seats, onSeat) {
 
 function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {}, onRefusal = () => {} }) {
   const bootstrap = spec.owner === 'gui' ? spec.bootstrapFile : null;
-  const readOnly = spec.owner === 'dispatch' && spec.readOnly;
+  const worker = spec.owner === 'dispatch', readOnly = worker && spec.readOnly;
+  const resultServer = worker && spec.roleServer;
+  const workerDenied = readOnly ? READ_ONLY_DENIED : [...WORKER_DENIED, 'mcp__*'];
   const seatsNow = () => liveSeatMap(bootstrap) ?? spec.seatsMap;
   const reportSubagent = kind => async (input, toolUseId) => {
     // Visibility must never block the CLI or add context to either conversation.
@@ -74,13 +76,14 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
     abortController: abort, permissionMode: readOnly ? READ_ONLY_MODE : 'bypassPermissions',
     ...(!readOnly && { allowDangerouslySkipPermissions: true }), includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
-    ...(spec.owner === 'dispatch' && { tools: workerTools(readOnly), disallowedTools: readOnly ? [...READ_ONLY_DENIED] : [...WORKER_DENIED, 'mcp__*'] }),
+    ...(worker && { tools: workerTools(readOnly), disallowedTools: workerDenied.filter(tool => !resultServer || tool !== 'mcp__*') }),
+    ...(resultServer && { strictMcpConfig: true, allowedTools: [FINISH_ROLE_TOOL] }),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT,
       spec.owner === 'gui' && !Object.entries(spec.env || process.env).some(([name, value]) => name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' && value === '1')
         ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,
       spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
-    ...(spec.roleServer && { mcpServers: { agentrix: { type: 'stdio', ...spec.roleServer } } }),
+    ...(spec.roleServer && { mcpServers: { [worker ? 'agentrix_role' : 'agentrix']: { type: 'stdio', ...spec.roleServer } } }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",

@@ -718,6 +718,24 @@ test('a read-only terminal role passes an exact short brief to the executable an
   }
 });
 
+test('a hidden terminal passes only the result MCP server to a read-only worker', async t => {
+  const f = launchHarness(t, deps => { deps.platform = 'win32'; });
+  const roleServer = { command: process.execPath, args: ['dispatch.cjs', 'mcp-role'] };
+  const run = { runId: 'result-mcp', projectId: 'terminal' };
+  const worker = f.terminals.create(run, { cwd: f.root, readOnly: true, roleServer }, { publish() {} });
+  assert.equal((await worker.send({ clientMessageId: randomUUID(), text: 'An exact short brief' })).status, 'delivered');
+  const pty = await f.launched, { args } = pty;
+  const value = flag => args[args.indexOf(flag) + 1];
+  assert.ok(args.includes('--strict-mcp-config'));
+  assert.ok(value('--allowedTools').split(',').includes('mcp__agentrix_role__finish_role'));
+  assert.ok(!value('--disallowedTools').split(',').includes('mcp__*'));
+  const config = value('--mcp-config');
+  assert.equal(config, path.join(f.root, 'worker-result-mcp', 'role-mcp.json'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')), { mcpServers: { agentrix_role: roleServer } });
+  pty.exit({ exitCode: 0 });
+  await worker.close();
+});
+
 test('a worker leaves no pending timers after start, hooks, Stop and close', async t => {
   const f = launchHarness(t), result = f.start(), at = f.clock.now();
   await until(() => f.spawned.length === 1, 'the worker to start');

@@ -478,7 +478,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
           const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}),
-            ...(spec.roleServer && { mcp_servers: { agentrix: spec.roleServer } }), ...(elevatedRole() && ELEVATED_SANDBOX_CONFIG) };
+            ...(spec.roleServer && { mcp_servers: { [spec.owner === 'dispatch' ? 'agentrix_role' : 'agentrix']: spec.roleServer } }),
+            ...(elevatedRole() && ELEVATED_SANDBOX_CONFIG) };
           const requestThread = (options, resumeId) => rpc.request(resumeId ? 'thread/resume' : 'thread/start', {
             ...options, ...(resumeId && { threadId: resumeId, excludeTurns: true }), config: { ...config, ...options.config },
           });

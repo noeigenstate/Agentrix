@@ -75,21 +75,24 @@ const READ_TOOLS = ['Read', 'Glob', 'Grep', 'LS'];
 const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const WORKER_DENIED = ['EnterPlanMode'];
 const READ_ONLY_DENIED = [...EDIT_TOOLS, ...WORKER_DENIED, 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
+const roleResultConfig = server => ({ mcpServers: { agentrix_role: server } });
 const FORBIDDEN_GIT_OPERATIONS = ['commit', 'push', 'reset --hard'];
 const forbiddenGit = new RegExp('\\bgit\\b[^\\n;&|]*(?:' + FORBIDDEN_GIT_OPERATIONS
   .map(operation => '\\b' + operation.replace(' ', '\\b[^\\n;&|]*') + '\\b').join('|') + ')', 'i');
 
 const isReadOnly = options => options.readOnly || ['plan', READ_ONLY_MODE].includes(options.permission);
 
-function workerToolArgs(readOnly, platform = process.platform) {
+function workerToolArgs(readOnly, platform = process.platform, configFile) {
   const shells = platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
   const gitRules = shells.flatMap(shell => FORBIDDEN_GIT_OPERATIONS.map(operation => {
     const command = operation.includes(' ') ? operation.replace(' ', ' *') + '*' : operation + ' *';
     return shell + '(git ' + command + ')';
   }));
   const tools = readOnly ? ['--tools', [...READ_TOOLS, ...shells].join(',')] : [];
-  const denied = readOnly ? READ_ONLY_DENIED : WORKER_DENIED;
-  return [...tools, '--allowedTools', shells.join(','), '--disallowedTools', [...denied, ...gitRules].join(',')];
+  const denied = readOnly ? READ_ONLY_DENIED.filter(tool => !configFile || tool !== 'mcp__*') : WORKER_DENIED;
+  const allowed = configFile ? [...shells, 'mcp__agentrix_role__finish_role'] : shells;
+  return [...tools, '--allowedTools', allowed.join(','), '--disallowedTools', [...denied, ...gitRules].join(','),
+    ...(configFile ? ['--mcp-config', configFile, '--strict-mcp-config'] : [])];
 }
 
 function workerToolEnvironment(env, platform = process.platform) {
@@ -99,11 +102,12 @@ function workerToolEnvironment(env, platform = process.platform) {
 }
 
 const claudePermission = readOnly => readOnly ? READ_ONLY_MODE : 'acceptEdits';
-const claudePolicy = (readOnly, platform) => ({ args: workerToolArgs(readOnly, platform), mode: claudePermission(readOnly) });
+const claudePolicy = (readOnly, platform, configFile, server) => ({ args: workerToolArgs(readOnly, platform, configFile), mode: claudePermission(readOnly),
+  ...(server && { mcpConfig: roleResultConfig(server) }) });
 
 function claudeCommand(options) {
   const settings = options.fast || options.fastFromSeat ? ['--settings', JSON.stringify({ fastMode: options.fast })] : [];
-  const { args, mode } = claudePolicy(isReadOnly(options));
+  const { args, mode } = claudePolicy(isReadOnly(options), undefined, options.roleConfig);
   return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
     '--effort', options.effort, ...settings, '--permission-mode', mode, ...args, '--output-format', 'stream-json', '--verbose'];
 }
@@ -224,13 +228,14 @@ function workerRules(rules) {
       ...(rules.commands ? [rules.commands] : []),
       'Run only the tests the task touches, never the whole suite.',
       'Skip a named skill only if it is neither installed nor present under the repository\'s skills/ folder. Do not search elsewhere.',
-      'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
+      'Never ask the user. Finish independent work. Record exact refusals in finish_role.needsApproval. Do not work around them.',
       ...(small ? ['Decide implementation (one line with why), take the smaller viable approach (note the other), '
-        + 'and defer scope changes, irreversible actions, or changes to UI or behavior to the lead under ## Needs decision (options, effects, recommendation).'] : [
+        + 'and defer scope changes, irreversible actions, or changes to UI or behavior in finish_role.needsDecision (options, effects, recommendation).'] : [
         'Decide implementation details and explain your choice in one line. Take the smaller viable approach and note the other.',
-        'Stop before scope changes, irreversible actions, or changes to UI or behavior. Under ## Needs decision give the lead options, consequences and a recommendation.',
+        'Stop before scope changes, irreversible actions, or changes to UI or behavior. Give the lead options, effects and a recommendation in finish_role.needsDecision.',
       ]),
       ...(rules.answer ? [rules.answer] : []),
+      'Call finish_role at the end with your final answer. Give the lead the complete answer as final text if the tool is unavailable.',
       `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
       'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
     ].map((line, index) => index ? `- ${line}` : line).join('\n') + (inline ? `\n\n# Code standards\n\n${inline}` : '');
@@ -240,6 +245,7 @@ function workerRules(rules) {
 const localWindows = (env, platform = process.platform) => platform === 'win32' && !env.SSH_CONNECTION;
 const claudeWorker = Object.freeze({
   command: claudeCommand, policy: claudePolicy, validate: claudeOptions, ...workerOutput(claudeRecord),
+  resultServer: roleResultConfig,
   roleArgs: readOnly => ['--permission', claudePermission(readOnly)],
   nativeUsage: claudeUsage, multilineOutput: true, pinEffort: true, cliEnvironment: workerToolEnvironment,
   brokerMethod: 'claude-sdk.run', terminalAnswers: true, routingVerdict: claudeRoutingVerdict,
@@ -251,7 +257,7 @@ const claudeWorker = Object.freeze({
     readOnlyScope: 'This task is read-only: do not change, create, or delete project files.',
     git: 'Do not commit, push, or run git reset --hard. Do not start another worker or agent.',
     commands: 'You may run commands and tests. Decide whether to run tests and which to run based on the task.',
-    answer: 'End with a plain text answer. Never call ExitPlanMode.',
+    answer: 'Never call ExitPlanMode.',
   }),
 });
 const codexWorker = Object.freeze({

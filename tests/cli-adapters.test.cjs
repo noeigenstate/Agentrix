@@ -32,6 +32,18 @@ test('carried workers use the shared manifest projection', () => {
   assert.deepEqual(workerOf('codex').policy(false), { sandbox: 'workspace-write', approvalPolicy: 'never' });
 });
 
+test('a Claude print role with a result server uses a strict tool allowlist', () => {
+  const { workerOf } = require('../electron/features/cli-adapters/workers.cjs');
+  const worker = workerOf('claude'), server = { command: 'node', args: ['dispatch.cjs', 'mcp-role'] };
+  assert.deepEqual(worker.resultServer(server), { mcpServers: { agentrix_role: server } });
+  const args = worker.command({ model: 'opus', effort: 'high', permission: 'dontAsk', roleConfig: 'result-mcp.json' });
+  const value = flag => args[args.indexOf(flag) + 1];
+  assert.equal(value('--mcp-config'), 'result-mcp.json');
+  assert.ok(args.includes('--strict-mcp-config'));
+  assert.ok(value('--allowedTools').split(',').includes('mcp__agentrix_role__finish_role'));
+  assert.ok(!value('--disallowedTools').split(',').includes('mcp__*'));
+});
+
 test('both registry entry points expose complete capability manifests', () => {
   assert.deepEqual(shared.adapters().map(({ manifest }) => manifest), adapters().map(({ manifest }) => manifest));
   assert.deepEqual(adapters().map(({ manifest }) => manifest.id), ['claude', 'codex']);
