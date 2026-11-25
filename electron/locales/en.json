@@ -3864,5 +3864,15 @@
   "干活标记": "Working mark",
   "路由栏里，有角色正在干活的座位会在模型名右侧显示一把敲打的小锤子。": "In the routing card, a seat whose role is working shows a small tapping hammer beside its model name.",
   "版本提示": "Version notice",
-  "Claude Code 版本过旧时，运行中切换模型、深度、快速模式和 Ultracode 的控件会置灰并说明原因，不再悄悄失败。": "When Claude Code is too old, the controls that switch model, effort, fast mode and Ultracode in a running session are greyed out with the reason instead of failing silently."
+  "Claude Code 版本过旧时，运行中切换模型、深度、快速模式和 Ultracode 的控件会置灰并说明原因，不再悄悄失败。": "When Claude Code is too old, the controls that switch model, effort, fast mode and Ultracode in a running session are greyed out with the reason instead of failing silently.",
+  "角色交结果": "Role results",
+  "角色完成时用一个工具交回答案、待你决定的事、待批准的操作和发现，总指挥按字段读取，不再靠识别回复里的标题。": "A role now hands back its answer, decisions for you, actions needing approval and findings through one tool, and the conductor reads them by field instead of looking for headings in the reply.",
+  "结构化通道": "Structured channels",
+  "Agentrix 各部分之间传递的座位、模式、启动参数、派发状态和事件都改成带版本的字段格式，换写法或升级时不会再悄悄失效。": "Seats, modes, launch arguments, dispatch status and events passed between the parts of Agentrix now use versioned fields, so a change of wording or an upgrade no longer breaks them silently.",
+  "角色卡": "Role cards",
+  "活动栏的角色卡把模型标识放在座位名后面，去掉工作目录路径，任务标题改为灰色小字。": "Role cards in the activity pane show the model label after the seat name, drop the folder path, and show the task title in small grey text.",
+  "锤子动画": "Hammer motion",
+  "路由栏的小锤子按 Agentrix 的界面动画设置敲打，Windows 关闭动画效果时不再停住不动。": "The hammer in the routing card follows the Agentrix interface animation setting and no longer stands still when Windows animation effects are off.",
+  "团队记录": "Team records",
+  "团队的记忆改由结构化记录保存并渲染成文档，原有内容首次读取时自动导入，原文件留作备份。": "Team memory is now kept as structured records and rendered as a document; existing entries are imported on first read and the original file is kept as a backup."
 }
