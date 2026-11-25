@@ -1,10 +1,10 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function watcherFs(realpath = directory => directory, existsSync = () => true) {
@@ -25,13 +25,7 @@ function watcherFs(realpath = directory => directory, existsSync = () => true) {
 }
 
 function sessionFiles(watched) {
-  const filename = require.resolve('../electron/session-files.cjs'), localRequire = createRequire(filename);
-  const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.SessionFiles = SessionFiles;', {
-    module, Buffer, setTimeout, clearTimeout,
-    require: name => name === 'node:fs' ? watched : localRequire(name),
-  }, { filename });
-  return module.exports;
+  return loadWithStubs(require.resolve('../electron/session-files.cjs'), (name, load) => name === 'node:fs' ? watched : load(name));
 }
 
 function accountWatcher(watched, files, queue) {
@@ -44,13 +38,9 @@ function accountWatcher(watched, files, queue) {
 }
 
 function activityMonitor(watched) {
-  const filename = require.resolve('../electron/codex-activity.cjs'), localRequire = createRequire(filename);
-  const module = { exports: {} }, files = sessionFiles(watched);
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-    module, process, Buffer, setTimeout, clearTimeout,
-    require: name => name === 'node:fs' ? watched : name === './session-files.cjs' ? files : localRequire(name),
-  }, { filename });
-  return module.exports.monitorActivity;
+  const files = sessionFiles(watched);
+  return loadWithStubs(require.resolve('../electron/codex-activity.cjs'), (name, load) =>
+    name === 'node:fs' ? watched : name === './session-files.cjs' ? files : load(name)).monitorActivity;
 }
 
 test('session watchers resolve the OS directory once and keep event paths under the original directory', () => {

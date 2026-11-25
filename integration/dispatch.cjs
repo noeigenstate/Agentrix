@@ -1,3 +1,4 @@
+const process = require('node:process');
 // A command-line worker declares its assignment here; Agentrix never infers it from shell commands.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,7 +10,8 @@ const { homedir, tmpdir, constants: { signals } } = require('node:os');
 const { setImmediate } = require('node:timers');
 
 // Plain Node cannot read app.asar. Packaged and SSH helpers carry these same pure modules beside them.
-const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
+const bundled = module.agentrixRuntimeLayout === 'bundled';
+const runtime = path.join(__dirname, bundled || fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cjs'));
 const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
 const { rolloutFiles, sessionMeta, isOwnedDirectory } = require(path.join(runtime, 'session-files.cjs'));
@@ -219,11 +221,11 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
   return options;
 }
 
-function commandOf(options) {
+function commandOf(options, lab = false) {
   const command = workerOf(options.agent)?.command(options) ?? 'native';
   if (command !== 'native') return command;
-  // The Lab rewrites the app-server credential-store arguments in its private helper copy.
-  return ['app-server', '--listen', 'stdio://'];
+  // The Lab links the account file into a private home without keyring access.
+  return [...(lab ? ['-c', 'cli_auth_credentials_store="file"'] : []), 'app-server', '--listen', 'stdio://'];
 }
 
 function reportChangedFiles(event, changed) {
@@ -1060,11 +1062,11 @@ async function run(argv, deps = {}) {
 
 async function runWorker(argv, { env = process.env, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, roleFallback, roleArtifacts, launchTreeStop }, emit) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, roleFallback, roleArtifacts, launchTreeStop, labMeter }, emit) {
   const id = detached?.id || randomUUID();
   const signal = (type, fields) => emit(dispatchEvent(type, id, fields));
   const notice = (code, detail) => signal('notice', { code, ...(detail !== undefined && { detail }) });
-  const send = eventSink(env.AGENTRIX_BOOTSTRAP, notice);
+  const send = labMeter ?? eventSink(env.AGENTRIX_BOOTSTRAP, notice);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   let workerEnv = workerEnvironment(env);
   for (const name of Object.keys(workerEnv)) if (name.toUpperCase() === 'AGENTRIX_SEATS') delete workerEnv[name];
@@ -1234,7 +1236,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       const { outputTokens, activeMs } = usage(true);
       if (outputTokens === null || !(activeMs > 0) || lastRate?.outputTokens === outputTokens && lastRate?.activeMs === activeMs) return;
       lastRate = { outputTokens, activeMs };
-      send({ type: 'dispatch-rate', id, ...lastRate });
+      send({ type: 'dispatch-rate', id, ...lastRate, ...(labMeter && output.usage()) });
     }, rateInterval);
   };
   // A model reported after the start went out (app-server's turn can start before its session file names the model, or
@@ -1739,7 +1741,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
           // A bare `codex` would find the shim folder again: no Codex outside it is a start failure.
           const found = async () => { if (resolveExecutable === executable && !codex) throw Object.assign(new Error('Codex was not found outside the Agentrix shim folder'), { code: 'ENOENT' }); return 'codex'; };
           activeRuntime = createCodexRuntime({
-            accountKey: codexAccountKey || undefined, resolveExecutable: found, appServerArgs: commandOf(effective),
+            accountKey: codexAccountKey || undefined, resolveExecutable: found, appServerArgs: commandOf(effective, Boolean(labMeter)),
             onTreeStopFailure: error => { if (stoppedOnRequest()) recordTreeStopFailure(error); },
             spawnProcess: (_file, args, spawnOptions) => {
               const command = resolveExecutable('codex', args, env, codex);

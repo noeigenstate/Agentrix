@@ -1,3 +1,4 @@
+const process = require('node:process');
 const path = require('node:path');
 const { physicalDirectory, sameDirectory, expandShortPath } = require('../../session-files.cjs');
 const { spawn, execFile } = require('node:child_process');

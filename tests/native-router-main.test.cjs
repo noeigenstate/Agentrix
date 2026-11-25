@@ -1,3 +1,4 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -22,11 +23,8 @@ test('callFile IPC requires the app sender and unwraps the bound local call resu
   const run = handlers.get('agents:callFile'), id = 'dispatch:11111111-1111-4111-8111-111111111111';
   await assert.rejects(run({}, 'local', id, 'brief'), /Rejected IPC sender/);
   let bridge;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), { require: name => {
-    assert.equal(name, 'electron');
-    return { contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
-      ipcRenderer: { invoke: (channel, ...args) => handlers.get(channel)(sender, ...args) } };
-  } });
+  loadPreload('electron/preload.cjs', { contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
+  ipcRenderer: { invoke: (channel, ...args) => handlers.get(channel)(sender, ...args) } });
   assert.deepEqual(await bridge.callFile('local', id, 'brief'), { ok: true, text: 'brief text', truncated: false });
   for (const terminalId of ['ssh', 'gone']) assert.equal((await bridge.callFile(terminalId, id, 'log')).code, 'unavailable');
   assert.equal((await bridge.callFile(null, id, 'log')).code, 'refused');

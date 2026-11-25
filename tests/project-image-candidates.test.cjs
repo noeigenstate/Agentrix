@@ -1,3 +1,4 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -171,10 +172,8 @@ test('the secured preload discovery API is read-only and SSH never calls the loc
     throw new Error('项目不存在。');
   }, listProjectImageCandidates: async folder => { calls.push(folder); return { candidates: [candidate] }; }, broadcast: () => broadcasts++ });
   const event = { sender: window.webContents, senderFrame: frame };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
-    require: name => { assert.equal(name, 'electron'); return { contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } },
-      ipcRenderer: { invoke: (name, ...args) => handles.get(name)(event, ...args) } }; },
-  });
+  loadPreload('electron/preload.cjs', { contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } },
+  ipcRenderer: { invoke: (name, ...args) => handles.get(name)(event, ...args) } });
   assert.deepEqual(await bridge.listProjectImageCandidates('local'), { ok: true, value: { candidates: [candidate] } });
   assert.deepEqual(await bridge.listProjectImageCandidates('ssh'), { ok: true, value: { candidates: [], unavailable: 'ssh' } });
   assert.equal((await bridge.listProjectImageCandidates('missing')).ok, false);

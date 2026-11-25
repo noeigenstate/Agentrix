@@ -227,5 +227,5 @@ function isOwnedDirectory(stat, uid, forbiddenMode) {
   return stat.isDirectory() && (uid === undefined || stat.uid === uid) && !(stat.mode & forbiddenMode);
 }
 
-module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath, containedFile, sessionHeader, findRolloutSession,
+module.exports = { SessionFiles, records, rolloutFiles, sessionMeta, nativeWatchPath, containedFile, sessionHeader, findRolloutSession,
   physicalDirectory, sameDirectory, expandShortPath, isOwnedDirectory };

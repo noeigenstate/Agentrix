@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/lab-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -6,8 +7,6 @@ const syncFs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const { randomUUID } = require('node:crypto');
 const { LabSession } = require('../electron/features/lab/session.cjs');
 const { sandboxProfile } = require('../electron/features/lab/sandbox.cjs');
@@ -48,17 +47,14 @@ function processHarness({ snapshot = () => '', signal = () => {}, closeOnDestroy
     assert.ok(options.timeout > 0 && options.timeout <= 1000);
     return { stdout: snapshot(++scans) };
   };
-  const filename = path.join(__dirname, '../electron/features/lab/process.cjs'), isolated = { exports: {} };
-  const localRequire = createRequire(filename);
-  vm.runInNewContext(syncFs.readFileSync(filename, 'utf8'), {
-    module: isolated, Buffer, setTimeout, clearTimeout,
-    process: { platform: 'darwin', pid: 99999, env: {}, kill: (pid, value) => { kills.push([pid, value]); signal(pid, value); } },
-    require: name => name === 'node:child_process' ? { execFile, spawn: () => {
+  const api = loadWithStubs(require.resolve('../electron/features/lab/process.cjs'), (name, localRequire) => {
+    if (name === 'node:process') return { platform: 'darwin', pid: 99999, env: {}, kill: (pid, value) => { kills.push([pid, value]); signal(pid, value); } };
+    return name === 'node:child_process' ? { execFile, spawn: () => {
       if (completes) queueMicrotask(() => { child.stdout.destroy(); child.stderr.destroy(); });
       return child;
-    } } : localRequire(name),
-  }, { filename });
-  return { api: isolated.exports, child, kills, scans: () => scans };
+    } } : localRequire(name);
+  });
+  return { api, child, kills, scans: () => scans };
 }
 
 test('process timeout closes retained pipes only after attempting the owned process group', { timeout: 3000 }, async () => {
@@ -166,13 +162,12 @@ test('execute defaults to offline for every call and never retains a preparation
 });
 
 test('isolation refusal occurs before servers, launch jobs or model workers exist', { timeout: 15000 }, async t => {
-  const filename = path.resolve(__dirname, '../electron/features/lab/session.cjs'), requireAt = createRequire(filename);
-  const isolated = { exports: {} }; let launches = 0;
-  vm.runInNewContext(syncFs.readFileSync(filename, 'utf8'), { module: isolated, __dirname: path.dirname(filename),
-    require: name => name === './sandbox.cjs' ? { ...requireAt(name), requireIsolation: async () => {
+  let launches = 0;
+  const { LabSession } = loadWithStubs(require.resolve('../electron/features/lab/session.cjs'), (name, requireAt) =>
+    name === './sandbox.cjs' ? { ...requireAt(name), requireIsolation: async () => {
       throw Object.assign(new Error('Windows 安全实验执行不可用，未启动工作者。'), { infrastructure: true });
-    } } : requireAt(name), AbortController, AbortSignal, process, Buffer, setTimeout, clearTimeout });
-  const { session } = await fixture(t, isolated.exports.LabSession);
+    } } : requireAt(name));
+  const { session } = await fixture(t, LabSession);
   session.launch = async () => { launches++; };
   await assert.rejects(session.start(), /Windows 安全实验执行不可用/);
   assert.equal(launches, 0); assert.equal(session.jobs.size, 0); assert.equal(session.server, undefined);

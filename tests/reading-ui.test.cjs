@@ -1,3 +1,4 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
@@ -2280,11 +2281,9 @@ function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.
 
 // Exercise the smoke's real fixture builder and console frames without compiling or launching the Windows program.
 function completionFixtureRows(withInput) {
-  const filename = path.join(__dirname, '../scripts/completion-smoke.mjs');
-  const script = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const builder = script.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'completionFixtureSource');
-  let source = fs.readFileSync(path.join(__dirname, 'fixtures/restore-codex.cs'), 'utf8');
-  if (withInput && builder) source = new Function(`return (${builder.getText(script)});`)()(source);
+  const { completionFixtureSource } = require('../scripts/completion-smoke-fixture.cjs');
+  const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/restore-codex.cs'), 'utf8');
+  const source = withInput ? completionFixtureSource(fixture) : fixture;
   return [...source.matchAll(/Console\.WriteLine\(("(?:\\.|[^"\\])*")\);/g)].flatMap(match => JSON.parse(match[1]).split(/\r?\n/));
 }
 
@@ -3268,7 +3267,11 @@ test('the reading view keeps two vertical lines: the avatars and the reply text 
 test('the save-as channel is registered in the main process, the preload and the types', () => {
   const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
   assert.match(read('electron/main.cjs'), /handle\('agent:saveImageAs'[\s\S]*isGeneratedImage\(file\)[\s\S]*remoteProjectImage\(projectId, file\)[\s\S]*showSaveDialog[\s\S]*writeFile\(target, bytes\) : fs\.promises\.copyFile/);
-  assert.match(read('electron/preload.cjs'), /saveImageAs: \(file, projectId\) => ipcRenderer\.invoke\('agent:saveImageAs', file, projectId\)/);
+  let bridge; const calls = [];
+  loadPreload('electron/preload.cjs', { contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
+    ipcRenderer: { invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true, value: null }); } } });
+  bridge.saveImageAs('fixture.png', 'project');
+  assert.deepEqual(calls, [['agent:saveImageAs', 'fixture.png', 'project']]);
   const [method] = sourceNodes('src/shared/types.ts', node => ts.isMethodSignature(node) && node.name.text === 'saveImageAs');
   assert.deepEqual(method.parameters.map(parameter => [parameter.name.text, !!parameter.questionToken, parameter.type.kind]),
     [['file', false, ts.SyntaxKind.StringKeyword], ['projectId', true, ts.SyntaxKind.StringKeyword]]);

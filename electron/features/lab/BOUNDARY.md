@@ -5,6 +5,9 @@ and each approach in its own sandboxed workspace through the dispatch helper, gr
 Orchestrated briefs launch their workers directly. The phase reports also read historical journal records.
 The dispatch migration takes status from the helper's `--events jsonl` stream. See `tests/wire-format.test.cjs`
 for the event envelope and `tests/self-format-guard.test.cjs` for the remaining text readers.
+The private executor loads the helper and its declared runtime files unchanged. It injects the authenticated meter,
+which selects the file credential store for the Lab's Codex runs. Windows relay diagnostics validate versioned fields
+before rendering the same bounded CI log lines.
 
 ## Owns
 - `electron/features/lab/**`

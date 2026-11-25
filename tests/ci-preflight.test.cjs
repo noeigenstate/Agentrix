@@ -292,9 +292,10 @@ test('Windows-only expectations explicitly skip foreign jobs while remote prefli
   const jobs = windows.map(job => ({ ...job, status: 'completed' }));
   assert.equal(assessRemoteJobs(jobs, windows, 'success').success, true);
   assert.equal(assessRemoteJobs(jobs, full, 'success').success, false);
-  const cli = fs.readFileSync(path.join(__dirname, '../scripts/ci-preflight.mjs'), 'utf8');
-  assert.match(cli, /body: \{ ref: branch, inputs: \{ full_matrix: true \}, return_run_details: true \}/);
-  assert.match(cli, /const expected = expectedRemoteJobs\(workflow\)/);
+  const { remoteWorkflowPlan } = await import('../scripts/ci-preflight.mjs');
+  const plan = remoteWorkflowPlan(parsed);
+  assert.deepEqual(plan.expected, full);
+  assert.deepEqual(plan.dispatchRequest(branch), { method: 'POST', body: { ref: branch, inputs: { full_matrix: true }, return_run_details: true } });
 });
 
 test('polling bounds each request by the remaining deadline and retains 30-second intervals', async () => {

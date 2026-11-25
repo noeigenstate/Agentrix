@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -10,11 +11,11 @@ const { turnResult } = require('../electron/features/claude-sdk/result.cjs');
 
 // The app-server's stopProcess as on Windows, with taskkill replaced by the given stand-in.
 function windowsStop(execFile) {
-  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-  const source = fs.readFileSync(path.join(__dirname, '../electron/features/codex-app-server/index.cjs'), 'utf8');
-  return vm.runInNewContext(source.slice(source.indexOf('function stopProcess('), source.indexOf('function createCodexRuntime(')) + '\nstopProcess;', {
-    setTimeout, clearTimeout, path, process: { platform: 'win32', env: { SystemRoot: 'C:/Windows' } }, execFile,
-  });
+  return loadWithStubs(require.resolve('../electron/features/codex-app-server/index.cjs'), (name, load) => {
+    if (name === 'node:process') return { platform: 'win32', env: { SystemRoot: 'C:/Windows' } };
+    if (name === 'node:child_process') return { ...load(name), execFile };
+    return load(name);
+  }).stopProcess;
 }
 
 test('a Windows stop waits for taskkill to finish with the tree, even after the app-server has exited and closed', async () => {

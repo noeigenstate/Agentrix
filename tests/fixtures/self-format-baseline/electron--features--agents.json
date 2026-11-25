@@ -1,9 +1,3 @@
 {
-  "electron/features/agents/background-tasks.cjs :: tests/background-tasks.test.cjs :: source-execution": 1,
-  "electron/features/agents/call-seat.cjs :: positional-lines": 1,
-  "electron/features/agents/claude-account-usage.cjs :: tests/boundary-activity-pane.test.cjs :: source-regex": 1,
-  "electron/features/agents/codex-account-usage.cjs :: tests/boundary-activity-pane.test.cjs :: source-regex": 2,
-  "electron/features/agents/codex-account-usage.cjs :: tests/boundary-activity-pane.test.cjs :: source-slice": 2,
-  "electron/features/agents/codex-account-usage.cjs :: tests/codex-account-usage.test.cjs :: source-execution": 1,
-  "electron/features/agents/subagent-feed.cjs :: tests/boundary-dispatch.test.cjs :: source-regex": 1
+  "electron/features/agents/call-seat.cjs :: positional-lines": 1
 }

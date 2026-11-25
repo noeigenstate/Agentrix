@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { createHash } = require('node:crypto');
 const { gzipSync } = require('node:zlib');
 const { VoiceManager, MODELS, RUNTIMES, RUNTIME_VERSION, downloadRuntime, extractTarball } = require('../electron/voice.cjs');
@@ -264,13 +263,11 @@ test('an unsupported platform reports unavailable without fetching or starting a
 });
 
 test('the worker seeds sherpa with the engine directory chosen by the main process', async () => {
-  const source = await fs.readFile(path.join(__dirname, '../electron/voice-worker.cjs'), 'utf8');
+  const { loadSherpa } = require('../electron/voice-worker.cjs');
   for (const runtimeDirectory of [path.resolve('node_modules/sherpa-onnx-linux-x64'), path.resolve('voice/runtime/sherpa-onnx-linux-x64-1.13.8')]) {
     const bridge = path.resolve('node_modules/sherpa-onnx-node/addon.js'), addon = path.join(runtimeDirectory, 'sherpa-onnx.node');
     const native = {}, calls = [];
     const load = name => {
-      if (name === 'node:path') return path;
-      if (name === 'node:worker_threads') return { parentPort: { on() {} }, workerData: { runtimeDirectory } };
       if (name === addon) { calls.push(name); return native; }
       if (name === 'sherpa-onnx-node') { assert.equal(load.cache[bridge].exports, native); assert.equal(load.cache[bridge].loaded, true); return {}; }
       assert.fail(`unexpected require ${name}`);
@@ -280,7 +277,7 @@ test('the worker seeds sherpa with the engine directory chosen by the main proce
       assert.equal(name, 'sherpa-onnx-node/addon.js');
       return bridge;
     };
-    vm.runInNewContext(source, { require: load });
+    loadSherpa(load, runtimeDirectory);
     assert.deepEqual(calls, [addon]);
   }
 });

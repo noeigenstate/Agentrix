@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
@@ -31,11 +32,11 @@ function registrationChannel() {
       queueMicrotask(() => { accept(server); client.emit('connect'); }); return client;
     },
   };
-  const file = require.resolve('../electron/features/agents/dispatch-control.cjs'), load = require('node:module').createRequire(file), module = { exports: {} };
-  require('node:vm').compileFunction(fs.readFileSync(file, 'utf8'), ['require', 'module', 'exports', '__filename', '__dirname'])(
-    // No socket file exists behind the stand-in, so the POSIX permission step on it is stood in as well.
-    name => name === 'node:net' ? net : name === 'node:fs' ? { ...fs, chmodSync() {} } : load(name), module, module.exports, file, path.dirname(file));
-  return { ...module.exports, net };
+  const file = require.resolve('../electron/features/agents/dispatch-control.cjs');
+  // The stand-in has no socket file for the POSIX permission step.
+  const control = loadWithStubs(file, (name, load) =>
+    name === 'node:net' ? net : name === 'node:fs' ? { ...fs, chmodSync() {} } : load(name));
+  return { ...control, net };
 }
 
 test('registration rejection reports the failed binding without exposing credentials', async t => {

@@ -223,7 +223,7 @@ test('strict built-in format rejects bad fields, limits, scalars and body sectio
 });
 
 test('every shipped built-in passes the strict format and has English title, summary and timing', () => {
-  const english = JSON.parse(fs.readFileSync(path.join(__dirname, '../electron/locales/en.json'), 'utf8'));
+  const english = require('../electron/locales/en.json');
   const folders = fs.readdirSync(resources, { withFileTypes: true }).filter(entry => entry.isDirectory());
   assert.ok(folders.length);
   for (const folder of folders) {
@@ -299,7 +299,7 @@ test('defaults, timing and requirements come from front matter for any built-in 
     }
   }
   const saved = await store.save(null, { name: 'user-skill', description: 'A user procedure.', scope: 'global', projectId: null, text: '# Procedure' });
-  const english = JSON.parse(fs.readFileSync(path.join(__dirname, '../electron/locales/en.json'), 'utf8'));
+  const english = require('../electron/locales/en.json');
   for (const [trigger, when] of Object.entries({ always: '每个任务开始前', auto: '描述匹配时' })) {
     const skill = store.setOptions(saved.id, { trigger });
     assert.equal(skill.when, when); assert.equal(skill.extends, null); assert.equal(skill.requires, null);

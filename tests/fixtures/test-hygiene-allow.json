@@ -42,7 +42,7 @@
     { "file": "tests/dispatch.test.cjs", "rule": "fixed-sleep", "count": 1 },
     { "file": "tests/file-cards.test.cjs", "rule": "fixed-sleep", "count": 2 },
     { "file": "tests/generated-images.test.cjs", "rule": "setImmediate", "count": 1 },
-    { "file": "tests/lab-engine-window.test.cjs", "rule": "setImmediate", "count": 5 },
+    { "file": "tests/lab-engine-window.test.cjs", "rule": "setImmediate", "count": 4 },
     { "file": "tests/lab-engine.test.cjs", "rule": "fixed-sleep", "count": 1 },
     { "file": "tests/lab-oss.test.cjs", "rule": "setImmediate", "count": 2 },
     { "file": "tests/lab-sandbox-win32.test.cjs", "rule": "fixed-sleep", "count": 3 },

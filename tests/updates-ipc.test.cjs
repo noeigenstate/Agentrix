@@ -1,9 +1,9 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { BETA_AGREEMENT_VERSION, UpdateManager } = require('../electron/updates.cjs');
@@ -100,7 +100,7 @@ test('preload forwards both set-channel arguments and returns the original IPC r
   let api;
   const calls = [], response = { ok: false, error: '请先阅读并同意测试协议。' };
   const electron = { contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } }, ipcRenderer: { invoke: async (...args) => { calls.push(args); return response; } } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), { require: name => { assert.equal(name, 'electron'); return electron; } });
+  loadPreload('electron/preload.cjs', electron);
   assert.equal(await api.setUpdateChannel('beta', BETA_AGREEMENT_VERSION), response);
   assert.equal(await api.setUpdateChannel('stable'), response);
   assert.deepEqual(calls, [['updates:set-channel', 'beta', BETA_AGREEMENT_VERSION], ['updates:set-channel', 'stable', undefined]]);

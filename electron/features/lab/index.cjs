@@ -1,3 +1,4 @@
+const process = require('node:process');
 const path = require('node:path');
 const { createLabWindow } = require('./window.cjs');
 const { registerLabIpc } = require('./ipc.cjs');

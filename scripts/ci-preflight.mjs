@@ -213,8 +213,14 @@ function credential(repository) {
   return token;
 }
 
+export function remoteWorkflowPlan(workflow) {
+  return { expected: expectedRemoteJobs(workflow), dispatchRequest: branch => ({
+    method: 'POST', body: { ref: branch, inputs: { full_matrix: true }, return_run_details: true },
+  }) };
+}
+
 async function remote(options, workflow) {
-  const expected = expectedRemoteJobs(workflow);
+  const { expected, dispatchRequest } = remoteWorkflowPlan(workflow);
   if (!Object.hasOwn(workflow.on || {}, 'workflow_dispatch')) throw new Error('Workflow must enable workflow_dispatch.');
   if (git(['status', '--porcelain'])) throw new Error('Remote preflight requires a clean worktree; only committed HEAD can be tested.');
   const repository = parseOrigin(git(['remote', 'get-url', 'origin']));
@@ -274,9 +280,7 @@ async function remote(options, workflow) {
     if (push.error || push.status !== 0) throw new Error('Preflight branch creation failed. An existing branch is never overwritten.');
     pushed = true;
     console.log(`Created ${branch} for HEAD ${sha}.`);
-    const dispatch = await json(`/actions/workflows/${path.basename(workflowFile)}/dispatches`, {
-      method: 'POST', body: { ref: branch, inputs: { full_matrix: true }, return_run_details: true },
-    });
+    const dispatch = await json(`/actions/workflows/${path.basename(workflowFile)}/dispatches`, dispatchRequest(branch));
     const runId = dispatch.workflow_run_id;
     if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error('Dispatch did not return an exact workflow run ID; refusing to guess a matching run.');
     console.log(`Run: https://github.com/${repository.owner}/${repository.repo}/actions/runs/${runId}`);

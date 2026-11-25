@@ -31,7 +31,7 @@ async function loadModule(name, overrides = {}, globals = {}) {
   const file = path.join(__dirname, '../electron/features/lab', name), localRequire = createRequire(file), module = { exports: {} };
   vm.runInNewContext(await fs.readFile(file, 'utf8'), {
     module, process, Buffer, console, setTimeout, clearTimeout, AbortSignal, AbortController, queueMicrotask, __dirname: path.dirname(file),
-    require: name => overrides[name] || localRequire(name), ...globals,
+    require: name => overrides[name] ?? (name === 'node:process' && globals.process ? globals.process : localRequire(name)), ...globals,
   }, { filename: file });
   return module.exports;
 }
@@ -308,7 +308,7 @@ test('Windows relay serves a child broker burst and closes every client without 
     await new Promise((resolve, reject) => { session.server.once('error', reject); session.server.listen(address, resolve); });
     const own = JSON.parse(session.brokerEnvironment), events = [], requests = [];
     relays = await require('../electron/features/lab/sandbox-win32-host.cjs').createPipeRelays([own.address, address],
-      '\\\\.\\pipe\\Sessions\\0\\AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7\\', () => {}, line => events.push(line));
+      '\\\\.\\pipe\\Sessions\\0\\AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7\\', () => {}, event => events.push(event));
     const result = await command(process.execPath, ['-e', brokerProbeScript(), JSON.stringify({
       address: '\\\\.\\pipe\\LOCAL\\agentrix-lab-missing-' + randomUUID(), capability: randomUUID(),
     }), JSON.stringify({ address: relays.pipes[1], capability: session.capability })], {
@@ -323,7 +323,7 @@ test('Windows relay serves a child broker burst and closes every client without 
     assert.ok(peakWork <= 4, 'the relay queues beyond the broker operation limit');
     assert.ok(peakSockets <= 8, 'retiring sockets keep room for the next batch');
     assert.equal(requests.filter(request => request.stage === 'release').length, 37);
-    assert.ok(events.some(line => /stage=release /.test(line)));
+    assert.ok(events.some(event => event.stage === 'release'));
   });
 
 test('Windows root leases serialize cleanup after launcher exit and remove inherited and protected grants', windows, async t => {
@@ -687,9 +687,9 @@ class PipeSecurityProbe { public static void Main(string[] args) {
     releaseHeld();
     assert.deepEqual(await queued, Array.from({ length: 24 }, () => ({ code: 0 })));
     assert.equal(heldRequests, 24, 'every queued request eventually reaches the backend');
-    assert.ok(events.some(event => /stage=queue .*queued=[1-9]/.test(event)));
-    assert.ok(events.some(event => /stage=reply /.test(event)));
-    assert.ok(events.some(event => /stage=release /.test(event)));
+    assert.ok(events.some(event => event.stage === 'queue' && event.queued > 0));
+    assert.ok(events.some(event => event.stage === 'reply'));
+    assert.ok(events.some(event => event.stage === 'release'));
     assert.deepEqual(await request('reject\n'), { code: 125 }, 'the listener continues serving protocol refusals');
     const partial = '\\\\.\\pipe\\LOCAL\\agentrix-lab-partial-' + randomUUID();
     await assert.rejects(createPipeRelays([partial, local[2]], namespace), { code: 'EADDRINUSE' });
@@ -883,12 +883,16 @@ test('Windows diagnostics are opt-in, bounded and accept only fixed events with 
   assert.match(trace.summary(), /host pipes ready count=3/);
   assert.match(trace.summary(), /phase=listen code=ENOENT errno=-4058/);
   const relay = '[lab-win32] host relay pipe=1 id=7 stage=wait phase=active code=OK active=8 queued=16 ms=2000';
-  trace.feed(relay + '\n');
+  const event = { type: 'relay', version: 1, pipe: 1, id: 7, stage: 'wait', phase: 'active', code: 'OK', active: 8, queued: 16, ms: 2000 };
+  const line = JSON.stringify(event) + '\n';
+  trace.feed(line);
   assert.ok(printed.includes(relay)); assert.ok(trace.summary().includes(relay));
-  trace.feed(relay.replace('code=OK', 'code=private-secret') + '\n');
+  trace.feed(JSON.stringify({ ...event, code: 'private-secret' }) + '\n');
+  trace.feed(JSON.stringify({ ...event, version: 2 }) + '\n');
+  assert.equal(printed.filter(value => value === relay).length, 1);
   assert.doesNotMatch(trace.summary(), /private-secret/);
   const before = printed.length;
-  for (let i = 0; i < 300; i++) trace.feed(relay + '\n');
+  for (let i = 0; i < 300; i++) trace.feed(line);
   assert.equal(printed.length - before, 255, 'relay events have a separate bounded budget');
   for (const env of [{ AGENTRIX_LAB_ISOLATED_HOST: 'child-v8' }, { AGENTRIX_LAB_TEST_PREPARE_HOST: '1' }]) {
     const disabled = await loadModule('process.cjs', {}, { process: { platform: 'win32', env } });

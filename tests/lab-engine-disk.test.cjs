@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/lab-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -5,8 +6,6 @@ const fs = require('node:fs/promises');
 const native = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const { copyDependencies, cleanupWorktrees } = require('../electron/features/lab/workspace.cjs');
 const { removePath } = require('../electron/features/lab/disk.cjs');
 const { pruneCache } = require('../electron/features/lab/disk.cjs');
@@ -36,17 +35,14 @@ test('Electron workspace removal uses original-fs so a physical ASAR is not mist
     throw Object.assign(new Error('archive-aware removal left default_app.asar behind'), { code: 'ENOTEMPTY' });
   } } };
   await assert.rejects(patched.promises.rm(root), { code: 'ENOTEMPTY' });
-  const module = { exports: {} };
-  vm.runInNewContext(await fs.readFile(path.join(__dirname, '../electron/features/lab/disk.cjs'), 'utf8'), {
-    module, process: { versions: { electron: 'fixture' } },
-    require: name => {
-      if (name === 'original-fs') return original;
-      if (name === 'node:fs') return patched;
-      if (name === 'node:path') return path;
-      throw new Error('Unexpected module ' + name);
-    },
+  const { removePath } = loadWithStubs(require.resolve('../electron/features/lab/disk.cjs'), name => {
+    if (name === 'node:process') return { versions: { electron: 'fixture' } };
+    if (name === 'original-fs') return original;
+    if (name === 'node:fs') return patched;
+    if (name === 'node:path') return path;
+    throw new Error('Unexpected module ' + name);
   });
-  await module.exports.removePath(root);
+  await removePath(root);
   assert.equal(originalCalls, 1); assert.equal(patchedCalls, 1);
   assert.ok(options.maxRetries > 0); assert.ok(options.retryDelay > 0);
   assert.equal(await fs.stat(root).catch(() => null), null);
@@ -116,22 +112,18 @@ test('an unavailable APFS clone falls back to a private copy without Electron di
   try { await fs.symlink(binTarget, path.join(source, '.bin/fixture')); }
   catch (error) { if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
     t.skip('Windows file-symlink privilege is unavailable'); return; }
-  const file = path.join(__dirname, '../electron/features/lab/workspace.cjs'), module = { exports: {} };
-  const localRequire = createRequire(file);
   let cloneCalls = 0;
-  vm.runInNewContext(await fs.readFile(file, 'utf8'), {
-    module, process: { platform: 'darwin' },
-    require(name) {
-      if (name !== './process.cjs') return localRequire(name);
-      return { ...localRequire(name), async command(file, args) {
-        assert.equal(file, '/bin/cp'); cloneCalls++;
-        await fs.writeFile(path.join(args.at(-1), 'partial-copy'), 'incomplete');
-        return { code: 1 };
-      } };
-    },
+  const { copyDependencies } = loadWithStubs(require.resolve('../electron/features/lab/workspace.cjs'), (name, localRequire) => {
+    if (name === 'node:process') return { platform: 'darwin' };
+    if (name !== './process.cjs') return localRequire(name);
+    return { ...localRequire(name), async command(file, args) {
+      assert.equal(file, '/bin/cp'); cloneCalls++;
+      await fs.writeFile(path.join(args.at(-1), 'partial-copy'), 'incomplete');
+      return { code: 1 };
+    } };
   });
   const destination = path.join(root, 'workspace/node_modules');
-  await module.exports.copyDependencies(path.dirname(source), destination);
+  await copyDependencies(path.dirname(source), destination);
   assert.equal(cloneCalls, 1);
   assert.equal(await fs.stat(path.join(destination, 'partial-copy')).catch(() => null), null);
   assert.equal(await fs.stat(path.join(destination, 'electron/dist')).catch(() => null), null);

@@ -1,3 +1,4 @@
+const { ts, syntax, nodes } = require('./helpers/source-syntax.cjs');
 require('./fixtures/team-isolation.cjs');
 // Guards for integration/BOUNDARY.md (Dispatch) that no behaviour test covers.
 const { test } = require('node:test');
@@ -15,15 +16,18 @@ const requires = source => [...source.matchAll(/\brequire\s*\(\s*['"]([^'"]+)['"
 test('the carried intercept runtime includes the six launchers in a CJS envelope', async t => {
   const carried = runtimeFiles();
   assert.equal(typeof carried['shims/intercept.cjs'], 'string');
-  const bundle = { exports: {} };
-  require('node:vm').runInNewContext(carried['shims/launchers.cjs'], { module: bundle });
-  assert.deepEqual(Object.keys(bundle.exports).sort(), ['.agentrix-shims', 'claude', 'claude.cmd', 'claude.ps1', 'codex', 'codex.cmd', 'codex.ps1']);
-  for (const [name, source] of Object.entries(bundle.exports)) assert.equal(source, read(`integration/shims/${name}`));
   assert.ok(Object.keys(carried).every(name => /^[\w-]+(?:\/[\w-]+)*\.cjs$/.test(name)), 'the SSH carrier remains CJS-only');
   const install = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agx-packed-shims-'));
   t.after(() => fs.rmSync(install, { recursive: true, force: true }));
   await require('../scripts/after-pack.cjs').copyDispatchRuntime(install);
-  for (const [name, source] of Object.entries(bundle.exports)) assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
+  const bundleFile = path.join(install, 'electron/shims/launchers.cjs');
+  const bundle = require(bundleFile);
+  assert.equal(fs.readFileSync(bundleFile, 'utf8'), carried['shims/launchers.cjs']);
+  assert.deepEqual(Object.keys(bundle).sort(), ['.agentrix-shims', 'claude', 'claude.cmd', 'claude.ps1', 'codex', 'codex.cmd', 'codex.ps1']);
+  for (const [name, source] of Object.entries(bundle)) {
+    assert.equal(source, read(`integration/shims/${name}`));
+    assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
+  }
   assert.equal(fs.readFileSync(path.join(install, 'shims/intercept.cjs'), 'utf8'), carried['shims/intercept.cjs']);
   const packaged = require(path.join(install, 'shims/intercept.cjs'));
   assert.equal(packaged.runtimeFiles()['shims/launchers.cjs'], carried['shims/launchers.cjs']);
@@ -132,5 +136,9 @@ test('main, the control channel and the sub-agent view ask the team without a sy
   // Renaming a destructured import must not get past the call scan above: the synchronous module is not required here at all.
   for (const file of files) assert.doesNotMatch(code(read(file)), /\b(?:require|import)\s*\(\s*['"][^'"]*team\/team\.cjs['"]/, `${file} requires team/team.cjs`);
   assert.match(read('electron/main.cjs'), /team-locate\.cjs/, 'main asks the asynchronous lookup');
-  assert.match(read('electron/features/agents/subagent-feed.cjs'), /team-locate\.cjs|locateTeam/, 'the sub-agent view asks the asynchronous lookup');
+  const feed = syntax('electron/features/agents/subagent-feed.cjs');
+  const calls = nodes(feed, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression));
+  const imports = calls.filter(node => node.expression.text === 'require').map(node => node.arguments[0].text);
+  assert.ok(imports.includes('../team/team-locate.cjs'), 'the sub-agent view asks the asynchronous lookup');
+  assert.ok(calls.some(node => node.expression.text === 'locateTeam'));
 });

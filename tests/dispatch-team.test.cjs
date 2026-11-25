@@ -10,8 +10,7 @@ const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { run, argumentsOf, commandOf, briefOf } = require('../integration/dispatch.cjs');
-const { createRequire } = require('node:module');
-const vm = require('node:vm');
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { projectTeam, memoryExcerpt } = require('../electron/features/team/team.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 
@@ -105,13 +104,8 @@ test('team journals end metadata for every worker role', async t => {
   assert.ok(ends.every(entry => !Object.hasOwn(entry, 'meeting')));
 });
 
-function load(file, replacements = {}, globals = {}) {
-  const loaded = { exports: {} }, localRequire = createRequire(file);
-  vm.runInNewContext(sync.readFileSync(file, 'utf8'), {
-    module: loaded, exports: loaded.exports, require: name => Object.hasOwn(replacements, name) ? replacements[name] : localRequire(name),
-    __dirname: path.dirname(file), __filename: file, process, Buffer, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
-  }, { filename: file });
-  return loaded.exports;
+function load(file, replacements) {
+  return loadWithStubs(file, (name, localRequire) => replacements[name] ?? localRequire(name));
 }
 
 async function invoke(prepared, extra = {}) {
@@ -417,14 +411,15 @@ for (const operation of ['renameSync', 'unlinkSync']) {
     const f = await lab(t), original = projectTeam(f.repo, true), file = path.join(original.directory, 'lock');
     const applies = name => operation === 'renameSync' ? name === file : name.startsWith(file + '.') && name.endsWith('.stale');
     const real = sync[operation];
-    let now = Date.now(), attempts = 0;
+    let attempts = 0;
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     const injected = { ...sync, [operation](...args) {
       if (applies(args[0])) { attempts++; throw Object.assign(new Error('Injected lock contention'), { code: 'EPERM' }); }
       return real(...args);
     } };
     const team = load(path.resolve(__dirname, '../electron/features/team/team.cjs'), {
-      'node:fs': injected, 'node:timers/promises': { setTimeout: async () => { now += 15001; } },
-    }, { Date: { now: () => now } }).projectTeam(f.repo);
+      'node:fs': injected, 'node:timers/promises': { setTimeout: async () => { t.mock.timers.tick(15001); } },
+    }).projectTeam(f.repo);
     await fs.writeFile(file, 'old'); await fs.utimes(file, staleTime, staleTime);
     let entered = false;
     await assert.rejects(team.locked(() => { entered = true; }), /Team lock is busy/);
@@ -476,7 +471,9 @@ test('scoped dispatch lists repository files once and snapshots status before an
   const boundaries = load(boundaryFile, { 'node:child_process': children });
   const teamModule = load(teamFile, { 'node:child_process': children });
   const dispatched = load(helper, { [boundaryFile]: boundaries, [teamFile]: teamModule });
-  assert.match(dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString(), /finish_role\.skillProposals[\s\S]*plain$/);
+  const rendered = dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString();
+  assert.ok(rendered.includes('finish_role.skillProposals'));
+  assert.ok(rendered.endsWith('plain'));
   assert.equal(calls.length, 0, 'briefOf has no hidden team discovery');
   for (const withPeer of [false, true]) {
     const team = projectTeam(f.repo), peer = randomUUID();

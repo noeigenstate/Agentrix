@@ -1,8 +1,7 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const integration = require('../electron/windows-integration.cjs');
 
 function startup({ packaged = false, installed = false, profile, platform = 'win32' } = {}) {
@@ -10,6 +9,7 @@ function startup({ packaged = false, installed = false, profile, platform = 'win
   const app = { isPackaged: packaged, getPath: name => paths[name], setPath: (name, value) => { paths[name] = value; }, setName() {}, setAppUserModelId: id => { app.aumid = id; } };
   const modules = {
     'node:path': path,
+    'node:process': { platform, execPath: 'Agentrix.exe', env: { AGENTRIX_DATA_DIR: profile } },
     'node:child_process': { execFile() { assert.fail('startup tests must never run shell tools'); } },
     '../updates.cjs': { isInstalledBuild: () => installed },
     '../dev-profile.cjs': { seedDevProfile() {} },
@@ -21,12 +21,11 @@ function startup({ packaged = false, installed = false, profile, platform = 'win
       refreshSearchIcons: () => ({ changes: [] }),
     },
   };
-  const context = { module: { exports: {} }, process: { platform, execPath: 'Agentrix.exe', env: { AGENTRIX_DATA_DIR: profile } }, require: name => {
+  const startup = loadWithStubs(require.resolve('../electron/app/platform-startup.cjs'), name => {
     assert.ok(Object.hasOwn(modules, name), `unexpected dependency: ${name}`);
     return modules[name];
-  } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/app/platform-startup.cjs'), 'utf8'), context);
-  return { app, paths, registrations, shortcuts, ...context.module.exports };
+  });
+  return { app, paths, registrations, shortcuts, ...startup };
 }
 
 test('Windows startup uses the materialized icon and relaunch identity without waiting for registry I/O', () => {

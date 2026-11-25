@@ -14,44 +14,9 @@ const {
 
 async function copyHelper(helper, directory) {
   const source = await fs.readFile(helper, 'utf8'), destination = path.join(directory, 'runtime.json');
-  const runtime = /const RUNTIME_FILES = (\[[\s\S]*?\]);/.exec(source);
-  const modules = {};
-  let instrumented = source;
-  if (runtime) {
-    const rate = "send({ type: 'dispatch-rate', id, ...lastRate });";
-    if (!source.includes(rate)) throw new Error('The dispatch helper cannot provide authenticated live cost measurements.');
-    instrumented = source.replace(rate, "send({ type: 'dispatch-rate', id, ...lastRate, ...output.usage() });");
-    const meter = 'send = eventSink(env.AGENTRIX_BOOTSTRAP, notice);';
-    if (!instrumented.includes(meter)) throw new Error('The dispatch helper cannot isolate its metering credentials.');
-    instrumented = instrumented.replace(meter, 'send = globalThis.__AGENTRIX_LAB_SINK;');
-    instrumented = instrumented.replace(
-      "path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron')",
-      "path.join(__dirname, 'electron')",
-    );
-    // The lab links the owner's auth file into the run's Codex home; a keyring is out of the sandbox's reach.
-    const codex = "return ['app-server', '--listen', 'stdio://'];";
-    if (!instrumented.includes(codex)) throw new Error('The dispatch helper cannot select the shared credential store.');
-    instrumented = instrumented.replace(codex,
-      "return ['-c', 'cli_auth_credentials_store=\"file\"', 'app-server', '--listen', 'stdio://'];");
-    const root = await fs.stat(path.join(path.dirname(helper), 'electron')).catch(() => null)
-      ? path.join(path.dirname(helper), 'electron') : path.resolve(path.dirname(helper), '../electron');
-    for (const [, file] of runtime[1].matchAll(/'([^']+)'/g)) {
-      modules['electron/' + file] = await fs.readFile(path.join(root, file), 'utf8');
-    }
-    // The helper loads its intercept module when it starts. In this copy the module sits in no shim folder (no marker),
-    // so it never puts shims or start-up hooks on a worker's PATH and a model has no pass-through to a real CLI.
-    const shims = [path.join(path.dirname(helper), 'shims'), path.join(root, 'shims')];
-    for (const folder of shims) {
-      if (!await fs.stat(path.join(folder, 'intercept.cjs')).catch(() => null)) continue;
-      for (const [name, text] of Object.entries(require(path.join(folder, 'intercept.cjs')).runtimeFiles())) modules['electron/' + name] = text;
-      break;
-    }
-    const outbox = path.join(path.dirname(helper), 'dispatch-outbox.cjs');
-    // The outbox finds its runtime beside itself when nothing is on disk (dispatch-outbox.cjs), so the copy is carried unchanged.
-    modules['electron/dispatch-outbox.cjs'] = await fs.readFile(await fs.stat(outbox).catch(() => null)
-      ? outbox : path.join(root, 'dispatch-outbox.cjs'), 'utf8');
-  }
-  modules['dispatch.cjs'] = instrumented;
+  const { runtimeFiles } = require(path.resolve(helper));
+  const modules = Object.fromEntries(Object.entries(runtimeFiles?.() ?? {}).map(([file, text]) => ['electron/' + file, text]));
+  modules['dispatch.cjs'] = source;
   await fs.writeFile(destination, JSON.stringify(modules), { mode: 0o600 });
   return destination;
 }

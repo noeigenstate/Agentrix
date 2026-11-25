@@ -13,9 +13,9 @@ export const markStandIn = bin => writeFile(path.join(bin, STAND_IN_MARKER), '')
 
 // The app-server stand-in as codex.exe in `bin`, for a Windows PATH: started as an app-server it runs the protocol file
 // guiCodexEnvironment names. It never runs Codex and reaches no model.
-export const windowsCodexStandIn = async bin => {
+export const windowsCodexStandIn = async (bin, compile = promisify(execFile)) => {
   await markStandIn(bin);
-  return promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
+  return compile(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
     ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(fixtures, 'restore-codex.cs')], { windowsHide: true });
 };
 

@@ -1,6 +1,0 @@
-{
-  "integration/claude-hook.ps1 :: tests/backend-activity.test.cjs :: source-regex": 2,
-  "integration/claude-hook.ps1 :: tests/skills-session.test.cjs :: source-slice": 1,
-  "integration/claude-hook.ps1 :: tests/terminal-events-guards.test.cjs :: source-regex": 2,
-  "integration/claude-hook.ps1 :: tests/terminal-events-guards.test.cjs :: source-slice": 1
-}

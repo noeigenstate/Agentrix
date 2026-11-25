@@ -1,11 +1,11 @@
+const { loadPreload, loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/lab-isolation.cjs');
+const vm = require('node:vm');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const { createLab } = require('../electron/features/lab/index.cjs');
 const { createLabWindow } = require('../electron/features/lab/window.cjs');
 const { buildMacMenuTemplate } = require('../electron/app/mac-menu.cjs');
@@ -65,18 +65,14 @@ function fixture(t, extra = {}) {
 }
 
 test('importing and wiring the lab before the first window never loads the engine or touches Electron safeStorage', async () => {
-  const file = path.join(__dirname, '../electron/features/lab/index.cjs'), localRequire = createRequire(file);
-  const module = { exports: {} }, ipcMain = new Ipc(); let engineLoads = 0, storageReads = 0;
-  vm.runInNewContext(await fs.readFile(file, 'utf8'), {
-    module, __dirname: path.dirname(file), process: { platform: 'darwin', versions: { electron: 'fixture' } },
-    setTimeout, clearTimeout, setImmediate, clearImmediate,
-    require(name) {
+  const ipcMain = new Ipc(); let engineLoads = 0, storageReads = 0;
+  const { createLab } = loadWithStubs(require.resolve('../electron/features/lab/index.cjs'), (name, localRequire) => {
+    if (name === 'node:process') return { platform: 'darwin', versions: { electron: 'fixture' } };
       if (name === './engine.cjs') { engineLoads++; throw new Error('Engine loaded before a window was shown.'); }
       if (name === 'electron') return { get safeStorage() { storageReads++; throw new Error('Keychain touched during startup.'); } };
       return localRequire(name);
-    },
   });
-  const lab = module.exports.createLab({ userData: '/unused', getSettings: () => ({ theme: 'dark', language: 'zh' }),
+  const lab = createLab({ userData: '/unused', getSettings: () => ({ theme: 'dark', language: 'zh' }),
     getProjects: () => [], getMainWindow: () => null, BrowserWindow: Window, ipcMain });
   lab.sync(); assert.equal(lab.waitForQuit(), null); lab.dispose();
   assert.equal(engineLoads, 0); assert.equal(storageReads, 0); assert.equal(ipcMain.handlers.size, 0);
@@ -167,24 +163,20 @@ test('lab window has one sandboxed instance, its own preload and synchronized ap
 });
 
 test('lab preload resolves to its own feature directory with both POSIX and Windows path rules', async () => {
-  const source = await fs.readFile(path.join(__dirname, '../electron/features/lab/window.cjs'), 'utf8');
+  const file = require.resolve('../electron/features/lab/window.cjs');
   for (const [paths, root, platform] of [
     [path.posix, '/Applications/Agentrix', 'darwin'],
     [path.win32, 'C:\\Program Files\\Agentrix', 'win32'],
   ]) {
-    const module = { exports: {} }, feature = paths.join(root, 'electron', 'features', 'lab');
-    vm.runInNewContext(source, {
-      module, __dirname: feature, process: { platform },
-      require(name) { assert.equal(name, 'node:path'); return paths; },
-    });
+    const { createLabWindow } = loadWithStubs(file, name => { assert.equal(name, 'node:path'); return paths; });
     let options;
-    const window = module.exports.createLabWindow({
+    const window = createLabWindow({ root, platform,
       BrowserWindow: class extends Window { constructor(value) { super(value); options = value; } },
       getSettings: () => ({ theme: 'dark', language: 'zh', uiZoom: 100 }), getMainWindow: () => null, t: value => value,
     });
     await window.open();
-    assert.equal(options.webPreferences.preload, paths.join(feature, 'preload.cjs'));
-    assert.equal(paths.isAbsolute(options.webPreferences.preload), true);
+    assert.equal(options.webPreferences.preload, paths.join(path.dirname(file), 'preload.cjs'));
+    assert.equal(path.isAbsolute(options.webPreferences.preload) || paths.isAbsolute(options.webPreferences.preload), true);
     assert.equal(options.icon, paths.join(root, 'assets', 'icon.png'));
     assert.equal(options.webPreferences.sandbox, true); assert.equal(options.webPreferences.nodeIntegration, false);
     window.getWindow().close();
@@ -262,13 +254,11 @@ test('experiment changes push the full newest list at most four times a second',
 });
 
 test('lab preload exposes exactly LabBridge and removes event listeners without exposing IPC events', async () => {
-  const source = await fs.readFile(path.join(__dirname, '../electron/features/lab/preload.cjs'), 'utf8');
   const ipcRenderer = new EventEmitter(), calls = []; let name, bridge;
   ipcRenderer.invoke = (...args) => { calls.push(args); return Promise.resolve({ ok: true }); };
   ipcRenderer.send = (...args) => calls.push(args);
-  vm.runInNewContext(source, { require: key => {
-    assert.equal(key, 'electron');
-    return { ipcRenderer, contextBridge: { exposeInMainWorld(key, value) { name = key; bridge = value; } } };
+  loadPreload('electron/features/lab/preload.cjs', { ipcRenderer, contextBridge: {
+    exposeInMainWorld(key, value) { name = key; bridge = value; },
   } });
   assert.equal(name, 'agentrixLab');
   assert.deepEqual(Object.keys(bridge).sort(), ['aaKey', 'appearance', 'close', 'estimate', 'list', 'maximize', 'minimize', 'onAppearance', 'onChange', 'projects', 'remove', 'sample', 'sources', 'start', 'stop']);

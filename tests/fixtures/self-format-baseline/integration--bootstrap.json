@@ -1,6 +1,4 @@
 {
   "integration/bootstrap.ps1 :: positional-lines": 5,
-  "integration/bootstrap.ps1 :: tests/skills-session.test.cjs :: source-slice": 2,
-  "integration/bootstrap.ps1 :: tests/skills.test.cjs :: source-slice": 1,
   "integration/bootstrap.ps1 :: whole-word": 4
 }

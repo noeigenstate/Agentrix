@@ -1,3 +1,4 @@
+const { runPowerShellHook } = require('./helpers/powershell-hook.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -14,12 +15,24 @@ test('additionalContext, systemMessage, displayContent, continue and decision:bl
   const hookSources = fs.readdirSync(path.join(root, eventsDir)).filter(name => name.endsWith('.cjs') && name !== 'hook-response.cjs');
   const hookPath = [...hookSources.map(name => `${eventsDir}/${name}`), 'electron/features/claude-runtime/hooks.cjs', ...wrappers];
   for (const file of hookPath) assert.doesNotMatch(read(file), answers, file);
-  // The pipe's command hook answers only SessionStart, the one place skills enter the context.
-  const command = read('integration/claude-hook.ps1');
-  const session = command.slice(command.indexOf('function Get-AgentrixSessionContext'), command.indexOf('\ntry {'));
-  assert.doesNotMatch(command.replace(session, ''), answers);
-  assert.match(command, /if \(\$Kind -eq 'session'\) \{\s*try \{\s*(?:\$context = )?Get-AgentrixSessionContext \$hook\b/);
-  assert.equal(command.match(/Get-AgentrixSessionContext \$hook\b/g).length, 1, 'only the session kind reads the skill context');
+});
+
+test('PowerShell status hooks report events silently and do not consume the session note', {
+  skip: process.platform !== 'win32' && 'requires Windows PowerShell',
+}, async t => {
+  const folder = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agentrix-command-hook-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const noteFile = path.join(folder, 'note.txt'), manifest = path.join(folder, 'manifest.md');
+  const { deliveryMarker, digest } = require('../electron/features/skills/session.cjs');
+  fs.writeFileSync(manifest, 'Fixture skill instructions.');
+  fs.writeFileSync(noteFile, 'Fixture. ' + deliveryMarker({ manifest, fingerprint: digest('fixture') }));
+  for (const kind of new Set(Object.values(COMMAND_KINDS).filter(kind => kind !== 'session'))) {
+    const result = await runPowerShellHook(kind, { session_id: 'fixture', source: 'startup', notification_type: 'permission_prompt' }, { noteFile });
+    assert.deepEqual(result, { code: 0, stdout: '', stderr: '' }, kind);
+  }
+  const result = await runPowerShellHook('session', { session_id: 'fixture', source: 'startup' }, { noteFile });
+  assert.equal(result.code, 0); assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout).hookSpecificOutput, { hookEventName: 'SessionStart', additionalContext: 'Agentrix skill instructions:\nFixture skill instructions.' });
 });
 
 test('the settings generators emit only http hooks but SessionStart, or the declared command fallback', () => {

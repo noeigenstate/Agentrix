@@ -1,7 +1,7 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
 const capture = require('./fixtures/claude-user-round-background.json');
 const modulePath = '../electron/features/agents/background-tasks.cjs';
 
@@ -355,11 +355,8 @@ test('attach exposes background entries on an existing or null usage snapshot wi
 });
 
 test('transcript output paths are never opened and task observation has no filesystem or process dependencies', () => {
-  require(modulePath);
-  const source = fs.readFileSync(require.resolve(modulePath), 'utf8');
-  const exported = { exports: {} };
-  vm.runInNewContext(source, { module: exported, require: name => assert.fail(`unexpected dependency: ${name}`) }, { filename: 'background-tasks.cjs' });
-  const tasks = new exported.exports.BackgroundTasks('terminal-1', { now: () => 10000 });
+  const { BackgroundTasks: LoadedTasks } = loadWithStubs(require.resolve(modulePath), name => assert.fail(`unexpected dependency: ${name}`));
+  const tasks = new LoadedTasks('terminal-1', { now: () => 10000 });
   tasks.apply(tool('Bash', 'launch', { command: 'node replay.cjs', run_in_background: true }));
   tasks.apply(result('launch', { backgroundTaskId: 'shell', stdout: '', stderr: '', rawOutputPath: '<home>/private.txt', persistedOutputPath: '<home>/another-private.txt' }));
   tasks.apply(notice('shell'));

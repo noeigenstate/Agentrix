@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -286,12 +287,14 @@ function receipts(t) {
 
 test('standalone Linux receipts use separate uid roots while Windows keeps its per-user temp root', t => {
   const store = receipts(t), filename = path.resolve(__dirname, '../integration/dispatch.cjs');
-  const { createRequire } = require('node:module'), vm = require('node:vm'), realRequire = createRequire(filename);
   const temporary = fs.realpathSync(store.directory);
   const legacy = path.join(temporary, 'agentrix-dispatch'); fs.mkdirSync(legacy);
   function locate(platform, uid) {
-    const module = { exports: {} };
-    const load = name => {
+    const processView = Object.create(process);
+    Object.defineProperty(processView, 'platform', { value: platform });
+    processView.getuid = () => uid;
+    const { detachedRuns } = loadWithStubs(filename, (name, realRequire) => {
+      if (name === 'node:process') return processView;
       if (name === 'node:os') return { ...realRequire(name), tmpdir: () => store.directory };
       if (name === 'node:fs') return { ...fs, lstatSync: (...args) => {
         if (platform === 'linux') assert.notEqual(args[0], legacy, 'Linux must never inspect the other owner\'s shared root');
@@ -300,11 +303,8 @@ test('standalone Linux receipts use separate uid roots while Windows keeps its p
       } };
       if (name.replaceAll('\\', '/').endsWith('/features/team/team.cjs')) return { ...realRequire(name), projectTeam: () => null };
       return realRequire(name);
-    };
-    const processView = Object.create(process); Object.defineProperty(processView, 'platform', { value: platform }); processView.getuid = () => uid;
-    const wrapper = vm.runInNewContext('(function(require,module,exports,__filename,__dirname){' + fs.readFileSync(filename, 'utf8') + '\n})', { process: processView, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, Buffer });
-    wrapper(load, module, module.exports, filename, path.dirname(filename));
-    return module.exports.detachedRuns(store.directory, true).directory;
+    });
+    return detachedRuns(store.directory, true).directory;
   }
   const first = locate('linux', 1001), second = locate('linux', 1002);
   assert.ok(first.startsWith(path.join(temporary, 'agentrix-dispatch-1001') + path.sep));

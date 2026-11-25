@@ -1,11 +1,10 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
-const { LabSession, copyHelper } = require('../electron/features/lab/session.cjs');
+const { LabSession } = require('../electron/features/lab/session.cjs');
 const { workerArguments } = require('../electron/features/lab/dispatch.cjs');
 const { argumentsOf, dispatchEvent, renderDispatchLine } = require('../integration/dispatch.cjs');
 const { started: startEvent, ended: endEvent } = require('./helpers/dispatch-events.cjs');
@@ -65,23 +64,17 @@ async function detach(session, root, agent) {
   return receipt;
 }
 
-test('Lab helper instrumentation preserves detached ids and its authenticated meter', async t => {
-  const { root } = sessionFixture(t);
-  const file = await copyHelper(path.join(__dirname, '../integration/dispatch.cjs'), root);
-  const source = JSON.parse(fs.readFileSync(file, 'utf8'))['dispatch.cjs'];
-  assert.match(source, /const id = detached\?\.id \|\| randomUUID\(\);[\s\S]*const send = globalThis\.__AGENTRIX_LAB_SINK;/);
-  assert.match(source, /\.\.\.lastRate, \.\.\.output\.usage\(\)/);
-  // Invoke the real executor's execute function without starting an OS process.
-  const executor = fs.readFileSync(path.join(__dirname, '../electron/features/lab/executor.cjs'), 'utf8');
-  const execute = executor.slice(executor.indexOf('async function execute('), executor.indexOf("\nlet data ="));
-  const events = [], context = { process: { env: {} }, meterSink: () => async value => { events.push(value); return true; },
-    memoryModules: () => ({ run: async (args, deps) => {
-      assert.equal(args.includes('--detach'), false); assert.equal(deps.detached.id, 'fixture-id');
-      deps.detached.admitted(); await context.__AGENTRIX_LAB_SINK({ type: 'dispatch-rate', id: deps.detached.id }); return 0;
-    } }) };
-  vm.runInNewContext(execute, context);
-  assert.equal(await context.execute({ config: { args: ['codex'], dispatchId: 'fixture-id' }, bootstrap: {}, modules: {} }), 0);
-  assert.deepEqual(events.map(value => value.type), ['lab-handshake', 'dispatch-rate']);
+test('Lab executor carries the detached id and authenticates its meter before dispatch', async () => {
+  const events = [];
+  const { execute } = loadWithStubs(require.resolve('../electron/features/lab/executor.cjs'), (name, load) =>
+    name === './meter-sink.cjs' ? { meterSink: () => async event => { events.push(event); return true; } } : load(name));
+  const modules = { 'dispatch.cjs': `module.exports.run = (args, deps) => {
+    if (args.includes('--detach') || deps.detached.id !== 'fixture-id') throw new Error('Wrong detached run');
+    deps.detached.admitted();
+    return deps.labMeter({ type: 'dispatch-rate', id: deps.detached.id }).then(() => 0);
+  };` };
+  assert.equal(await execute({ config: { args: ['codex'], dispatchId: 'fixture-id' }, bootstrap: {}, modules }), 0);
+  assert.deepEqual(events, [{ type: 'lab-handshake' }, { type: 'dispatch-rate', id: 'fixture-id' }]);
 });
 
 test('Lab detach outlives the start RPC and wait returns its end line', async t => {
@@ -216,22 +209,20 @@ test('Lab stop and session cancellation end detached jobs', async t => {
 });
 
 test('Lab composition carries current background policy to later runs without reopening the engine', async () => {
-  const file = path.join(__dirname, '../electron/features/lab/index.cjs'), native = createRequire(file), module = { exports: {} };
   const settings = { claudeBackgroundTasks: false };
   let deferred, options;
-  const context = { module, process: { env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: 'inherited' }, platform: process.platform },
-    setTimeout, clearTimeout, clearImmediate, require: name => name === './window.cjs'
+  const { createLab } = loadWithStubs(require.resolve('../electron/features/lab/index.cjs'), (name, load) => {
+    if (name === 'node:process') return { env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: 'inherited' }, platform: process.platform };
+    return name === './window.cjs'
       ? { createLabWindow: () => ({ getWindow: () => null }) } : name === './ipc.cjs'
-        ? { registerLabIpc: value => { deferred = value.engine; return () => {}; } } : native(name) };
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), context);
-  const lab = module.exports.createLab({ userData: 'fixture', root: 'fixture', getSettings: () => settings, getMainWindow: () => null,
+        ? { registerLabIpc: value => { deferred = value.engine; return () => {}; } } : load(name);
+  });
+  const lab = createLab({ userData: 'fixture', root: 'fixture', getSettings: () => settings, getMainWindow: () => null,
     engineFactory: value => { options = value; return { subscribe: () => () => {}, list: () => [], close() {} }; } });
   await deferred.list();
   // runnerOptions is the same path used for the source reference and every model run.
-  const engineFile = path.join(__dirname, '../electron/features/lab/engine.cjs');
-  const body = fs.readFileSync(engineFile, 'utf8').match(/  runnerOptions\(lane, signal\) \{[\s\S]*?\n  \}/)[0];
-  const engine = vm.runInNewContext('({' + body + '})');
-  Object.assign(engine, { env: options.env, store: {}, active: null });
+  const { LabEngine } = require('../electron/features/lab/engine.cjs');
+  const engine = Object.assign(Object.create(LabEngine.prototype), { env: options.env, store: {}, active: null });
   const lane = { provider: {}, ctx: { cacheDirectory: 'fixture' } };
   for (const allow of [false, true, false]) {
     settings.claudeBackgroundTasks = allow;

@@ -13,6 +13,7 @@ function memoryModules(sources) {
     if (typeof sources[name] !== 'string') throw new Error('Missing trusted dispatch module: ' + name);
     const filename = path.join(root, name), mod = new Module(filename, module);
     mod.filename = filename; mod.paths = []; cache.set(name, mod);
+    mod.agentrixRuntimeLayout = 'bundled';
     mod.require = specifier => {
       if (builtin.has(specifier)) return require(specifier);
       if (!specifier.startsWith('.') && !path.isAbsolute(specifier)) {
@@ -41,13 +42,13 @@ function launch(file, args, options, model = false) {
 
 async function execute(payload) {
   const { config, bootstrap, modules } = payload;
-  globalThis.__AGENTRIX_LAB_SINK = meterSink(bootstrap);
-  if (bootstrap && !await globalThis.__AGENTRIX_LAB_SINK({ type: 'lab-handshake' })) {
+  const labMeter = meterSink(bootstrap);
+  if (bootstrap && !await labMeter({ type: 'lab-handshake' })) {
     throw new Error('Authenticated lab metering is unavailable. No model worker was started.');
   }
   if (!config.command) return memoryModules(modules).run(config.args, {
     ...(config.dispatchId ? { detached: { id: config.dispatchId, admitted() {} } } : {}),
-    env: process.env, launch: (file, args, options) => launch(file, args, options, true),
+    labMeter, env: process.env, launch: (file, args, options) => launch(file, args, options, true),
   });
   const child = launch(config.command.file, config.command.args, {
     cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
@@ -58,19 +59,24 @@ async function execute(payload) {
   });
 }
 
-let data = '';
-const input = fs.createReadStream(null, { fd: 3, autoClose: false, encoding: 'utf8' });
-input.on('data', chunk => {
-  data += chunk;
-  if (data.length > 16 * 1024 * 1024) input.destroy(new Error('Trusted dispatch payload is too large.'));
-});
-input.on('error', error => { console.error(error.message); process.exitCode = 1; });
-input.on('end', () => {
-  fs.closeSync(3);
-  let payload;
-  try { payload = JSON.parse(data); data = ''; }
-  catch { console.error('Invalid trusted dispatch payload.'); process.exitCode = 1; return; }
-  void execute(payload).then(code => { process.exitCode = code; }, error => {
-    console.error(error.message); process.exitCode = 1;
+function main() {
+  let data = '';
+  const input = fs.createReadStream(null, { fd: 3, autoClose: false, encoding: 'utf8' });
+  input.on('data', chunk => {
+    data += chunk;
+    if (data.length > 16 * 1024 * 1024) input.destroy(new Error('Trusted dispatch payload is too large.'));
   });
-});
+  input.on('error', error => { console.error(error.message); process.exitCode = 1; });
+  input.on('end', () => {
+    fs.closeSync(3);
+    let payload;
+    try { payload = JSON.parse(data); data = ''; }
+    catch { console.error('Invalid trusted dispatch payload.'); process.exitCode = 1; return; }
+    void execute(payload).then(code => { process.exitCode = code; }, error => {
+      console.error(error.message); process.exitCode = 1;
+    });
+  });
+}
+
+module.exports = { execute };
+if (require.main === module) main();

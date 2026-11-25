@@ -1,3 +1,4 @@
+const process = require('node:process');
 // Lab data and dependency trees are physical files, including *.asar. Never use Electron's archive-aware fs here.
 const disk = process.versions.electron ? require('original-fs') : require('node:fs');
 const fs = disk.promises;

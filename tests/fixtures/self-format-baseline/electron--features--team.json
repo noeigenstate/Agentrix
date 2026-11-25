@@ -1,4 +1,3 @@
 {
-  "electron/features/team/team.cjs :: heading-text": 3,
-  "electron/features/team/team.cjs :: tests/team-lock.test.cjs :: source-execution": 1
+  "electron/features/team/team.cjs :: heading-text": 3
 }

@@ -1,17 +1,4 @@
 {
-  "electron/features/lab/disk.cjs :: tests/lab-engine-disk.test.cjs :: source-execution": 1,
-  "electron/features/lab/engine.cjs :: tests/lab-env.test.cjs :: source-execution": 1,
-  "electron/features/lab/executor.cjs :: tests/lab-env.test.cjs :: source-execution": 1,
-  "electron/features/lab/executor.cjs :: tests/lab-env.test.cjs :: source-slice": 1,
   "electron/features/lab/grading.cjs :: heading-text": 1,
-  "electron/features/lab/history.cjs :: positional-lines": 1,
-  "electron/features/lab/index.cjs :: tests/lab-engine-window.test.cjs :: source-execution": 1,
-  "electron/features/lab/index.cjs :: tests/lab-env.test.cjs :: source-execution": 1,
-  "electron/features/lab/preload.cjs :: tests/lab-engine-window.test.cjs :: source-execution": 1,
-  "electron/features/lab/process.cjs :: heading-text": 1,
-  "electron/features/lab/process.cjs :: tests/lab-session.test.cjs :: source-execution": 1,
-  "electron/features/lab/runtime.cjs :: tests/lab-engine-runtime.test.cjs :: source-execution": 1,
-  "electron/features/lab/session.cjs :: tests/lab-session.test.cjs :: source-execution": 1,
-  "electron/features/lab/window.cjs :: tests/lab-engine-window.test.cjs :: source-execution": 1,
-  "electron/features/lab/workspace.cjs :: tests/lab-engine-disk.test.cjs :: source-execution": 1
+  "electron/features/lab/history.cjs :: positional-lines": 1
 }

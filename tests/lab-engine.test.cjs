@@ -122,11 +122,10 @@ function fakeDispatchModule(settingsFile, helperFormat) {
   for (const key of ['dispatchEvent', 'detachedEnd', 'renderDispatchLine']) {
     Object.defineProperty(module.exports, key, { get: () => require(helperFormat)[key] });
   }
-  module.exports.run = async function(args, { env, launch, detached }) {
+  module.exports.run = async function(args, { env, launch, detached, labMeter: send }) {
     env = { ...env, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) };
     const value = name => args[args.indexOf(name) + 1], id = detached?.id ?? randomUUID();
     const cwd = value('--cwd'), out = value('--out'), model = value('--model'), role = value('--role');
-    const send = event => globalThis.__AGENTRIX_LAB_SINK(event);
     process.stderr.write('[lab-fixture-call] ' + JSON.stringify(args) + '\n');
     await send({ type: 'dispatch-start', id, agent: args[0], model, role, kind: value('--kind'), cwd,
       startedAt: Date.now(), title: value('--title'), fast: args.includes('--fast'), effort: value('--effort') });
@@ -975,30 +974,26 @@ isolatedTest('the real dispatch helper can load its private bundled runtime with
   } finally { await session.close(); }
 });
 
-// Runs everywhere: the lab rewrites the helper's own text, so a helper that changed shape must fail here, not only on macOS.
+// The private helper uses explicit Lab arguments and the same runtime bundle as Dispatch.
 test('the lab copy of the real dispatch helper starts Codex on the file credential store and meters through the lab', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-helper-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const helper = path.join(__dirname, '../integration/dispatch.cjs');
-  const modules = JSON.parse(await fs.readFile(await copyHelper(helper, directory), 'utf8')), source = modules['dispatch.cjs'];
+  const modules = JSON.parse(await fs.readFile(await copyHelper(helper, directory), 'utf8'));
   for (const [name, content] of Object.entries(modules)) {
     const file = path.join(directory, name);
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, content);
   }
   const { commandOf } = require(path.join(directory, 'dispatch.cjs'));
-  assert.deepEqual(commandOf({ agent: 'codex' }), ['-c', 'cli_auth_credentials_store="file"', 'app-server', '--listen', 'stdio://']);
-  assert.equal(commandOf({ agent: 'claude', model: 'm', effort: 'high', permission: 'plan' }).includes('-c'), false);
-  assert.deepEqual(require(helper).commandOf({ agent: 'codex' }), ['app-server', '--listen', 'stdio://'], 'only the lab copy is rewritten');
-  assert.match(source, /send = globalThis\.__AGENTRIX_LAB_SINK;/); assert.doesNotMatch(source, /send = eventSink\(/);
-  assert.match(source, /\.\.\.lastRate, \.\.\.output\.usage\(\) \}\);/);
-  assert.match(source, /const runtime = path\.join\(__dirname, 'electron'\);/);
+  assert.deepEqual(commandOf({ agent: 'codex' }, true), ['-c', 'cli_auth_credentials_store="file"', 'app-server', '--listen', 'stdio://']);
+  assert.equal(commandOf({ agent: 'claude', model: 'm', effort: 'high', permission: 'plan' }, true).includes('-c'), false);
+  assert.deepEqual(require(helper).commandOf({ agent: 'codex' }), ['app-server', '--listen', 'stdio://'], 'regular dispatch preserves the configured account store');
   assert.deepEqual(Object.keys(modules).filter(name => name !== 'dispatch.cjs').sort(),
     Object.keys(require(helper).runtimeFiles()).filter(name => name !== 'features/native-session/routing.cjs').map(name => 'electron/' + name).sort());
   // The carried intercept module sits in no shim folder there: a worker's env gets no shims, no hooks, no pass-through.
-  const Module = require('node:module'), carried = new Module(path.join(directory, 'electron/shims/intercept.cjs'));
-  carried.paths = []; carried._compile(modules['electron/shims/intercept.cjs'], carried.id);
-  const worker = carried.exports.withShims({ PATH: 'lab-tools' }, { depth: 1, runId: 'lab-run', proof: 'lab-proof' });
+  const { withShims } = require(path.join(directory, 'electron/shims/intercept.cjs'));
+  const worker = withShims({ PATH: 'lab-tools' }, { depth: 1, runId: 'lab-run', proof: 'lab-proof' });
   assert.equal(worker.PATH, 'lab-tools');
   assert.deepEqual(['BASH_ENV', 'ZDOTDIR', 'CLAUDE_ENV_FILE', 'AGENTRIX_SHIMS'].filter(name => name in worker), []);
 });

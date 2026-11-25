@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -94,15 +95,15 @@ const rollout = records('codex-dispatch-rollout.jsonl');
 const claude = records('claude-dispatch-stream.jsonl');
 
 test('a dispatched CLI inherits shim depth and signed identity while its declaration keeps intercepted', async t => {
-  const syncFs = require('node:fs'), { createRequire } = require('node:module'), vm = require('node:vm');
+  const syncFs = require('node:fs');
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
   const folder = syncFs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-shims-'));
   t.after(() => syncFs.rmSync(folder, { recursive: true, force: true }));
   const brief = path.join(folder, 'brief.md'), out = path.join(folder, 'answer.md'), bootstrap = path.join(folder, 'bootstrap.json');
   syncFs.writeFileSync(brief, 'A synthetic worker brief');
   syncFs.writeFileSync(bootstrap, JSON.stringify({ pipeName: 'not-connected', projectId: 'synthetic-terminal', sessionKey: 'synthetic-admission-key' }));
-  const events = [], local = createRequire(helper), loaded = { exports: {} }; let launchedEnv;
-  const load = name => {
+  const events = []; let launchedEnv;
+  const loaded = loadWithStubs(helper, (name, local) => {
     name = name.replaceAll('\\', '/');
     if (name.endsWith('features/claude-runtime/locator.cjs')) return { createLocator: () => ({ locate: async () => ({ terminal: { file: 'synthetic-resolved-claude' } }) }) };
     if (name.endsWith('features/team/team.cjs')) return { ...local(name), projectTeam: () => null };
@@ -111,10 +112,9 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
     } };
     if (name.endsWith('dispatch-outbox.cjs')) return { DispatchOutbox: class { append(event) { events.push(event); } } };
     return local(name);
-  };
-  vm.runInThisContext(`(function(require,module,exports,__filename,__dirname){${syncFs.readFileSync(helper, 'utf8')}\n})`, { filename: helper })(load, loaded, loaded.exports, helper, path.dirname(helper));
+  });
   let reports = '';
-  const code = await loaded.exports.run(['claude', '--role', 'exec', '--title', 'Synthetic intercepted worker', '--model', 'claude-sonnet-5-5',
+  const code = await loaded.run(['claude', '--role', 'exec', '--title', 'Synthetic intercepted worker', '--model', 'claude-sonnet-5-5',
     '--effort', 'high', '--permission', 'plan', '--cwd', folder, '--brief', brief, '--out', out, '--seat', 'developer/backend'], {
     source: 'intercepted', env: { PATH: '', AGENTRIX_BOOTSTRAP: bootstrap }, stdout: { write: value => { reports += value; } },
     resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
@@ -145,7 +145,7 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
   assert.equal(launchedEnv.AGENTRIX_BOOTSTRAP, undefined, 'the worker receives no reporting credential');
   assert.equal(launchedEnv.PATH.split(path.delimiter)[0], path.resolve(__dirname, '../integration/shims'));
   let resolvedFile;
-  assert.equal(await loaded.exports.run(['claude', '--role', 'exec', '--title', 'Resolved CLI', '--model', 'claude-sonnet-5-5', '--effort', 'high',
+  assert.equal(await loaded.run(['claude', '--role', 'exec', '--title', 'Resolved CLI', '--model', 'claude-sonnet-5-5', '--effort', 'high',
     '--permission', 'plan', '--cwd', folder, '--brief', brief, '--out', out], {
     env: { PATH: path.resolve(__dirname, '../integration/shims') }, stdout: { write: () => {} },
     launch: (file, _argv, _options) => {
@@ -170,7 +170,7 @@ const codex = [
 
 async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0,
   hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread,
-  captureWakes = false, readOnly = !extra.includes('--allow') } = {}) {
+  captureWakes = false, lab = false, readOnly = !extra.includes('--allow') } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -202,6 +202,7 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
 process.on('message', signal => process.emit(signal));
 run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTimeout},
   ${detached ? 'detached: { id: require("node:crypto").randomUUID(), admitted() {} },' : ''}
+  ${lab ? 'labMeter: event => process.send(event),' : ''}
   resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
@@ -214,7 +215,14 @@ run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTim
   const child = spawn(process.execPath, [runner, ...args], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
   let stdout = '', stderr = '';
   // A test that runs the helper again on this fixture passes that run's output here too, so its worker waits the same way.
-  const releaseOn = text => { if (release && /\[dispatch\] (started|failed to start) /.test(text)) require('node:fs').writeFileSync(release, ''); };
+  const unlock = () => { if (release) require('node:fs').writeFileSync(release, ''); };
+  const releaseOn = text => {
+    if (text.includes('[dispatch] failed to start ') || !lab && text.includes('[dispatch] started ')) unlock();
+  };
+  if (lab) child.on('message', event => {
+    receive(event);
+    if (event.type === 'dispatch-rate') unlock();
+  });
   child.stdout.on('data', chunk => { stdout += chunk.toString(); releaseOn(stdout); }); child.stderr.on('data', chunk => { stderr += chunk.toString(); });
   const finished = once(child, 'close').then(async ([code]) => {
     if (release) await fs.rm(release, { force: true });
@@ -291,6 +299,13 @@ test('dispatch emits kind and provider token and cost totals for the ledger', as
   const end = codexRun.events.at(-1);
   assert.equal(codexRun.events[0].kind, 'core'); assert.equal(end.inputTokens, 1200); assert.equal(end.cachedTokens, 300);
   assert.equal(end.outputTokens, 150); assert.equal(end.totalOutputTokens, 150); assert.equal(end.reportedCostUsd, null); assert.equal(end.verdict, 'ok');
+  const lab = await fixture(t, lines, { lab: true, bootstrap: false });
+  const labResult = await lab.finished;
+  assert.equal(labResult.code, 0, labResult.stdout + labResult.stderr);
+  const rate = lab.events.findLast(event => event.type === 'dispatch-rate');
+  assert.deepEqual([rate.outputTokens, rate.inputTokens, rate.cachedTokens, rate.totalOutputTokens], [150, 1200, 300, 150]);
+  const capture = JSON.parse(await fs.readFile(lab.capture, 'utf8'));
+  assert.deepEqual(capture.args.slice(0, 2), ['-c', 'cli_auth_credentials_store="file"']);
   const claudeLines = structuredClone(claude).map(record => ({ record }));
   const result = claudeLines.at(-1).record;
   Object.assign(result.usage, { input_tokens: 100, cache_creation_input_tokens: 50, cache_read_input_tokens: 200 });

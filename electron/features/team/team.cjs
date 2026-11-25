@@ -1,3 +1,4 @@
+const process = require('node:process');
 // Repository-wide coordination for dispatched workers. Git's common directory is shared by worktrees and stays uncommitted.
 const fs = require('node:fs');
 const path = require('node:path');

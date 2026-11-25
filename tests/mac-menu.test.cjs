@@ -1,3 +1,4 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -284,12 +285,7 @@ test('Windows and Linux do not rebuild the application menu', () => {
 
 test('preload exposes an unsubscribable menu command listener', () => {
   const renderer = new EventEmitter(); let bridge;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
-    require: name => {
-      assert.equal(name, 'electron');
-      return { ipcRenderer: renderer, contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } } };
-    },
-  });
+  loadPreload('electron/preload.cjs', { ipcRenderer: renderer, contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } } });
   const commands = [], other = [];
   const unsubscribe = bridge.onMenuCommand(command => commands.push(command));
   const stopOther = bridge.onMenuCommand(command => other.push(command));

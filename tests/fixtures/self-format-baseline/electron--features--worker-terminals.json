@@ -1,3 +1,0 @@
-{
-  "electron/features/worker-terminals/worker-terminals.cjs :: tests/terminal-workers.test.cjs :: source-regex": 1
-}

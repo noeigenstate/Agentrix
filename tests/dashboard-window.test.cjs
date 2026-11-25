@@ -1,10 +1,10 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
 const { createDashboardWindow } = require('../electron/features/dashboard/window.cjs');
 const { createDashboard } = require('../electron/features/dashboard/index.cjs');
 const { DashboardRecords } = require('../electron/features/dashboard/records.cjs');
@@ -323,13 +323,11 @@ test('persisted run grade and quota changes debounce to one refresh and never re
 });
 
 test('dashboard preload exposes exactly DashboardBridge and subscriptions remove their listeners', async () => {
-  const source = await fs.readFile(path.join(__dirname, '../electron/features/dashboard/preload.cjs'), 'utf8');
   const ipcRenderer = new EventEmitter(), calls = []; let name, bridge;
   ipcRenderer.invoke = (...args) => { calls.push(args); return Promise.resolve({ ok: true }); };
   ipcRenderer.send = (...args) => calls.push(args);
-  vm.runInNewContext(source, { require: key => {
-    assert.equal(key, 'electron');
-    return { ipcRenderer, contextBridge: { exposeInMainWorld(key, value) { name = key; bridge = value; } } };
+  loadPreload('electron/features/dashboard/preload.cjs', { ipcRenderer, contextBridge: {
+    exposeInMainWorld(key, value) { name = key; bridge = value; },
   } });
   assert.equal(name, 'agentrixDashboard');
   assert.deepEqual(Object.keys(bridge).sort(), ['appearance', 'close', 'decide', 'maximize', 'minimize', 'onAppearance', 'onChanged', 'summary']);

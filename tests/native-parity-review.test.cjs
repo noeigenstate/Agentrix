@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -140,11 +141,11 @@ test('S9 subscription limits are isolated by project including SSH', async t => 
 });
 test('S13 oversized history response shrinks a page without a dropped-item notice', async () => {
   let drop; const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
-  const filename = path.join(__dirname, '../electron/features/codex-app-server/rpc.cjs'), source = fs.readFileSync(filename, 'utf8'), module = { exports: {} };
-  require('node:vm').runInNewContext(source, { module, Buffer, setTimeout, clearTimeout, require: () => ({ MAX_FRAME: 1000, jsonFrames: (_receive, dropped) => {
+  const filename = path.join(__dirname, '../electron/features/codex-app-server/rpc.cjs');
+  const { createRpc } = loadWithStubs(filename, () => ({ MAX_FRAME: 1000, jsonFrames: (_receive, dropped) => {
     drop = dropped; const read = () => {}; read.end = read.clear = () => {}; return read;
-  } }) });
-  let notices = 0; const rpc = module.exports.createRpc(child, { onDropped: () => notices++ });
+  } }));
+  let notices = 0; const rpc = createRpc(child, { onDropped: () => notices++ });
   const request = rpc.request('thread/turns/list', {}); drop({ id: '1' }, 1001);
   await assert.rejects(request, { code: 'history_frame_limit' }); assert.equal(notices, 0); rpc.close();
 });

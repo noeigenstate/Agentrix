@@ -15,9 +15,8 @@ async function createPipeRelays(addresses, namespace, failed = () => {}, diagnos
   const trace = (relay, request, stage, code = 'OK') => {
     if (!diagnostic || emitted >= 256 || (emitted >= 192 && !['wait', 'cancel'].includes(stage))) return;
     emitted++;
-    const line = `relay pipe=${relay.index} id=${request.id} stage=${stage} phase=${request.phase} code=${code}` +
-      ` active=${relay.active.size} queued=${relay.pending.length} ms=${Date.now() - started}`;
-    diagnostic(line);
+    diagnostic({ type: 'relay', version: 1, pipe: relay.index, id: request.id, stage, phase: request.phase,
+      code, active: relay.active.size, queued: relay.pending.length, ms: Date.now() - started });
   };
   const close = () => Promise.all(relays.map(relay => new Promise(resolve => {
     relay.closed = true;
@@ -112,7 +111,9 @@ async function runGuardian() {
   const bootstrap = process.env.AGENTRIX_BOOTSTRAP ? JSON.parse(fs.readFileSync(process.env.AGENTRIX_BOOTSTRAP, 'utf8')) : null;
   const marker = '\x1e' + randomUUID() + '\x1f';
   const diagnostic = process.env.AGENTRIX_LAB_DIAGNOSTICS === '1';
-  const trace = message => { if (diagnostic) process.stderr.write('[lab-win32] host ' + message + '\n'); };
+  const trace = message => {
+    if (diagnostic) process.stderr.write((typeof message === 'string' ? '[lab-win32] host ' + message : JSON.stringify(message)) + '\n');
+  };
   let child, cancelled = false, pipeFailure = false, relays, stage = 'namespace';
   // EOF cancels even a launcher that has not created its Job yet. Let it release handles before ACL recovery.
   const stop = () => { cancelled = true; trace('cancel EOF'); child?.stdin.end(); };

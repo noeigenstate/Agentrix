@@ -1,19 +1,13 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 
 function preload() {
   const calls = []; let bridge;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
-    require: name => {
-      assert.equal(name, 'electron');
-      return {
-        contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } },
-        ipcRenderer: { invoke: (channel, ...args) => new Promise((resolve, reject) => { calls.push({ channel, args, resolve, reject }); }) },
-      };
-    },
+  loadPreload('electron/preload.cjs', {
+    contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } },
+    ipcRenderer: { invoke: (channel, ...args) => new Promise((resolve, reject) => { calls.push({ channel, args, resolve, reject }); }) },
   });
   return { bridge, calls };
 }

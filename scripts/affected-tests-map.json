@@ -399,7 +399,7 @@
         "electron/features/lab/sandbox-win32.cjs"
       ],
       "reason": "Process inspection and termination use the Windows sandbox only on that platform.",
-      "digest": "f3ac5102283df6d8bb1ac4c30cc5311dd1fe23a6950ab2d7b76c48661e8e90c8"
+      "digest": "480a9485c18387f864232cf252e7ad9f89fda4de71712eeddf386f3026512ff0"
     },
     "electron/features/claude-sdk/runtime.cjs": {
       "digest": "5514a683472814e99f5536a593b1f3b9875b04f709de90992715e45115f083c5",
@@ -407,21 +407,21 @@
       "reason": "Loads the installed external Agent SDK; dependency changes force full coverage."
     },
     "electron/features/lab/executor.cjs": {
-      "digest": "e533fb26d5fb352265df5129b25110c399da059946398672a074da70bc82904c",
+      "digest": "75b47047a38321a95321f951ae39ee6b39b6f2ac7b9c00fc0d610168fe306ec6",
       "targets": [],
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "02f5c2b3b8d161d2014329067b33e3f142277e92206a71d42425963ff2a08f1e",
+      "digest": "b8b004950a6377c203e82c33e0c9721fb25352a5ae9ab14993db694e6f8f4bc1",
       "targets": [
         "integration/dispatch.cjs"
       ],
       "reason": "Reads the carried dispatch runtime and SSH companion inventories."
     },
     "electron/voice-worker.cjs": {
-      "digest": "dbde1e6005d856cd483f152a10d80a7035d3f2f0617f709ea386b1248dcad42c",
+      "digest": "23ef6ff9ca19352939940ad1c303907c645d9c007b2eaea776c719f5012f3a07",
       "targets": [],
-      "reason": "Loads a downloaded external native speech engine."
+      "reason": "Loads the external Sherpa wrapper and seeds it with the native engine chosen by the voice runtime."
     },
     "integration/agent-event.cjs": {
       "digest": "14363f265c76aea6037685cb36e879556e220a60d588bac2359aaef61205039c",
@@ -435,7 +435,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "b0f75c2a520cea3e326ab410070b4b0c5e74aa5cbfa7970bc50c691b8f9fa4ba",
+      "digest": "6f4ba5df35ce478d131ba49744e7452efd68858bf637cab05e1d1c358dba99d7",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -481,12 +481,12 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "ffe0c7b5980d787c868f49c9085b72513e5d84f6cd796e01cdabbc626d74c9eb",
+      "digest": "ff9809c87e131428a0d9b37d864e9b67009117d0140aec0b81591c830602b2da",
       "targets": [
         "integration/shims/intercept.cjs",
         "integration/dispatch.cjs"
       ],
-      "reason": "The lab bundles intercept beside the private helper and renders delegated events with the configured source or packaged dispatch helper."
+      "reason": "The Lab loads the configured source or packaged dispatch helper to get its runtime bundle and render delegated events."
     },
     "integration/shims/intercept.cjs": {
       "digest": "8007884d24316140de5aaffea61295d598cbc663ce6fb8fea3601e68495df387",

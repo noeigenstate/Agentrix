@@ -1,3 +1,4 @@
+const { ts, syntax, nodes } = require('./helpers/source-syntax.cjs');
 // A terminal lead's Claude worker in a hidden terminal (electron/features/worker-terminals/BOUNDARY.md): a fake PTY stands
 // in for the CLI, the test plays its hooks and writes its transcript, and the real dispatch helper runs against main's
 // real control channel.
@@ -1214,8 +1215,11 @@ test("a worker's hooks never reach a project terminal or its completion", async 
   assert.match(main, /keyOf: id => workerTerminals\.keyOf\(id\) \?\? sessions\.get\(id\)\?\.hooks\?\.key/);
   assert.match(main, /deliver: event => workerTerminals\.hook\(event\) \|\| claudeHook\(event\)/);
   assert.match(main, /createEventServer\(event => workerTerminals\.event\(event\) \|\| onEvent\(event\)\)/);
-  const source = fs.readFileSync(path.join(__dirname, '../electron/features/worker-terminals/worker-terminals.cjs'), 'utf8');
-  assert.doesNotMatch(source, /notifyCompletion|expectCompletion|applyActivity|claudeActivity|setRestore|sessions\.(?:get|set)/);
+  const worker = syntax('electron/features/worker-terminals/worker-terminals.cjs');
+  const forbidden = new Set(['notifyCompletion', 'expectCompletion', 'applyActivity', 'claudeActivity', 'setRestore']);
+  const references = nodes(worker, node => ts.isIdentifier(node) && forbidden.has(node.text)
+    || ts.isPropertyAccessExpression(node) && node.expression.getText() === 'sessions' && ['get', 'set'].includes(node.name.text));
+  assert.deepEqual(references.map(node => node.getText()), []);
   await f.control({ type: 'stop' }); assert.deepEqual(await f.result, { status: 'interrupted' });
   assert.ok(changes > 0);
 });

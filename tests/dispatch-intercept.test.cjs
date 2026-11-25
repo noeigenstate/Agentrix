@@ -274,7 +274,8 @@ for (const kind of ['bash', 'zsh']) test(`G13: through a real ${kind} login shel
   }
   // Claude Code's Bash tool: the snapshot's PATH, then CLAUDE_ENV_FILE's text, then the command.
   const tool = run(plannerEnv, `export PATH="${posix(standin)}:$PATH" && ${fs.readFileSync(plannerEnv.CLAUDE_ENV_FILE, 'utf8').trim()}\n: && claude -p --output-format json "x"`, false);
-  assert.equal(tool.status, 2, tool.stdout + tool.stderr); assert.match(tool.stderr, /not run: in conductor mode a role starts with the start_role tool/);
+  assert.equal(tool.status, 2, tool.stdout + tool.stderr);
+  assert.equal(tool.stderr.trim(), '[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell');
 });
 
 test('bootstrap names the executable shim folder for terminal and native owner sessions', t => {

@@ -22,6 +22,30 @@ const { createSmokeStages, closeSmokeApplication, offlineStorage } = require('..
 const packaged = process.argv.includes('--packaged');
 const coldStart = process.argv.includes('--cold-start');
 
+export function codexPanelEvents(projectId, terminalId) {
+  let sequence = 0;
+  return (type, payload = {}, extra = {}) => ({
+    schemaVersion: 1, eventId: `panel-${++sequence}`, sequence, connectionEpoch: 'smoke', provider: 'codex', transport: 'codex-app-server', projectId, terminalId,
+    runtimeSessionId: 'rs-panel-codex', providerSessionId: null, runId: null, turnId: 'turn-1', itemId: null,
+    receivedAtMs: Date.now(), occurredAtMs: Date.now(), replay: false, type, payload, ...extra,
+  });
+}
+
+export function openCodexPanel(emit, event) {
+  return emit([
+    event('turn.started', { origin: 'user', clientMessageId: 'c1' }),
+    event('item.upsert', { kind: 'user-message', status: 'completed', content: { text: '帮我把生成的图片再调亮一点', clientMessageId: 'c1' } }, { itemId: 'u1' }),
+    event('item.delta', { channel: 'text', text: '已经把亮度提高了 15%，新文件保存为 cover-bright.png。' }, { itemId: 'm1' }),
+    event('turn.completed', { status: 'completed', error: null }),
+    event('session.state', { state: 'idle', reason: null }),
+  ]);
+}
+
+export function installModelListStub(app) {
+  const { stubModelListNet } = require('../tests/fixtures/connection-net-stub.cjs');
+  return app.evaluate(stubModelListNet);
+}
+
 // xvfb-run supplies display access; credential isolation must not strip it before Electron starts.
 export function displayEnvironment(inherited = process.env, platform = process.platform) {
   return platform === 'linux' ? Object.fromEntries(['DISPLAY', 'XAUTHORITY'].filter(name => inherited[name]).map(name => [name, inherited[name]])) : {};
@@ -170,8 +194,7 @@ async function runtimeSmoke(output, stages) {
       assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }))).ok, true);
     });
     // The stub replaces the channel main gives the connection test (Electron net); a unit test keeps the two in step.
-    const { stubModelListNet } = require('../tests/fixtures/connection-net-stub.cjs');
-    await stage('stub model-list HTTP in this isolated application', () => app.evaluate(stubModelListNet));
+    await stage('stub model-list HTTP in this isolated application', () => installModelListStub(app));
     await stage('check billing without input and cache competing token sources', async () => {
       const testConnection = () => page.evaluate(id => window.agentrix.nativeSession.testConnection(id), projectId);
       const good = await testConnection();
@@ -633,13 +656,10 @@ async function panelCodexApp(output, stages, checks) {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
     await page.waitForSelector('.project-panel');
     const terminalId = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0].id;
-    let sequence = 0;
-    const event = (type, payload = {}, extra = {}) => ({ schemaVersion: 1, eventId: `panel-${++sequence}`, sequence, connectionEpoch: 'smoke', provider: 'codex', transport: 'codex-app-server', projectId: project.id, terminalId,
-      runtimeSessionId: 'rs-panel-codex', providerSessionId: null, runId: null, turnId: 'turn-1', itemId: null, receivedAtMs: Date.now(), occurredAtMs: Date.now(), replay: false, type, payload, ...extra });
+    const event = codexPanelEvents(project.id, terminalId);
     const emit = events => app.evaluate(({ BrowserWindow }, list) => { for (const item of list) BrowserWindow.getAllWindows()[0].webContents.send('native:event', item); }, events);
     const view = page.locator(`[data-terminal-id="${terminalId}"] .reading-view[data-native-session]`);
-    await emit([event('turn.started', { origin: 'user', clientMessageId: 'c1' }), event('item.upsert', { kind: 'user-message', status: 'completed', content: { text: '帮我把生成的图片再调亮一点', clientMessageId: 'c1' } }, { itemId: 'u1' }),
-      event('item.delta', { channel: 'text', text: '已经把亮度提高了 15%，新文件保存为 cover-bright.png。' }, { itemId: 'm1' }), event('turn.completed', { status: 'completed', error: null }), event('session.state', { state: 'idle', reason: null })]);
+    await openCodexPanel(emit, event);
     await view.waitFor({ timeout: 15000 });
     await panelStage({ app, page, view, box: view.locator('textarea'), emit, event, output, checks, agent: 'codex' });
   } catch (error) {

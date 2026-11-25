@@ -1,6 +1,5 @@
 {
   "electron/boundaries.cjs :: heading-text": 2,
-  "electron/codex-activity.cjs :: tests/watch-folder.test.cjs :: source-execution": 1,
   "electron/main.cjs :: tests/agent-calls-liveness.test.cjs :: source-execution": 2,
   "electron/main.cjs :: tests/agent-calls-liveness.test.cjs :: source-slice": 2,
   "electron/main.cjs :: tests/agent-calls-rate.test.cjs :: source-execution": 1,
@@ -114,22 +113,7 @@
   "electron/main.cjs :: tests/window-theme.test.cjs :: source-slice": 1,
   "electron/main.cjs :: tests/window-zoom.test.cjs :: source-execution": 2,
   "electron/main.cjs :: tests/window-zoom.test.cjs :: source-slice": 2,
-  "electron/preload.cjs :: tests/directory-reads.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/mac-menu.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/mac-titlebar.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/native-commands.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/native-router-main.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/native-switch-ipc.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/project-image-candidates.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/project-image.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/reading-ui.test.cjs :: source-regex": 1,
-  "electron/preload.cjs :: tests/skills.test.cjs :: source-execution": 2,
-  "electron/preload.cjs :: tests/updates-ipc.test.cjs :: source-execution": 1,
-  "electron/preload.cjs :: tests/workspace-ipc-updates.test.cjs :: source-execution": 1,
   "electron/project-files.cjs :: whole-word": 1,
   "electron/project-git.cjs :: heading-text": 1,
-  "electron/prompt-queue.cjs :: heading-text": 1,
-  "electron/remote-connection.cjs :: tests/remote-worker.test.cjs :: source-execution": 1,
-  "electron/session-files.cjs :: tests/watch-folder.test.cjs :: source-execution": 1,
-  "electron/voice-worker.cjs :: tests/voice-runtime.test.cjs :: source-execution": 1
+  "electron/prompt-queue.cjs :: heading-text": 1
 }

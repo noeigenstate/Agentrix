@@ -14,7 +14,7 @@ import { waitFor } from './wait.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { createSkillsModel } = require('./skills-probe-model.cjs');
-const { claudeProbeConfig } = require('./skills-probe-config.cjs');
+const { writeClaudeProbeConfig } = require('./skills-probe-config.cjs');
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const { onPath } = require('../electron/agents.cjs');
 const { safeId } = require('../electron/features/skills/history.cjs');
@@ -41,7 +41,7 @@ async function run() {
     '[windows]', 'sandbox = "unelevated"', ...projects.flatMap(project => [`[projects.'${project.path.replace(/'/g, "''")}']`, 'trust_level = "trusted"']), '',
   ].join('\n'));
   // Claude Code indexes trusted projects with forward slashes, including on Windows.
-  await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify(claudeProbeConfig(projects.map(project => project.path), env.ANTHROPIC_API_KEY)));
+  await writeClaudeProbeConfig(env.CLAUDE_CONFIG_DIR, projects, env.ANTHROPIC_API_KEY);
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ skipDangerousModePermissionPrompt: true }));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: {
     terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'en', startView: 'workspace', guideVersion: '9.9.9',

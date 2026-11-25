@@ -1,3 +1,4 @@
+const process = require('node:process');
 const path = require('node:path');
 const { fs } = require('./disk.cjs');
 const { command } = require('./process.cjs');

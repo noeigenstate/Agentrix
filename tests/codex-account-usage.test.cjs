@@ -1,3 +1,4 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -625,17 +626,15 @@ test('expired project answers never replay into a new session before a fresh acc
 
 test('account fingerprints use a random runtime HMAC key and remain stable only within that runtime', () => {
   const filename = path.join(__dirname, '../electron/features/agents/codex-account-usage.cjs');
-  const source = fs.readFileSync(filename, 'utf8'), moduleRequire = require('node:module').createRequire(filename);
   const crypto = require('node:crypto'), keys = [];
   const loadScope = () => {
-    const context = { module: { exports: {} }, process, require: name => name === 'node:crypto' ? {
+    const loaded = loadWithStubs(filename, (name, load) => name === 'node:crypto' ? {
       ...crypto, createHmac(algorithm, key) {
         assert.equal(algorithm, 'sha256'); assert.equal(key.length, 32); keys.push(key);
         return crypto.createHmac(algorithm, key);
       },
-    } : moduleRequire(name) };
-    vm.runInNewContext(source, context);
-    return context.module.exports.usageScope;
+    } : load(name));
+    return loaded.usageScope;
   };
   const first = loadScope(), second = loadScope();
   const one = first(options).key;
@@ -651,14 +650,14 @@ function shellIntegration(platform) {
   let changes = 0, loginCalls = 0;
   const modules = {
     'node:path': path, 'node:child_process': {}, '../updates.cjs': {}, '../windows-integration.cjs': {},
+    'node:process': { platform, env },
     '../zsh-terminal.cjs': { prepareZshStartup: () => '/fake/zsh', findShell: () => '/fake/shell', withoutAppImage: value => value,
       loginShellPath: () => { ++loginCalls; return login; }, mergePath: (value, current) => `${value}:${current}` },
   };
-  const context = { module: { exports: {} }, process: { platform, env }, require: name => {
+  const { prepareShellIntegration } = loadWithStubs(require.resolve('../electron/app/platform-startup.cjs'), name => {
     assert.ok(Object.hasOwn(modules, name), name); return modules[name];
-  } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/app/platform-startup.cjs'), 'utf8'), context);
-  const integration = context.module.exports.prepareShellIntegration({ app: { getPath: () => '/fake/profile' }, integrationDir: '/fake/integration', agents: { changed() { ++changes; } } });
+  });
+  const integration = prepareShellIntegration({ app: { getPath: () => '/fake/profile' }, integrationDir: '/fake/integration', agents: { changed() { ++changes; } } });
   return { ...integration, env, resolve, reject, changes: () => changes, loginCalls: () => loginCalls };
 }
 

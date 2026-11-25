@@ -1,3 +1,4 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -389,10 +390,8 @@ test('preload sends state and exposes an unsubscribable navigation listener with
   const ipcRenderer = new EventEmitter(), messages = [];
   ipcRenderer.send = (...args) => messages.push(args);
   let bridge;
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'electron/preload.cjs'), 'utf8'), {
-    require: name => { assert.equal(name, 'electron'); return { ipcRenderer,
-      contextBridge: { exposeInMainWorld: (name, value) => { assert.equal(name, 'agentrix'); bridge = value; } } }; },
-  });
+  loadPreload('electron/preload.cjs', { ipcRenderer,
+  contextBridge: { exposeInMainWorld: (name, value) => { assert.equal(name, 'agentrix'); bridge = value; } } });
   const state = { view: 'decisions', decisions: 4 }, pages = [];
   bridge.setTitlebarState(state);
   assert.deepEqual(messages, [['titlebar:state', state]]);

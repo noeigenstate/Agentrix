@@ -1,3 +1,4 @@
+const process = require('node:process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
@@ -20,6 +21,18 @@ const WINDOWS_DIAGNOSTIC_EVENTS = new Set([
   'host pipes ready count=#', 'host pipes closed',
 ]);
 
+function relayDiagnostic(text) {
+  if (text[0] !== '{' || text.length > 512) return null;
+  let row;
+  try { row = JSON.parse(text); } catch { return null; }
+  if (row?.type !== 'relay' || row.version !== 1) return null;
+  const { pipe, id, stage, phase, code, active, queued, ms } = row;
+  if (![pipe, id, active, queued, ms].every(Number.isSafeInteger) ||
+    !['queue', 'start', 'reply', 'release', 'wait', 'cancel', 'error'].includes(stage) ||
+    !['queued', 'active', 'reply'].includes(phase) || typeof code !== 'string' || !/^(?:OK|E[A-Z0-9_]{1,31})$/.test(code)) return null;
+  return `[lab-win32] host relay pipe=${pipe} id=${id} stage=${stage} phase=${phase} code=${code} active=${active} queued=${queued} ms=${ms}`;
+}
+
 // CI diagnostics contain fixed stage names and numeric counters, never argv, environment or worker output.
 function windowsDiagnostics() {
   if (process.platform !== 'win32' || !process.env?.AGENTRIX_LAB_ISOLATED_HOST || process.env.AGENTRIX_LAB_TEST_PREPARE_HOST !== '1') return null;
@@ -30,13 +43,14 @@ function windowsDiagnostics() {
       tail += String(chunk);
       for (let index; (index = tail.indexOf('\n')) !== -1;) {
         const line = tail.slice(0, index).replace(/\r$/, ''); tail = tail.slice(index + 1);
-        if (!line.startsWith('[lab-win32] ')) continue;
-        const event = line.slice(12).replace(/ ms=\d+$/, '').replace(/=(?:-?\d+|null)(?= |$)/g, '=#');
-        if (/^host relay pipe=# id=# stage=(?:queue|start|reply|release|wait|cancel|error) phase=(?:queued|active|reply) code=(?:OK|E[A-Z0-9_]{1,31}) active=# queued=#$/.test(event)) {
-          recentRelays.push(line); if (recentRelays.length > 8) recentRelays.shift();
-          if (relayEmitted++ < 256) console.error(line);
+        const relay = relayDiagnostic(line);
+        if (relay) {
+          recentRelays.push(relay); if (recentRelays.length > 8) recentRelays.shift();
+          if (relayEmitted++ < 256) console.error(relay);
           continue;
         }
+        if (!line.startsWith('[lab-win32] ')) continue;
+        const event = line.slice(12).replace(/ ms=\d+$/, '').replace(/=(?:-?\d+|null)(?= |$)/g, '=#');
         if (!WINDOWS_DIAGNOSTIC_EVENTS.has(event) &&
           !/^executor child error code=(?:E[A-Z0-9_]{1,31}|UNKNOWN)$/.test(event) &&
           !/^host pipe setup error phase=(?:namespace|listen|launch) code=E[A-Z0-9_]{1,31} errno=#$/.test(event) &&

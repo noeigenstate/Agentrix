@@ -1,8 +1,7 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { registerIpc } = require('../electron/features/native-session/ipc.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
@@ -23,7 +22,7 @@ async function fixture(t, delayedReceipt = false) {
   const router = createRouter({ claude, settings, terminalSessions: () => [source], observeTerminal: () => ({ state: 'idle', background: { known: false, count: null } }),
     resolveSpec() {}, activateNative() {}, emit() {} }); t.after(() => { release(); return router.close(); });
   const handlers = new Map(); registerIpc({ handle: (name, fn) => handlers.set(name, fn), router, settings, claude });
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), { require: () => ({
+  loadPreload('electron/preload.cjs', {
     contextBridge: { exposeInMainWorld(_name, value) { bridge = value.nativeSession; } }, ipcRenderer: { invoke: async (channel, ...args) => {
       try {
         const value = await handlers.get(channel)(...args);
@@ -31,7 +30,7 @@ async function fixture(t, delayedReceipt = false) {
         return { ok: true, value };
       } catch (error) { return { ok: false, error: error.message }; }
     } },
-  }) });
+  });
   router.reconcile(); await tick();
   const choice = router.switchState('t');
   const answer = await bridge.answer('t', 't', choice.requestId, { switch: { changeId: choice.changeId, requestId: choice.requestId, action: 'now' } });

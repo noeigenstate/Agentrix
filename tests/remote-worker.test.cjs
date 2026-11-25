@@ -2,8 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
+const { RemoteConnection } = require('../electron/remote-connection.cjs');
 const { spawnSync } = require('node:child_process');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 const { seatRouting } = require('../integration/agent-event.cjs');
@@ -501,21 +500,16 @@ with tempfile.TemporaryDirectory() as directory:
 });
 
 test('SSH open carries the background switch and Claude seat, and changes use separate control messages', async t => {
-  const filename = path.join(__dirname, '../electron/remote-connection.cjs'), native = createRequire(filename);
   for (const allow of [false, true]) {
-    const module = { exports: {} }, sent = [];
+    const sent = [];
     let remote;
     const link = { attach: () => 1, detach() {}, open: message => sent.push(message), send: message => {
       sent.push(message); remote.receive({ type: 'response', id: message.id, ok: true, value: true });
     } };
-    vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nlinkFor = () => testLink;', {
-      module, testLink: link, require: native,
-      process, Buffer, setInterval, clearInterval, setTimeout, clearTimeout,
-    });
     const claudeLead = allow ? { model: 'opus', effort: 'high', fast: true, ultracode: true } : null;
     const deliveries = [];
-    remote = new module.exports.RemoteConnection({ path: '/fixture', id: 'fixture', ssh: {} }, {
-      auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow, claudeLead, onEvent: (...args) => deliveries.push(args) });
+    remote = new RemoteConnection({ path: '/fixture', id: 'fixture', ssh: {} }, {
+      auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow, claudeLead, onEvent: (...args) => deliveries.push(args) }, () => link);
     t.after(() => remote.close());
     assert.equal(sent[0].allowBackgroundTasks, allow);
     assert.deepEqual(sent[0].claudeLead, claudeLead);

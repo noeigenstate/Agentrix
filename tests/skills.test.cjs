@@ -1,3 +1,5 @@
+const { bootstrapScript, runPowerShell } = require('./helpers/powershell-hook.cjs');
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -633,11 +635,9 @@ function seatPreload(store) {
   const { handle } = createIpcAdapter({ ipcMain: { handle: (channel, run) => handlers.set(channel, run) }, getWindow, t: text => text });
   registerSkillsIpc({ handle, skills: store, getWindow });
   let bridge;
-  require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
-    require: name => { assert.equal(name, 'electron'); return {
-      contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
-      ipcRenderer: { invoke: (channel, ...args) => handlers.get(channel)(event, ...args) },
-    }; },
+  loadPreload('electron/preload.cjs', {
+    contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
+    ipcRenderer: { invoke: (channel, ...args) => handlers.get(channel)(event, ...args) },
   });
   return bridge;
 }
@@ -924,21 +924,23 @@ test('SSH bundle contains only enabled built-in/global files, never project skil
 
 test('PowerShell wrappers reread the refreshed startup note before another CLI session', { skip: process.platform !== 'win32' }, async t => {
   const { root } = fixture(t), file = path.join(root, 'current-note.txt');
-  const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
-  const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
+  const bootstrap = path.join(root, 'bootstrap.json');
+  put(bootstrap, '{}');
   put(file, 'First note.');
-  const script = `${helper}\nGet-AgentrixReadingNote\n[IO.File]::WriteAllText($env:AGENTRIX_READING_NOTE_FILE, 'Second note.')\nGet-AgentrixReadingNote`;
-  const output = require('node:child_process').execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { env: { ...process.env, AGENTRIX_READING_NOTE_FILE: file, AGENTRIX_READING_NOTE: 'Stale note.' }, encoding: 'utf8', windowsHide: true });
+  const script = `
+$ProgressPreference = 'SilentlyContinue'
+${bootstrapScript(bootstrap)}
+Get-AgentrixReadingNote
+[IO.File]::WriteAllText($env:AGENTRIX_READING_NOTE_FILE, 'Second note.')
+Get-AgentrixReadingNote`;
+  const output = runPowerShell(script, { ...process.env, AGENTRIX_READING_NOTE_FILE: file, AGENTRIX_READING_NOTE: 'Stale note.' });
   assert.deepEqual(output.trim().split(/\r?\n/), ['First note.', 'Second note.']);
 });
 
 test('preload exposes the skill and seat contract endpoints and unsubscribes onSkills', async () => {
   const calls = [], listeners = new Map(); let bridge;
   const ipcRenderer = { invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true, value: null }); }, on: (channel, fn) => listeners.set(channel, fn), removeListener: (channel, fn) => { assert.equal(listeners.get(channel), fn); listeners.delete(channel); } };
-  require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
-    require: name => { assert.equal(name, 'electron'); return { contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer }; },
-  });
+  loadPreload('electron/preload.cjs', { contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer });
   bridge.listSkills(); bridge.readSkill('id'); bridge.saveSkill(null, draft('preload')); bridge.deleteSkill('id'); bridge.setSkillOptions('id', { enabled: false });
   bridge.revertSkill('id', 2); bridge.resolveSkillChange('id', true); bridge.importSkill('global', null);
   const seats = { researcher: { model: 'sonnet', effort: 'high' } };

@@ -1,9 +1,9 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
@@ -47,9 +47,9 @@ test('native command IPC is sender guarded, identity bound, and lazy file fallba
   assert.equal((await commands(event, 'terminal', started.runtimeSessionId, { cwd: root })).ok, false);
   await assert.rejects(commands({ ...event, sender: {} }, 'terminal', started.runtimeSessionId), /Rejected IPC sender/);
   const sent = [], callbacks = new Map(); let bridge;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), { require: () => ({
+  loadPreload('electron/preload.cjs', {
     contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer: { invoke: (...args) => sent.push(args), on: (name, fn) => callbacks.set(name, fn) },
-  }) });
+  });
   bridge.nativeSession.commands('terminal', started.runtimeSessionId);
   assert.deepEqual(sent, [['native:commands', 'terminal', started.runtimeSessionId]]);
 });

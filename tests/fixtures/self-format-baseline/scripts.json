@@ -1,17 +1,8 @@
 {
   "scripts/ci-preflight.mjs :: positional-lines": 1,
-  "scripts/ci-preflight.mjs :: tests/ci-preflight.test.cjs :: source-regex": 2,
-  "scripts/codex-cli-resolution.cjs :: tests/codex-runtime-guards.test.cjs :: source-regex": 2,
-  "scripts/completion-smoke.mjs :: tests/reading-ui.test.cjs :: source-execution": 1,
-  "scripts/gui-codex-env.mjs :: tests/codex-runtime-guards.test.cjs :: source-regex": 1,
-  "scripts/material-smoke.mjs :: tests/main-material-cleanup.test.cjs :: source-execution": 1,
   "scripts/module-boundaries.cjs :: heading-text": 2,
-  "scripts/native-session-smoke.mjs :: tests/native-smoke-channel.test.cjs :: source-regex": 2,
-  "scripts/native-session-smoke.mjs :: tests/packaged-startup.test.cjs :: source-execution": 1,
-  "scripts/native-session-smoke.mjs :: tests/packaged-startup.test.cjs :: source-slice": 1,
   "scripts/reading-live.mjs :: positional-lines": 2,
   "scripts/routing-acceptance.mjs :: positional-lines": 1,
-  "scripts/skills-probe.mjs :: tests/skills-probe.test.cjs :: source-regex": 1,
   "scripts/smoke.mjs :: whole-word": 2,
   "scripts/smoothness-probe.mjs :: positional-lines": 1,
   "scripts/workspace-smoke.mjs :: whole-word": 1

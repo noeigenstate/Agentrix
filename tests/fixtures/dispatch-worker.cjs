@@ -9,7 +9,8 @@ async function main() {
   // A version probe is not a worker run: the version alone, no fixture read, no capture.
   if (process.argv[2] === '--version') return void process.stdout.write('codex-cli 0.166.0\n');
   const fixture = JSON.parse(fs.readFileSync(process.env.DISPATCH_FIXTURE, 'utf8'));
-  if (process.argv[2] === 'app-server') return appServer(fixture);
+  const [first, setting, command] = process.argv.slice(2, 5);
+  if (first === 'app-server' || first === '-c' && setting === 'cli_auth_credentials_store="file"' && command === 'app-server') return appServer(fixture);
   let brief = '';
   for await (const chunk of process.stdin) brief += chunk;
   fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid }));

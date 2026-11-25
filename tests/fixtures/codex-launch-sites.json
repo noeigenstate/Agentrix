@@ -124,8 +124,8 @@
     "id": "electron/features/lab/executor.cjs:accd3ae28936d1ee46d9d7ad"
   },
   {
-    "text": "memoryModules(modules).run(config.args, {\n    ...(config.dispatchId ? { detached: { id: config.dispatchId, admitted() {} } } : {}),\n    env: process.env, launch: (file, args, options) => launch(file, args, options, true),\n  })",
-    "id": "electron/features/lab/executor.cjs:ecc89c51ff97131a58a0a627"
+    "text": "memoryModules(modules).run(config.args, {\n    ...(config.dispatchId ? { detached: { id: config.dispatchId, admitted() {} } } : {}),\n    labMeter, env: process.env, launch: (file, args, options) => launch(file, args, options, true),\n  })",
+    "id": "electron/features/lab/executor.cjs:246688209a7b9fac30dc866b"
   },
   {
     "text": "launch(file, args, options, true)",

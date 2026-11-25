@@ -1,11 +1,10 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/lab-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 
 async function temporary(t) {
   const base = process.platform === 'darwin' ? path.join(os.homedir(), '.ctmp') : os.tmpdir();
@@ -17,14 +16,11 @@ async function temporary(t) {
   return { root, app };
 }
 
-async function electronRuntime(app, overrides = {}) {
-  const file = path.join(__dirname, '../electron/features/lab/runtime.cjs'), localRequire = createRequire(file);
-  const module = { exports: {} };
-  vm.runInNewContext(await fs.readFile(file, 'utf8'), {
-    module, process: { execPath: app, versions: { electron: 'fixture' }, env: {} },
-    require: name => overrides[name] || localRequire(name),
-  });
-  return module.exports.resolveNode;
+function electronRuntime(app, overrides = {}) {
+  return loadWithStubs(require.resolve('../electron/features/lab/runtime.cjs'), (name, load) => {
+    if (name === 'node:process') return { execPath: app, versions: { electron: 'fixture' }, env: {} };
+    return overrides[name] ?? load(name);
+  }).resolveNode;
 }
 
 test('an Electron host selects independent Node from PATH without probing or exposing its app runtime', {

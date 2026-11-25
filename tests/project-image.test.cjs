@@ -1,3 +1,4 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -146,10 +147,8 @@ test('the secured preload API saves then broadcasts and returns rejected mutatio
   registerWorkspaceIpc({ ...adapter, publicState: () => ({}), setProjectImage: (id, image, mode) => store.setProjectImage(id, image, mode),
     broadcast: () => { assert.equal(new WorkspaceStore(file).projects[0].image, project.image); broadcasts++; } });
   const event = { sender: window.webContents, senderFrame: frame };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
-    require: name => { assert.equal(name, 'electron'); return { contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } },
-      ipcRenderer: { invoke: (name, ...args) => handles.get(name)(event, ...args) } }; },
-  });
+  loadPreload('electron/preload.cjs', { contextBridge: { exposeInMainWorld: (name, api) => { assert.equal(name, 'agentrix'); bridge = api; } },
+  ipcRenderer: { invoke: (name, ...args) => handles.get(name)(event, ...args) } });
   assert.deepEqual(await bridge.setProjectImage(project.id, png), { ok: true, value: undefined });
   assert.equal(project.image, png); assert.equal(broadcasts, 1);
   assert.equal((await bridge.setProjectImage(project.id, 'https://example.com/a.png')).ok, false);

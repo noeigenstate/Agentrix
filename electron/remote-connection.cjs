@@ -97,7 +97,7 @@ function linkFor(ssh, options) {
 
 // A terminal of an SSH project, with its requests for the files, Git and conversations there.
 class RemoteConnection {
-  constructor(project, options) {
+  constructor(project, options, connect = linkFor) {
     const { auth, sessionKey, onEvent, onReady, codingPath, readingNote = '', skills = null } = options;
     this.project = project; this.events = new EventEmitter();
     this.pending = new Map(); this.nextId = 0; this.connected = false; this.closed = false;
@@ -105,7 +105,7 @@ class RemoteConnection {
     this.ready = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject; });
     this.ready.catch(() => {});
     this.onEvent = onEvent; this.onReady = onReady;
-    this.link = linkFor(project.ssh, options);
+    this.link = connect(project.ssh, options);
     this.channel = this.link.attach(this);
     let seconds = 0;
     this.connectTimer = setInterval(() => {

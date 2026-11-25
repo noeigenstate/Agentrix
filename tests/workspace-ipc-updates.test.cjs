@@ -1,9 +1,9 @@
+const { loadPreload } = require('./helpers/load-with-stubs.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { BETA_AGREEMENT_VERSION, UpdateManager } = require('../electron/updates.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
@@ -29,7 +29,7 @@ function fixture(t, channel, betaAgreement) {
   let api;
   const electron = { contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } },
     ipcRenderer: { invoke: (name, ...args) => handlers.get(name)(event, ...structuredClone(args)) } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), { require: name => { assert.equal(name, 'electron'); return electron; } });
+  loadPreload('electron/preload.cjs', electron);
   return { api, file, store, calls, states, manager };
 }
 

@@ -7,17 +7,22 @@ const path = require('node:path');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
 const { createSkillsModel, instructionsOf } = require('../scripts/skills-probe-model.cjs');
-const { claudeProbeConfig } = require('../scripts/skills-probe-config.cjs');
+const { claudeProbeConfig, writeClaudeProbeConfig } = require('../scripts/skills-probe-config.cjs');
 
-test('isolated Claude probe config pre-approves the stand-in key using the installed last-20 format', () => {
+test('isolated Claude probe config pre-approves the stand-in key using the installed last-20 format', async t => {
   const key = 'synthetic-probe-key-12345678901234567890', config = claudeProbeConfig('C:\\isolated\\project', ' ' + key + ' ');
   assert.deepEqual(config.customApiKeyResponses, { approved: ['12345678901234567890'], rejected: [] });
   assert.equal(config.projects['C:/isolated/project'].hasTrustDialogAccepted, true);
   assert.deepEqual(claudeProbeConfig('/isolated/project', 'standin').customApiKeyResponses.approved, ['standin']);
   assert.deepEqual(Object.keys(claudeProbeConfig(['C:\\isolated\\claude', 'C:\\isolated\\codex'], 'standin').projects), ['C:/isolated/claude', 'C:/isolated/codex']);
   assert.ok(!JSON.stringify(config).includes(key));
-  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../scripts/skills-probe.mjs'), 'utf8');
-  assert.match(source, /path\.join\(env\.CLAUDE_CONFIG_DIR, '\.claude\.json'\).*claudeProbeConfig\(projects\.map/);
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-probe-config-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  const projects = [{ path: '/isolated/claude' }, { path: '/isolated/codex' }];
+  await writeClaudeProbeConfig(profile, projects, key);
+  const saved = fs.readFileSync(path.join(profile, '.claude.json'), 'utf8');
+  assert.deepEqual(JSON.parse(saved), claudeProbeConfig(projects.map(project => project.path), key));
+  assert.ok(!saved.includes(key));
 });
 
 test('skills probe captures only instruction fields, never treats a user echo as delivery proof', () => {

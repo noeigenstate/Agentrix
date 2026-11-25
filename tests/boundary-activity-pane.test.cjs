@@ -1,3 +1,4 @@
+const { syntax, nodes } = require('./helpers/source-syntax.cjs');
 // Guards for electron/features/agents/BOUNDARY.md (Activity pane) that no behaviour test covers.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -49,17 +50,28 @@ test('the pane never acts on its own: one /usage after the countdown, read-only 
     const labels = sourceNodes(file, node => ts.isStringLiteralLike(node) || ts.isJsxText(node)).map(node => node.text.toLowerCase());
     assert.ok(labels.every(label => forbidden.every(word => !label.includes(word))), file);
   }
-  // Codex only reads identity (without refresh) and limits; Claude's usage is one GET.
-  const source = read('electron/features/agents/codex-account-usage.cjs');
-  const codex = source.slice(source.indexOf('function readCodexAccount('), source.indexOf('// Scope only to'));
-  assert.deepEqual([...new Set([...codex.matchAll(/method: '([^']+)'/g)].map(match => match[1]))].sort(), ['account/rateLimits/read', 'account/read', 'initialize', 'initialized']);
-  assert.match(codex, /method: 'account\/read', params: \{ refreshToken: false \}/);
-  assert.doesNotMatch(codex, /rateLimitResetCredit\/consume/);
-  const action = source.slice(source.indexOf('async function consumeCodexResetCredit('), source.indexOf('// Use a native executable'));
-  assert.equal((action.match(/rpc\.request\('account\/rateLimitResetCredit\/consume'/g) || []).length, 1);
-  const claude = read('electron/features/agents/claude-account-usage.cjs');
-  assert.deepEqual([...claude.matchAll(/\bfetch\(([^,]+), \{ method: '([A-Z]+)'/g)].map(match => match.slice(1)), [['USAGE_URL', 'GET']]);
-  assert.doesNotMatch(claude, /writeFile|oauth\/token|refresh_token/, 'never renews or writes credentials');
+});
+
+test('account modules read usage without changing credentials, and only the owner action can consume a reset', () => {
+  const codex = syntax('electron/features/agents/codex-account-usage.cjs');
+  const [readAccount] = nodes(codex, node => ts.isFunctionDeclaration(node) && node.name?.text === 'readCodexAccount');
+  const calls = (root, name) => nodes(root, node => ts.isCallExpression(node) && node.expression.getText() === name);
+  const records = calls(readAccount, 'write').map(({ arguments: [input] }) =>
+    Object.fromEntries(input.properties.map(prop => [prop.name.text, prop.initializer])));
+  assert.deepEqual(records.map(value => value.method.text).sort(), ['account/rateLimits/read', 'account/read', 'initialize', 'initialized']);
+  const read = records.find(value => value.method.text === 'account/read');
+  const [refresh] = read.params.properties.filter(prop => prop.name.text === 'refreshToken');
+  assert.equal(refresh.initializer.kind, ts.SyntaxKind.FalseKeyword);
+  const [consume] = nodes(codex, node => ts.isFunctionDeclaration(node) && node.name?.text === 'consumeCodexResetCredit');
+  const requests = calls(codex, 'rpc.request').filter(node => node.arguments[0]?.text === 'account/rateLimitResetCredit/consume');
+  assert.equal(requests.length, 1);
+  assert.ok(calls(consume, 'rpc.request').includes(requests[0]));
+  const claude = syntax('electron/features/agents/claude-account-usage.cjs');
+  assert.deepEqual(calls(claude, 'fetch').map(({ arguments: [url, request] }) =>
+    [url.text, request.properties.find(prop => prop.name.text === 'method').initializer.text]), [['USAGE_URL', 'GET']]);
+  const credentialWriters = nodes(claude, node =>
+    (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && /writeFile|oauth\/token|refresh_token/.test(node.text));
+  assert.deepEqual(credentialWriters.map(node => node.text), []);
 });
 
 // A sub-agent's view is the owner's to open and its conversation only reads: nothing opens one by itself, nothing in it writes to a terminal,

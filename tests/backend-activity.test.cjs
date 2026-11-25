@@ -1,3 +1,4 @@
+const { assertIdlePowerShellHook } = require('./helpers/powershell-hook.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -1278,7 +1279,7 @@ test('desktop task fixture emits a fresh received prompt that completes through 
         h.now(h.s.activitySince + 300);
         hook('complete', 'stop-again');
         // claude-hook.ps1 sends nothing for an idle_prompt notification, so the host sees only the repeated Stop.
-        assert.match(await fs.readFile(path.join(__dirname, '../integration/claude-hook.ps1'), 'utf8'), /-notin @\('permission_prompt'/);
+        await assertIdlePowerShellHook();
         assert.ok(script.includes('idle_prompt'));
         await fs.writeFile(path.join(home, 'projects', 'desktop-task', session + '.quiet'), 'sent');
       }
@@ -1314,8 +1315,7 @@ test('visual smoke fixture records arm only its two fresh submissions, while dup
   assert.deepEqual(calls.map(call => call.kind), ['start', 'stop', 'stop', 'notify', 'start', 'stop']);
   assert.equal(calls[3].payload.notification_type, 'idle_prompt');
   // claude-hook.ps1 turns start/stop into working/complete and drops an idle_prompt notification before it reaches the host.
-  const hookScript = await fs.readFile(path.join(__dirname, '../integration/claude-hook.ps1'), 'utf8');
-  assert.match(hookScript, /\$Kind -eq 'notify' -and \$hook\.notification_type -notin @\('permission_prompt'[^)]*\)\) \{ exit 0 \}/);
+  await assertIdlePowerShellHook();
   const states = { start: 'working', stop: 'complete' }, prompts = [];
   for (let index = 0; index < calls.length; index++) {
     const { kind, payload } = calls[index];

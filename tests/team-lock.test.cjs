@@ -1,18 +1,17 @@
+const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
-const { createRequire } = require('node:module');
 
 // Load the real Team with private fs wrappers and a clock advanced only by the retry wait; no Git or child processes.
 function fixture(t, { platform = 'win32', errorAt = () => null, advance = 25, writeError } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'team-lock-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const lock = path.join(root, 'agentrix', 'lock'), calls = { opens: 0, waits: 0, stats: 0, renames: 0, actions: 0 };
-  let now = 0;
+  t.mock.timers.enable({ apis: ['Date'], now: 0 });
   const injected = { ...fs,
     openSync(file, flags, ...args) {
       if (file === lock) {
@@ -26,18 +25,16 @@ function fixture(t, { platform = 'win32', errorAt = () => null, advance = 25, wr
     renameSync(...args) { calls.renames++; return fs.renameSync(...args); },
     writeFileSync(...args) { if (writeError) throw writeError; return fs.writeFileSync(...args); },
   };
-  const file = path.resolve(__dirname, '../electron/features/team/team.cjs'), localRequire = createRequire(file), loaded = { exports: {} };
   const replacements = {
     'node:fs': injected,
+    'node:process': { platform, env: {} },
     'node:child_process': { execFileSync: () => assert.fail('lock unit tests must not run Git') },
     'node:timers/promises': { setTimeout: async ms => {
-      assert.equal(ms, 25); assert.ok(++calls.waits <= 601, 'retries must be bounded'); now += advance;
+      assert.equal(ms, 25); assert.ok(++calls.waits <= 601, 'retries must be bounded'); t.mock.timers.tick(advance);
     } },
   };
-  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
-    module: loaded, require: name => replacements[name] || localRequire(name), process: { platform, env: {} }, Date: { now: () => now },
-  }, { filename: file });
-  const team = loaded.exports.teamAt(root, root, true);
+  const { teamAt } = loadWithStubs(require.resolve('../electron/features/team/team.cjs'), (name, load) => replacements[name] ?? load(name));
+  const team = teamAt(root, root, true);
   return { team, lock, calls, action: () => { calls.actions++; return 'admitted'; } };
 }
 

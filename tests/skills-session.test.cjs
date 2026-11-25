@@ -1,3 +1,4 @@
+const { bootstrapScript, runPowerShellHook } = require('./helpers/powershell-hook.cjs');
 const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,10 +18,10 @@ const { terminalHooks } = require('../electron/features/terminal-events/hook-cha
 const hooksFor = shell => terminalHooks({ port: 4242, terminalId: 'project', sessionKey: 'key', eventServer: { name: 'absent', address: '/absent.sock' }, env: {},
   cwd: os.tmpdir(), shell, platform: process.platform, home: os.tmpdir(), read: () => '{}' });
 // The PowerShell session object a wrapper reads, with its command hooks only: these wrapper tests are about the note and arguments.
-const powershellSession = () => `$global:AgentrixSession = @{ hooks = @{ channel = 'command'; settings = @{ fallback = '${
-  hooksFor({ posix: false, powershellPath: 'powershell.exe', script: 'fixture.ps1' }).settings.fallback.replace(/'/g, "''")}' } } }
-$global:AgentrixNode = '${process.execPath.replace(/'/g, "''")}'
-$global:AgentrixIntercept = '${path.join(__dirname, '../integration/shims/intercept.cjs').replace(/'/g, "''")}'`;
+const powershellSession = bootstrap => fs.writeFileSync(bootstrap, JSON.stringify({
+  nodePath: process.execPath,
+  hooks: { channel: 'command', settings: { fallback: hooksFor({ posix: false, powershellPath: 'powershell.exe', script: 'fixture.ps1' }).settings.fallback } },
+}));
 
 async function fixture(t, routingNote = () => '') {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-'));
@@ -480,19 +481,13 @@ test('PowerShell Claude wrapper keeps the startup note and fallback before intac
   fs.writeFileSync(bootstrap + '.launch-note', note.launch);
   const command = path.join(f.root, 'claude.ps1');
   fs.writeFileSync(command, "@{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress\n");
-  const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
-  const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
-  const wrapper = source.slice(source.indexOf('# Windows PowerShell 5'), source.indexOf('if ($global:AgentrixAgentOnly)'));
+  powershellSession(bootstrap);
   const script = `
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-${helper}
-${wrapper}
+${bootstrapScript(bootstrap)}
 function global:Send-AgentrixEvent {}
 function global:Get-AgentrixCommand {}
-${powershellSession()}
-# Main names a terminal's bootstrap after the terminal; the settings file still carries the session, as main removes it by.
-$env:AGENTRIX_BOOTSTRAP = '${bootstrap.replace(/'/g, "''")}'
 $global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand = '${command.replace(/'/g, "''")}'
 claude --resume fixture '继续'`;
   const result = await powershellProbe(f.root, script, noteFile);
@@ -558,13 +553,9 @@ test('PowerShell 5.1 fallback passes a settings file through a real fake claude.
   const captureFile = path.join(f.root, 'argv.json'), fake = path.join(bin, 'capture.cjs'), command = path.join(bin, 'claude.cmd');
   fs.writeFileSync(fake, `const fs=require('node:fs'),args=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,settings:JSON.parse(fs.readFileSync(args[1],'utf8'))}));`);
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`);
-  const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
-  const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
-  const wrapper = source.slice(source.indexOf('# Windows PowerShell 5'), source.indexOf('if ($global:AgentrixAgentOnly)'));
+  powershellSession(bootstrap);
   const quote = value => `'${value.replace(/'/g, "''")}'`;
-  const script = `$ProgressPreference = 'SilentlyContinue'\n${helper}\n${wrapper}\nfunction global:Send-AgentrixEvent {}\nfunction global:Get-AgentrixCommand {}
-${powershellSession()}
-$env:AGENTRIX_BOOTSTRAP = ${quote(bootstrap)}
+  const script = `$ProgressPreference = 'SilentlyContinue'\n${bootstrapScript(bootstrap)}\nfunction global:Send-AgentrixEvent {}\nfunction global:Get-AgentrixCommand {}
 $global:AgentrixClaudeExecutable = ${quote(command)}
 $global:AgentrixClaudeCommand = ${quote(command)}
 claude --resume fixture 'next task'`;
@@ -588,28 +579,14 @@ test('shared receipt lifecycle fixture matches PowerShell SessionStart delivery 
     fs.writeFileSync(manifest, 'Shared instructions.'); fs.writeFileSync(noteFile, `Note. ${deliveryMarker({ manifest, fingerprint })}`);
     notes[key] = noteFile;
   }
-  const source = fs.readFileSync(path.join(__dirname, '../integration/claude-hook.ps1'), 'utf8');
-  const hook = source.slice(source.indexOf('function Get-AgentrixSessionContext'), source.indexOf('\ntry {'));
-  const quote = value => `'${value.replace(/'/g, "''")}'`;
-  const script = `$ProgressPreference = 'SilentlyContinue'
-[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$ErrorActionPreference = 'Stop'
-${hook}
-$fixture = ${quote(JSON.stringify(receiptFixture))} | ConvertFrom-Json
-$notes = ${quote(JSON.stringify(notes))} | ConvertFrom-Json
-$results = foreach ($step in $fixture.steps) {
-  $NoteFile = $notes.($step.key)
-  $context = Get-AgentrixSessionContext @{ session_id = $step.session; source = $step.source }
-  $receipts = @(foreach ($session in Get-ChildItem -LiteralPath ${quote(path.join(folder, 'receipts/claude'))} -Directory -ErrorAction SilentlyContinue) {
-    foreach ($file in Get-ChildItem -LiteralPath $session.FullName -File) { $session.Name + '/' + $file.Name }
-  })
-  @{ deliver = ($null -ne $context); receipts = @($receipts | Sort-Object) }
-}
-ConvertTo-Json -InputObject @($results) -Depth 6 -Compress`;
-  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, notes.alpha);
-  assert.equal(result.stderr, ''); assert.equal(result.code, 0);
-  const results = JSON.parse(result.stdout);
-  assert.equal(results.length, receiptFixture.steps.length);
-  for (const [i, step] of receiptFixture.steps.entries()) assert.deepEqual(results[i], { deliver: step.deliver, receipts: expectedReceipts(step) }, JSON.stringify(step));
+  const receiptsRoot = path.join(folder, 'receipts/claude');
+  for (const step of receiptFixture.steps) {
+    const result = await runPowerShellHook('session', { session_id: step.session, source: step.source }, { noteFile: notes[step.key] });
+    assert.equal(result.code, 0); assert.equal(result.stderr, '');
+    assert.equal(Boolean(result.stdout), step.deliver, JSON.stringify(step));
+    if (result.stdout) assert.equal(JSON.parse(result.stdout).hookSpecificOutput.hookEventName, 'SessionStart');
+    const receipts = fs.existsSync(receiptsRoot) ? fs.readdirSync(receiptsRoot).flatMap(session =>
+      fs.readdirSync(path.join(receiptsRoot, session)).map(file => session + '/' + file)).sort() : [];
+    assert.deepEqual(receipts, expectedReceipts(step), JSON.stringify(step));
+  }
 });

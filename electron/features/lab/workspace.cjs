@@ -1,3 +1,4 @@
+const process = require('node:process');
 const { fs, removePath, cloneMode } = require('./disk.cjs');
 const path = require('node:path');
 const { command, git, aborted } = require('./process.cjs');

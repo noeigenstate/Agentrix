@@ -1,3 +1,4 @@
+const process = require('node:process');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { isInstalledBuild } = require('../updates.cjs');

@@ -96,11 +96,10 @@ test('Linux native desktop smoke retains Xvfb access while isolating credentials
 });
 
 test('native desktop smoke constructs event sequence numbers in delivery order', async () => {
-  const source = fs.readFileSync(path.join(root, 'scripts/native-session-smoke.mjs'), 'utf8'), frames = [];
-  const script = source.slice(source.indexOf('let sequence = 0;'), source.indexOf('await view.waitFor('));
-  const context = { project: { id: 'p', path: '/offline' }, terminalId: 't', assert,
-    page: { locator: () => ({ count: async () => 0 }) }, app: { evaluate: async (_fn, list) => frames.push(...list) } };
-  await vm.runInNewContext(`(async () => { ${script} })()`, context);
+  const { codexPanelEvents, openCodexPanel } = await import('../scripts/native-session-smoke.mjs');
+  const frames = [];
+  await openCodexPanel(async list => frames.push(...list), codexPanelEvents('p', 't'));
+  assert.equal(frames.length, 5);
   assert.deepEqual(frames.map(event => event.sequence), frames.map((_, index) => index + 1));
 });
 
