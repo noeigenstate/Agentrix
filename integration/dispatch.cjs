@@ -471,7 +471,7 @@ const BOOTSTRAP_LIMIT = 256 * 1024;
 let undeliveredNoted = false;
 const PIPE_WAKE_TIMEOUT_MS = 2000;
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
-function eventSink(filename, notice) {
+function eventSink(filename, notice, wakeTimeout = PIPE_WAKE_TIMEOUT_MS) {
   let bootstrap, outbox, sending = false;
   const queue = [];
   function undelivered(code) {
@@ -488,7 +488,7 @@ function eventSink(filename, notice) {
     let failure = null, written = false;
     // The wake is only a nudge (the disk records are the delivery), so a slow pipe on a busy machine is given time
     // before the planner is told: at 250 ms a slow Windows runner reported "not delivered" for a pipe that was listening.
-    socket.setTimeout(PIPE_WAKE_TIMEOUT_MS, () => { failure ??= 'timeout'; socket.destroy(); });
+    socket.setTimeout(wakeTimeout, () => { failure ??= 'timeout'; socket.destroy(); });
     socket.on('error', error => { failure ??= error.code || 'socket_error'; socket.destroy(); });
     socket.once('close', () => {
       if (!written) undelivered(failure || 'closed');
@@ -1123,11 +1123,11 @@ async function run(argv, deps = {}) {
 
 async function runWorker(argv, { env = process.env, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, roleFallback, roleArtifacts, launchTreeStop, labMeter }, emit) {
+  requestTimeout = REQUEST_TIMEOUT, pipeWakeTimeout = PIPE_WAKE_TIMEOUT_MS, detached = null, roleFallback, roleArtifacts, launchTreeStop, labMeter }, emit) {
   const id = detached?.id || randomUUID();
   const signal = (type, fields) => emit(dispatchEvent(type, id, fields));
   const notice = (code, detail) => signal('notice', { code, ...(detail !== undefined && { detail }) });
-  const send = labMeter ?? eventSink(env.AGENTRIX_BOOTSTRAP, notice);
+  const send = labMeter ?? eventSink(env.AGENTRIX_BOOTSTRAP, notice, pipeWakeTimeout);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   let workerEnv = workerEnvironment(env);
   for (const name of Object.keys(workerEnv)) if (name.toUpperCase() === 'AGENTRIX_SEATS') delete workerEnv[name];

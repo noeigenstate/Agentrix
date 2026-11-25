@@ -902,10 +902,12 @@ test('without bootstrap or with a stalled pipe the worker still runs and finishe
   const { run } = require('../integration/dispatch.cjs');
   const bootstrap = path.join(f.directory, 'stalled.json');
   await fs.writeFile(bootstrap, JSON.stringify({ pipeName: address, sessionKey: 'test', projectId: 'project' }));
+  // The stalled pipe is held for a minute, so a worker that waited on it could not finish within the budget, however
+  // slow the runner is.
   const began = Date.now();
   assert.equal(await run(f.args, { env: { ...dispatchEnvironment(), CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap, DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
-    stdout: { write: f.releaseOn }, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
-  assert.ok(Date.now() - began < 2000, 'the worker never awaits pipe acknowledgments');
+    stdout: { write: f.releaseOn }, pipeWakeTimeout: 60000, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
+  assert.ok(Date.now() - began < 20000, 'the worker never awaits pipe acknowledgments');
 });
 
 test('unreadable bootstrap fields warn once while the worker still finishes', async t => {
