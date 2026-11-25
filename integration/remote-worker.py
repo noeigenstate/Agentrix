@@ -243,7 +243,86 @@ class RemoteClaudeAccounts:
                 return result
         except Exception: return {"state": "error", "reason": "query"}
 
-NOTIFY_SOURCE = 'CLAUDE_ROUTE_ENV = ' + repr(tuple(sorted(CLAUDE_ROUTE_ENV))) + '\n' + r'''import hashlib,json,os,re,socket,stat,sys,time
+# The SSH bootstrap itself runs from stdin. Carry the wire reader in the existing notify script too.
+WIRE_SOURCE = r'''
+KEY_VALUE_LIMIT = 16 * 1024
+SEAT_MAP_LIMIT = 8192
+
+class WireError(ValueError):
+    def __init__(self, code, channel, detail):
+        self.code = "wire." + code
+        super().__init__(channel + ": " + detail)
+
+def check_wire_version(channel, received, version, versions):
+    if type(version) in (int, float) and 1 <= version <= 9007199254740991 and version % 1 == 0 and version in versions:
+        return
+    if isinstance(received, str):
+        label = re.sub(r"[\r\n\0]", " ", received[:80])
+    elif isinstance(received, (dict, list)):
+        label = "[object Object]" if isinstance(received, dict) else "[object Array]"
+    else:
+        label = json.dumps(received)
+    raise WireError("unsupported_version", channel, "unsupported version " + label)
+
+def read_wire_envelope(value, format=None, channel=None, versions=(1,), legacy=True):
+    channel = channel or format or "JSONL"
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, dict):
+        raise WireError("invalid", channel, "expected a JSON object")
+    key = "version" if format else "v"
+    missing = key not in value
+    version = value.get(key, 0)
+    if not missing or not legacy:
+        check_wire_version(channel, "0 (missing)" if missing else version, version, versions)
+    if format and (not missing or "format" in value) and value.get("format") != format:
+        raise WireError("invalid", channel, "expected format " + format)
+    return {"value": value, "version": version, "legacy": missing}
+
+def read_key_value(text, format=None, versions=(1,)):
+    channel = format or "key=value"
+    if not isinstance(text, str) or len(text.encode("utf-8")) > KEY_VALUE_LIMIT:
+        raise WireError("invalid", channel, "expected UTF-8 text up to 16 KiB")
+    rows = (text[1:] if text.startswith("\ufeff") else text).split("\n")
+    if rows[-1] == "":
+        rows.pop()
+    values = {}
+    for row in rows:
+        key, equals, value = row.partition("=")
+        if not equals or not re.fullmatch(r"[a-z][a-z0-9_]*", key) or "\r" in value or "\0" in value or key in values:
+            raise WireError("invalid", channel, "invalid or repeated key=value record")
+        values[key] = value
+    file_format = values.get("format", "")
+    if not re.fullmatch(r"agentrix\.[a-z][a-z0-9-]*", file_format) or (format is not None and format != file_format) or "version" not in values:
+        raise WireError("invalid", channel, "expected format and version")
+    received = values["version"]
+    version = int(received) if len(received) <= 16 and re.fullmatch(r"[1-9][0-9]*", received) else None
+    check_wire_version(file_format, received, version, versions)
+    return values
+
+def write_key_value(values, format=None, versions=(1,)):
+    channel = format or "key=value"
+    if not isinstance(values, dict):
+        raise WireError("invalid", channel, "expected key=value fields")
+    for key, value in values.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not isinstance(value, str) or re.search(r"[\r\n\0]", value):
+            raise WireError("invalid", channel, "invalid key=value field")
+    text = "".join(key + "=" + value + "\n" for key, value in values.items())
+    read_key_value(text, format, versions)
+    return text
+
+def read_terminal_wire(value):
+    return read_wire_envelope(value, format="agentrix.terminal-wire")
+
+def write_shell_fields(format, **fields):
+    return write_key_value(dict({"format": format, "version": "1"}, **fields), format)
+'''
+exec(WIRE_SOURCE)
+
+def encode_seat_map(seats):
+    return json.dumps({"format": "agentrix.seat-map", "version": 1, "seats": seats}, separators=(",", ":"))
+
+NOTIFY_SOURCE = 'CLAUDE_ROUTE_ENV = ' + repr(tuple(sorted(CLAUDE_ROUTE_ENV))) + '\n' + WIRE_SOURCE + r'''import hashlib,json,os,re,socket,stat,sys,time
 def deliver_skills(hook, identity):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", identity): return
     source=hook.get("source")
@@ -276,8 +355,14 @@ def deliver_skills(hook, identity):
     print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}))
 def seat_map(raw):
     try:
-        if not raw or len(raw.encode("utf-8")) > 8192: return None
-        data = json.loads(raw)
+        size = len(raw.encode("utf-8"))
+        if not size or size > KEY_VALUE_LIMIT: return None
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict): return None
+        document = read_wire_envelope(parsed, format="agentrix.seat-map")
+        if document["legacy"] and size > SEAT_MAP_LIMIT: return None
+        data = parsed if document["legacy"] else parsed.get("seats")
+    except WireError: raise
     except (UnicodeError, ValueError, RecursionError): return None
     if not isinstance(data, dict): return None
     for name, choice in data.items():
@@ -292,36 +377,27 @@ def live_seats():
     if os.path.isabs(filename):
         try:
             named = os.lstat(filename)
-            if not stat.S_ISREG(named.st_mode) or named.st_size > 8192: return None
+            if not stat.S_ISREG(named.st_mode) or named.st_size > KEY_VALUE_LIMIT: return None
             flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(filename, flags)
             with os.fdopen(descriptor, "rb", buffering=0) as source:
                 info = os.fstat(source.fileno())
                 if stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
-                    return seat_map(source.read(8193).decode("utf-8"))
+                    return seat_map(source.read(KEY_VALUE_LIMIT + 1).decode("utf-8"))
         except (OSError, UnicodeError): pass
     return None
-def terminal_launch(agent, action, *args):
-    # A terminal can run without Node. Interpret the same manifest and argv layout sent with the intercept module.
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "terminal-wire.json"), encoding="utf-8") as source:
-        wire = json.load(source)
-    words = wire["words"][agent]
-    layout = wire.get(agent)
-    if action == "classify":
-        first = args[0] if args else None
-        if layout is None:
-            print("passthrough" if first in words["utilities"] else "native")
-            return
-        options = args[:args.index("--")] if "--" in args else args
-        if any(word.split("=", 1)[0] in layout["overrides"] for word in options):
-            print("refused")
-        elif first in words["subcommands"] or any(word in words["versionHelp"] for word in options):
-            print("utility")
-        elif any(word in words["print"] for word in options):
-            print("print")
-        else:
-            print("conversation")
-        return
+def launch_route(words, layout, args):
+    first = args[0] if args else None
+    if layout is None:
+        return "passthrough" if first in words["utilities"] else "native"
+    options = args[:args.index("--")] if "--" in args else args
+    if any(word.split("=", 1)[0] in layout["overrides"] for word in options):
+        return "refused"
+    if first in words["subcommands"] or any(word in words["versionHelp"] for word in options):
+        return "utility"
+    return "print" if any(word in words["print"] for word in options) else "conversation"
+
+def launch_words(layout):
     fields = {key: os.environ.get("AGENTRIX_LAUNCH_" + key.upper()) for key in layout["flags"]}
     note = fields["note"] or ""
     marker = layout["note"]["marker"]
@@ -330,23 +406,39 @@ def terminal_launch(agent, action, *args):
     if error and error not in note: note = error + (" " + note if note else "")
     if note: fields["note"] = note
     role = os.environ.get("AGENTRIX_LAUNCH_ROLE")
-    words = ["--"]
+    words = ["format=agentrix.launch-words", "version=1"]
     for field in layout["remoteOrder"]:
         if field == "roleTools":
-            if role: words.append(role)
+            if role: words.append("arg=" + role)
         elif fields[field]:
-            words.extend([layout["flags"][field], fields[field]])
-    sys.stdout.buffer.write(("".join(word + "\0" for word in words)).encode("utf-8"))
+            words.extend(["arg=" + layout["flags"][field], "arg=" + fields[field]])
+    return ("\0".join(words) + "\0").encode("utf-8")
+
+def terminal_launch(agent, action, *args):
+    # A terminal can run without Node. Interpret the same manifest and argv layout sent with the intercept module.
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "terminal-wire.json"), encoding="utf-8") as source:
+        wire = read_terminal_wire(json.load(source))["value"]
+    layout = wire.get(agent)
+    if action == "classify":
+        route = launch_route(wire["words"][agent], layout, args)
+        sys.stdout.buffer.write(write_shell_fields("agentrix.launch-route", route=route).encode("utf-8"))
+    else:
+        sys.stdout.buffer.write(launch_words(layout))
 
 if sys.argv[1:2] == ["terminal-launch"]:
-    terminal_launch(*sys.argv[2:])
+    try:
+        terminal_launch(*sys.argv[2:])
+    except WireError as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
     sys.exit(0)
 
 try:
-    mode=sys.argv[1]
-    # Remove next version. Older shells can use the updated emitter.
-    mode={"codex-started":"agent-started","codex-exited":"agent-exited"}.get(mode,mode)
-    event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
+    event_type=sys.argv[1]
+    # Keep the old event names on the socket during the 1.6.4 transition.
+    mode={"codex-started":"agent-started","codex-exited":"agent-exited"}.get(event_type,event_type)
+    event={"v":1,"type":event_type,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),
+           "codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
     if mode=="notify":
         payload=json.loads(sys.argv[2])
         if payload.get("type")!="agent-turn-complete": sys.exit(0)
@@ -354,6 +446,7 @@ try:
         if identity==":": sys.exit(0)
         event.update(type="turn-complete",eventId=hashlib.sha256(identity.encode()).hexdigest(),threadId=payload.get("thread-id"),turnId=payload.get("turn-id"))
     elif mode=="claude-seat":
+        if os.environ.get("AGENTRIX_SKIP_LIVE_SEATS") == "1": sys.exit(0)
         raw=sys.stdin.read(4194305)
         live=live_seats()
         seats=live if live is not None else seat_map(os.environ.get("AGENTRIX_SEATS", ""))
@@ -439,6 +532,8 @@ try:
         client.connect(os.environ["AGENTRIX_SOCKET"])
         client.sendall((json.dumps(event)+"\n").encode())
         if mode == "agent-started": client.recv(1)
+except WireError as error:
+    print(str(error), file=sys.stderr)
 except Exception: pass
 '''
 
@@ -457,11 +552,70 @@ __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
 # The first word given to an agent when it is a subcommand or an option (update, --version): Agentrix tells such a run
 # from a conversation by it. Anything else is not sent.
 __pg_command() { local pattern='^-{0,2}[A-Za-z][A-Za-z-]{0,23}$'; [[ ${1-} =~ $pattern ]] && printf '%s' "$1"; return 0; }
+__pg_read_wire() {
+    local expected=$1 text line key value format version seen=' '
+    local LC_ALL=C
+    # A successful bounded read means either a NUL delimiter or too many bytes.
+    if IFS= read -r -d '' -n 16385 text; then return 1; fi
+    text=${text#$'\xef\xbb\xbf'}
+    while IFS= read -r line; do
+        key=${line%%=*}
+        value=${line#*=}
+        [[ $line == *=* && $key =~ ^[a-z][a-z0-9_]*$ && $value != *$'\r'* && $seen != *" $key "* ]] || return 1
+        seen+="$key "
+        case $key in
+            format) format=$value;;
+            version) version=$value;;
+            route) [[ $expected != agentrix.launch-route ]] || route=$value;;
+            mode) [[ $expected != agentrix.session-mode ]] || session_mode=$value;;
+            model) [[ $expected != agentrix.lead-seat ]] || model=$value;;
+            effort) [[ $expected != agentrix.lead-seat ]] || effort=$value;;
+            fast) [[ $expected != agentrix.lead-seat ]] || seat_fast=$value;;
+            ultracode) [[ $expected != agentrix.lead-seat ]] || ultracode=$value;;
+            seats) [[ $expected != agentrix.lead-seat ]] || seat_map=$value;;
+        esac
+    done <<< "${text%$'\n'}"
+    [[ $format == "$expected" && $version == 1 ]]
+}
+__pg_load_launch_seat() {
+    local file=$1 seat_fast ultracode legacy_seats invalid=1
+    local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
+    if [[ -e $file.env || -L $file.env ]]; then
+        invalid=2
+        [[ -f $file.env && -r $file.env ]] && __pg_read_wire agentrix.lead-seat < "$file.env" || return 2
+        [[ ( $ultracode == 0 || $ultracode == 1 ) && ( $seat_map == null || $seat_map == \{*\} ) ]] || return 2
+    else
+        [[ -r $file ]] || return 1
+        {
+            IFS= read -r model || return 1
+            IFS= read -r effort || return 1
+            IFS= read -r seat_fast || return 1
+            IFS= read -r seat_map || :
+            # Old files put the seat map on line 6, after two retired fields.
+            IFS= read -r ultracode || :
+            if IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
+        } < "$file"
+        if [[ $ultracode == ultracode ]]; then ultracode=1; else ultracode=0; fi
+    fi
+    [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $seat_fast == 0 || $seat_fast == 1 ) ]] || return "$invalid"
+    fast=$seat_fast
+    ultra=$ultracode
+}
+__pg_load_mode() {
+    local file=$1
+    if [[ -e $file.env || -L $file.env ]]; then
+        [[ -f $file.env && -r $file.env ]] && __pg_read_wire agentrix.session-mode < "$file.env" || return 1
+        [[ $session_mode == native || $session_mode == conductor ]]
+    elif [[ -r $file ]]; then
+        session_mode=$(< "$file")
+    fi
+}
 # Both terminal entrypoints ask the same transported CLI definition.
 function agentrix_agent {
     local agent=$1; shift
-    local executable arguments route
-    route=$(__pg_launch_plan "$agent" classify "$@") || return
+    local executable arguments route reply
+    reply=$(__pg_launch_plan "$agent" classify "$@") || return
+    __pg_read_wire agentrix.launch-route <<< "$reply" || return 1
     case $route in
         native)
             arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
@@ -471,6 +625,8 @@ function agentrix_agent {
         refused)
             printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2
             return 2;;
+        passthrough|utility|print|conversation) ;;
+        *) return 1;;
     esac
     executable=$(type -P "$agent")
     if [[ $route == passthrough ]]; then
@@ -484,24 +640,22 @@ function codex { agentrix_agent codex "$@"; }
 function claude { agentrix_agent claude "$@"; }
 __pg_hook_agent() {
     local agent=$1 route=$2 executable=$3; shift 3
-    local result settings word
+    local result settings
     if [ -z "$executable" ]; then printf 'Claude Code CLI was not found on this SSH host.\n'; return 127; fi
-    local model effort seat_fast seat_map ultracode legacy_seats fast=0 ultra=0
-    local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-    local seat_valid=0
-    if [[ $route != utility && -r ${AGENTRIX_CLAUDE_LEAD_FILE-} ]] &&
-        { IFS= read -r model && IFS= read -r effort && IFS= read -r seat_fast && {
-            # Old files put the seat map on line 6, after two retired fields.
-            IFS= read -r seat_map || :
-            if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
-        }; } < "$AGENTRIX_CLAUDE_LEAD_FILE" &&
-        [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $seat_fast == 0 || $seat_fast == 1 ) ]]; then
-        seat_valid=1
-        fast=$seat_fast
-        [[ $ultracode == ultracode ]] && ultra=1
+    local model effort seat_map fast=0 ultra=0 session_mode=native unusable=0
+    local lead_file=${AGENTRIX_CLAUDE_LEAD_FILE-}
+    if [[ $route != utility && -n $lead_file ]]; then
+        __pg_load_launch_seat "$lead_file" || {
+            if [[ $? == 2 ]]; then unusable=1; fi
+            model= effort= seat_map=
+        }
+        __pg_load_mode "${lead_file%.*}.mode" || { session_mode=native; unusable=1; }
+    fi
+    if [[ $unusable == 1 ]]; then
+        printf '%s\n' '座位文件版本不受支持' >&2
+        model= effort= seat_map= fast=0 ultra=0
     fi
     [[ ${seat_map-} == \{* ]] || seat_map=null
-    [[ $seat_valid == 1 ]] || { model=; effort=; }
     __pg_emit agent-started "$(__pg_command "$@")" "$agent"
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
     settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" "$ultra" <<'PY'
@@ -519,7 +673,7 @@ print(json.dumps(settings))
 PY
     )
     local role_tools= role_error= current_note=$(__pg_reading_note)
-    if [[ $route == conversation ]] && [[ $(cat "${AGENTRIX_CLAUDE_LEAD_FILE%/*}/dispatch.json.mode" 2>/dev/null) == conductor ]]; then
+    if [[ $route == conversation && $session_mode == conductor ]]; then
         if [[ -n $__pg_role_tools ]]; then role_tools=$__pg_role_tools
         else role_error=$__pg_role_error; fi
     fi
@@ -530,21 +684,34 @@ PY
     local -a background=(-u CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
     allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
     [[ $allowed == 1 ]] || background+=(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1)
-    local -a launch_args=()
-    local reading_args=
-    while IFS= read -r -d '' word; do
-        if [[ -n $reading_args ]]; then launch_args+=("$word"); elif [[ $word == -- ]]; then reading_args=1; fi
-    done < <(AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" AGENTRIX_LAUNCH_NOTE="$current_note" \
-        AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_LAUNCH_ROLE="$role_tools" AGENTRIX_LAUNCH_ROLE_ERROR="$role_error" __pg_launch_plan "$agent" words)
     result=1
-    if [[ -n $reading_args ]]; then
-        command env "${background[@]}" AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
-            "$executable" "${launch_args[@]}" "$@"
+    local -a launch_args=() launch_unsets=() launch_env=()
+    if __pg_read_launch_words < <(AGENTRIX_LAUNCH_MODEL="$model" AGENTRIX_LAUNCH_EFFORT="$effort" AGENTRIX_LAUNCH_NOTE="$current_note" \
+        AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_LAUNCH_ROLE="$role_tools" AGENTRIX_LAUNCH_ROLE_ERROR="$role_error" __pg_launch_plan "$agent" words); then
+        command env "${launch_unsets[@]}" "${background[@]}" "${launch_env[@]}" AGENTRIX_SKIP_LIVE_SEATS="$unusable" \
+            AGENTRIX_SEATS="{\"format\":\"agentrix.seat-map\",\"version\":1,\"seats\":$seat_map}" \
+            AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" "${launch_args[@]}" "$@"
         result=$?
     fi
     rm -f -- "$settings_file"
     __pg_emit agent-exited "$result" "$agent"
     return "$result"
+}
+__pg_read_launch_words() {
+    local record key value format version format_seen=0 version_seen=0
+    while IFS= read -r -d '' record; do
+        [[ $record == *=* ]] || return 1
+        key=${record%%=*}
+        value=${record#*=}
+        case $key in
+            format) [[ $format_seen == 0 ]] || return 1; format=$value; format_seen=1;;
+            version) [[ $version_seen == 0 ]] || return 1; version=$value; version_seen=1;;
+            unset) [[ $value =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || return 1; launch_unsets+=(-u "$value");;
+            env) [[ $value =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]] || return 1; launch_env+=("$value");;
+            arg) launch_args+=("$value");;
+        esac
+    done
+    [[ -z $record && $format == agentrix.launch-words && $version == 1 ]]
 }
 __pg_launch_plan() {
     local agent=$1 action=$2; shift 2
@@ -1243,7 +1410,7 @@ class CodexActivityReader:
             return dict(self.snapshot) if self.offset >= size else None
 
 # Marked lines, because a login shell's startup files may print anything before them.
-CODEX_LOOKUP = r'''printf '\nAGENTRIX_CODEX=%s\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$(type -P node)" "$PATH"'''
+CODEX_LOOKUP = r'''printf '\nAGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=%s\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$(type -P node)" "$PATH"'''
 
 def login_tools(env):
     """Resolve the remote tools and their PATH from the same login shell."""
@@ -1254,12 +1421,18 @@ def login_tools(env):
     result = subprocess.run(["/bin/bash", "-lic", CODEX_LOOKUP], env=dict(env),
         stdin=subprocess.DEVNULL, start_new_session=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-    found = dict(line.split(b"=", 1) for line in result.stdout.splitlines() if line.startswith((b"AGENTRIX_CODEX=", b"AGENTRIX_NODE=", b"AGENTRIX_PATH=")))
+    keys = (b"AGENTRIX_LOOKUP_VERSION", b"AGENTRIX_CODEX", b"AGENTRIX_NODE", b"AGENTRIX_PATH")
+    found = {}
+    for line in result.stdout.splitlines():
+        key, equals, value = line.partition(b"=")
+        if equals and key in keys: found[key] = value
     if b"AGENTRIX_CODEX" not in found:
         # A startup file that runs exec or exit ends the shell before the lookup: that is not a missing Codex.
         tail = " / ".join(result.stderr.decode("utf-8", "replace").strip().splitlines()[-3:])[-500:]
         raise ValueError("远端登录 shell 没有执行到 Codex 查找（退出码 %s）。请检查远端 ~/.bash_profile、~/.profile 和 ~/.bashrc 中的 exec 或 exit。%s"
             % (result.returncode, tail))
+    version = found.pop(b"AGENTRIX_LOOKUP_VERSION", b"(missing)")
+    check_wire_version("AGENTRIX_LOOKUP_VERSION", version.decode("utf-8", "replace"), 1 if version == b"1" else None, (1,))
     return {os.fsdecode(key): os.fsdecode(value) for key, value in found.items()}
 
 def login_executable(tools, key):
@@ -2100,14 +2273,22 @@ class Worker:
         self.write_routing_file(name, note)
         return True
 
+    def terminal_manifest(self):
+        modules = getattr(self, "dispatch_modules", None)
+        envelope = modules.get("shims/launchers.cjs", "") if isinstance(modules, dict) else ""
+        prefix = "const terminalWire = "
+        if envelope.startswith(prefix):
+            return read_terminal_wire(envelope.partition("\n")[0][len(prefix):-1])
+
     def agent_environment(self, reading_note, native=False):
+        document = self.terminal_manifest()
+        wire = document["value"] if document else {}
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.write_background_choice()
         self.write_claude_lead(self.claude_lead)
         lead = self.claude_lead or {}
         seat_map = lead.get("launchSeatsMap", lead.get("seatsMap"))
-        encoded = json.dumps(seat_map, separators=(",", ":"))
-        if len(encoded.encode("utf-8")) > 8192: encoded = "null"
+        encoded = encode_seat_map(seat_map if len(json.dumps(seat_map, separators=(",", ":")).encode("utf-8")) <= SEAT_MAP_LIMIT else None)
         self.launch_seats = encoded
         self.write_routing_file("dispatch.json.launch-seats", encoded)
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
@@ -2121,10 +2302,6 @@ class Worker:
         os.chmod(os.path.join(self.temp, "skill-note.txt"), 0o600)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
-        modules = getattr(self, "dispatch_modules", None)
-        envelope = modules.get("shims/launchers.cjs", "") if isinstance(modules, dict) else ""
-        prefix = "const terminalWire = "
-        wire = json.loads(envelope.partition("\n")[0][len(prefix):-1]) if envelope.startswith(prefix) else {}
         if wire: self.write_routing_file("terminal-wire.json", json.dumps(wire))
         for filename, content in ((notify_file, NOTIFY_SOURCE), (rc_file, BASH_SOURCE)):
             with open(filename, "w", encoding="utf-8") as target: target.write(content)
@@ -2146,8 +2323,10 @@ class Worker:
                 server = dict(self.role_server("claude"))
                 server["type"] = role["type"]
                 env["AGENTRIX_ROLE_TOOLS"] = role["prefix"] + json.dumps({role["table"]: {role["name"]: server}}, separators=(",", ":"))
-                env["AGENTRIX_ROLE_NODE"] = server["command"]
-                env["AGENTRIX_ROLE_INTERCEPT"] = os.path.join(os.path.dirname(server["args"][0]), "electron", "shims", "intercept.cjs")
+                # A v0 launcher prints positional records. The Python fallback can read both manifest versions.
+                if not document["legacy"]:
+                    env["AGENTRIX_ROLE_NODE"] = server["command"]
+                    env["AGENTRIX_ROLE_INTERCEPT"] = os.path.join(os.path.dirname(server["args"][0]), "electron", "shims", "intercept.cjs")
         elif self.dispatch_error and not native: env["AGENTRIX_ROLE_ERROR"] = self.dispatch_error
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
@@ -2209,12 +2388,12 @@ class Worker:
             os.replace(temporary, filename)
 
     def write_claude_lead(self, lead):
-        text = ""
+        text, lead_env = "", None
         if lead is not None and not isinstance(lead, dict): raise ValueError("Invalid Claude lead seat.")
         seat_map = lead.get("seatsMap") if lead is not None else None
         if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
         encoded = json.dumps(seat_map, separators=(",", ":"))
-        if len(encoded.encode("utf-8")) > 8192: raise ValueError("Routing seat snapshot too large.")
+        if len(encoded.encode("utf-8")) > SEAT_MAP_LIMIT: raise ValueError("Routing seat snapshot too large.")
         conductor = lead.get("conductor") if lead is not None else None
         if conductor is not None and type(conductor) is not bool: raise ValueError("Invalid conductor mode.")
         if lead is not None and set(lead) - {"seatsMap", "launchSeatsMap", "conductor"}:
@@ -2225,11 +2404,21 @@ class Worker:
                     or not isinstance(effort, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", effort)
                     or type(fast) is not bool or type(ultracode) is not bool):
                 raise ValueError("Invalid Claude lead seat.")
-            text = "\n".join([model, effort, "1" if fast else "0", encoded] + (["ultracode"] if ultracode else []) + [""])
+            fast_flag = "1" if fast else "0"
+            text = "\n".join([model, effort, fast_flag, encoded] + (["ultracode"] if ultracode else []) + [""])
+            lead_env = write_shell_fields("agentrix.lead-seat", model=model, effort=effort, fast=fast_flag,
+                                         ultracode="1" if ultracode else "0", seats=encoded)
         self.write_routing_file("dispatch.json.lead", text)
-        self.write_routing_file("dispatch.json.seats", encoded)
+        if lead_env is None:
+            try: os.unlink(os.path.join(self.temp, "dispatch.json.lead.env"))
+            except FileNotFoundError: pass
+        else:
+            self.write_routing_file("dispatch.json.lead.env", lead_env)
+        self.write_routing_file("dispatch.json.seats", encode_seat_map(seat_map))
         if conductor is not None or self.claude_lead is None:
-            self.write_routing_file("dispatch.json.mode", "conductor" if conductor else "native")
+            mode = "conductor" if conductor else "native"
+            self.write_routing_file("dispatch.json.mode", mode)
+            self.write_routing_file("dispatch.json.mode.env", write_shell_fields("agentrix.session-mode", mode=mode))
         self.claude_lead = lead
 
     def write_routing_file(self, name, text):
@@ -2278,7 +2467,9 @@ class Worker:
                     dispatch = str(event.get("type", "")).startswith("dispatch-")
                     if dispatch:
                         if event.pop("sessionKey", None) != self.token or event.get("projectId") != self.project_id: continue
-                    elif event.pop("token", None) != self.token: continue
+                    else:
+                        if event.pop("token", None) != self.token: continue
+                        read_wire_envelope(event, channel="shell")
                     # Remove next version. Older emitters can still be attached.
                     for old, new in (("codex-started", "agent-started"), ("codex-exited", "agent-exited")):
                         if event.get("type") == old: event["type"] = new

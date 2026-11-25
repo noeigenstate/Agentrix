@@ -95,6 +95,7 @@
     "tests/wire-format.test.cjs": [
       "integration/BOUNDARY.md",
       "integration/shims/BOUNDARY.md",
+      "electron/features/ssh/BOUNDARY.md",
       "electron/features/agents/BOUNDARY.md",
       "electron/features/team/BOUNDARY.md",
       "electron/features/terminal-events/BOUNDARY.md",

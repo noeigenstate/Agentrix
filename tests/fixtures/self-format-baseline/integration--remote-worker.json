@@ -1,5 +1,0 @@
-{
-  "integration/remote-worker.py :: ordered-shell-lines": 2,
-  "integration/remote-worker.py :: whole-word": 5,
-  "integration/remote-worker.py :: word-marker": 1
-}

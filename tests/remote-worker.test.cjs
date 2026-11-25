@@ -12,8 +12,8 @@ const { specialtyCases } = require('./seat-auto.test.cjs');
 function pythonProbe(t, script, timeout = 20_000) {
   const envelope = require('../integration/shims/intercept.cjs').runtimeFiles()['shims/launchers.cjs'];
   const wire = envelope.split('\n')[0].slice('const terminalWire = '.length, -1);
-  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
-    path.join(__dirname, '../integration/remote-worker.py'), wire], { encoding: 'utf8', timeout, windowsHide: true });
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-B', '-c', script,
+    path.join(__dirname, '../integration/remote-worker.py'), wire], { encoding: 'utf8', timeout, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
   if (result.error?.code === 'ENOENT') { t.skip('Python missing'); return null; }
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   return result.stdout;
@@ -103,7 +103,7 @@ if not bash:
     sys.exit(0)
 source = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'BASH_SOURCE' for target in node.targets))
 assert '$' + '{name^^}' not in source and 'compgen -e' not in source
-source = source[source.index('function agentrix_agent {'):source.index('\n__pg_prompt()')]
+source = source[source.index('__pg_read_wire()'):source.index('\n__pg_prompt()')]
 with tempfile.TemporaryDirectory(prefix='remote-nobg-') as directory:
     root = pathlib.Path(directory)
     notify = root / 'notify'
@@ -138,25 +138,116 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
     connection.worker.temp = directory
     file = pathlib.Path(directory) / 'dispatch.json.lead'
     mode = pathlib.Path(directory) / 'dispatch.json.mode'
+    seat_env = file.with_suffix('.lead.env')
+    mode_env = mode.with_suffix('.mode.env')
     seats = {'researcher': {'model':'sonnet', 'effort':'high'}}
     first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True, 'ultracode':True, 'seatsMap':seats}
     current = {'model':'sonnet', 'effort':'medium'}
     connection.worker.write_claude_lead(first)
     assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\n{"researcher":{"model":"sonnet","effort":"high"}}\nultracode\n'
+    def fields(sidecar, kind):
+        return module['read_key_value'](sidecar.read_bytes().decode('utf-8'), 'agentrix.' + kind)
+    assert fields(seat_env, 'lead-seat') == dict(format='agentrix.lead-seat', version='1', model=first['model'], effort='high',
+                                                  fast='1', ultracode='1', seats='{"researcher":{"model":"sonnet","effort":"high"}}')
     def update(lead, ok):
         connection.receive({'op':'claude-lead', 'id':len(messages)+1, 'claudeLead':lead})
         assert messages[-1]['type'] == 'response' and messages[-1]['ok'] is ok, messages
     update(dict(current, conductor=True), True)
     assert mode.read_text() == 'conductor'
+    assert fields(mode_env, 'session-mode')['mode'] == 'conductor'
+    saved_seat, saved_mode = seat_env.read_bytes(), mode_env.read_bytes()
     for bad in [dict(current, model='bad&model'), dict(current, model='x'*161), dict(current, effort='High'),
                 dict(current, effort='x'*33), dict(current, fast='true'), dict(current, ultracode=1), dict(current, conductor=1), dict(first, seatsMap={'padding':'x'*8192})]:
         update(bad, False)
         assert file.read_bytes() == b'sonnet\nmedium\n0\nnull\n'
         assert mode.read_text() == 'conductor'
+        assert seat_env.read_bytes() == saved_seat and mode_env.read_bytes() == saved_mode
     update({'seatsMap': {}, 'conductor': False}, True)
     assert mode.read_text() == 'native'
+    assert fields(mode_env, 'session-mode')['mode'] == 'native'
     update(None, True)
     assert file.read_bytes() == b''
+    assert not seat_env.exists()
+`);
+});
+
+test('the SSH Python launcher writes keyed routes and NUL-delimited arguments for both manifest versions', t => {
+  pythonProbe(t, String.raw`
+import json, os, pathlib, runpy, subprocess, sys, tempfile
+worker = runpy.run_path(sys.argv[1])
+wire = json.loads(sys.argv[2])
+with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
+    root = pathlib.Path(directory)
+    notifier = root / 'notify.py'
+    notifier.write_bytes(worker['NOTIFY_SOURCE'].encode('utf-8'))
+    manifest = root / 'terminal-wire.json'
+    def launch(agent, action, *args):
+        return subprocess.run([sys.executable, str(notifier), 'terminal-launch', agent, action, *args],
+                              env=dict(os.environ, AGENTRIX_LAUNCH_NOTE='hello\nworld=a=b',
+                                       AGENTRIX_LAUNCH_MODEL='sonnet', AGENTRIX_LAUNCH_EFFORT='high'),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+    legacy = {key: value for key, value in wire.items() if key not in ('format', 'version')}
+    for document in (legacy, dict(legacy, format='agentrix.terminal-wire', version=1)):
+        manifest.write_text(json.dumps(document), encoding='utf-8')
+        for agent, args, route in (('claude', ('--model=sonnet',), 'refused'), ('claude', ('--version',), 'utility'),
+                                  ('claude', ('-p',), 'print'), ('claude', ('--', '--model=sonnet'), 'conversation'),
+                                  ('codex', (), 'native'), ('codex', ('--version',), 'passthrough')):
+            result = launch(agent, 'classify', *args)
+            assert result.returncode == 0, result.stderr
+            assert worker['read_key_value'](result.stdout.decode('utf-8'), 'agentrix.launch-route')['route'] == route
+        result = launch('claude', 'words')
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split(b'\0') == [b'format=agentrix.launch-words', b'version=1', b'arg=--append-system-prompt',
+                                               b'arg=hello\nworld=a=b', b'arg=--model', b'arg=sonnet', b'arg=--effort', b'arg=high', b'']
+    manifest.write_text(json.dumps(dict(legacy, format='agentrix.terminal-wire', version=19)), encoding='utf-8')
+    result = launch('claude', 'classify')
+    assert result.returncode != 0 and not result.stdout
+    assert result.stderr.decode('utf-8').splitlines() == ['agentrix.terminal-wire: unsupported version 19']
+`);
+});
+
+test('the SSH lookup requires a supported version and preserves exact path bytes amid login noise', t => {
+  pythonProbe(t, String.raw`
+import os, runpy, sys
+from unittest.mock import Mock, patch
+worker = runpy.run_path(sys.argv[1])
+assert 'AGENTRIX_LOOKUP_VERSION=1' in worker['CODEX_LOOKUP']
+path = '/tools/测试=a=b'.encode('utf-8')
+output = b'login banner\nAGENTRIX_CODEX=\nAGENTRIX_NODE=/bin/node\nAGENTRIX_PATH=' + path + b'\n'
+with patch.object(worker['subprocess'], 'run') as run:
+    run.return_value = Mock(stdout=output + b'AGENTRIX_LOOKUP_VERSION=1\n', stderr=b'', returncode=0)
+    tools = worker['login_tools']({})
+    assert tools['AGENTRIX_CODEX'] == '' and tools['AGENTRIX_NODE'] == '/bin/node'
+    assert os.fsencode(tools['AGENTRIX_PATH']) == path
+    for field in (b'', b'AGENTRIX_LOOKUP_VERSION=23\n', b'AGENTRIX_LOOKUP_VERSION=01\n'):
+        run.return_value.stdout = output + field
+        try:
+            worker['login_tools']({})
+        except worker['WireError'] as error:
+            assert error.code == 'wire.unsupported_version' and 'AGENTRIX_LOOKUP_VERSION' in str(error)
+        else:
+            raise AssertionError(field)
+`);
+});
+
+test('the SSH notifier versions shell and hook events and keeps the legacy start name on the wire', t => {
+  pythonProbe(t, String.raw`
+import io, json, os, runpy, socket, sys
+from unittest.mock import patch
+worker = runpy.run_path(sys.argv[1])
+for argv, payload, kind in [
+        (['shell-prompt', '1', '0'], {}, 'shell-prompt'),
+        (['codex-started', '', 'codex', '["resume","--last"]'], {}, 'codex-started'),
+        (['claude-hook', 'stop'], {'session_id':'fixture'}, 'agent-activity'),
+        (['notify', '{"type":"agent-turn-complete","thread-id":"t","turn-id":"r"}'], {}, 'turn-complete')]:
+    with patch.object(socket, 'socket') as connect, patch.object(socket, 'AF_UNIX', 1, create=True), \
+         patch.object(sys, 'argv', ['notify.py'] + argv), patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \
+         patch.dict(os.environ, AGENTRIX_TOKEN='fixture', AGENTRIX_SOCKET='fixture'):
+        exec(worker['NOTIFY_SOURCE'], {})
+    sent = connect.return_value.__enter__.return_value.sendall.call_args[0][0]
+    assert sent.endswith(b'\n')
+    event = json.loads(sent)
+    assert (event['v'], event['type'], event['token']) == (1, kind, 'fixture')
 `);
 });
 
@@ -188,7 +279,8 @@ def invoke(case, globals=None):
     result = {}
     if out.getvalue(): result['output'] = json.loads(out.getvalue())
     if event.called:
-        observed = json.loads(event.call_args.args[0])
+        observed = json.loads(event.call_args[0][0])
+        assert observed['v'] == 1
         result['observed'] = {key: observed[key] for key in ('toolUseId','sessionId','model','effort','phase')}
         if 'expected' in observed: result['observed']['expected'] = observed['expected']
     return result
@@ -206,7 +298,7 @@ with tempfile.TemporaryDirectory(prefix='live-ssh-seats-') as directory:
     new = {'reviewer': {'model': 'sonnet', 'effort': 'medium'}}
     channel.receive({'op': 'claude-lead', 'id': 1, 'claudeLead': {'seatsMap': new}})
     assert messages[-1]['ok']
-    assert json.loads(sidecar.read_bytes()) == new
+    assert json.loads(sidecar.read_bytes()) == {'format':'agentrix.seat-map', 'version':1, 'seats':new}
     if os.name != 'nt': assert sidecar.stat().st_mode & 0o777 == 0o600
     assert invoke(old, hook_globals) == cases[2]['expected']
     coder = {'reviewer': {'model': 'gpt-6.2-sol', 'effort': 'high', 'fast': True}}
@@ -215,10 +307,23 @@ with tempfile.TemporaryDirectory(prefix='live-ssh-seats-') as directory:
     warning = invoke(old, hook_globals)
     assert 'dispatch helper' in warning['output']['systemMessage']
     assert warning['observed']['expected'] == coder['reviewer']
+    sidecar.write_text(json.dumps({'format':'agentrix.seat-map', 'version':2, 'seats':new}))
+    assert invoke(old, hook_globals) == {}
+    sidecar.write_text(json.dumps(new))
+    assert invoke(old, hook_globals) == cases[2]['expected']
     sidecar.write_text('{"reviewer":{"model":"-bad","effort":"medium"}}')
     assert invoke(old, hook_globals) == old['expected']
     channel.close()
+`);
+});
 
+test('SSH keeps the versioned launch snapshot fixed while the live seat map changes', t => {
+  pythonProbe(t, String.raw`
+import contextlib, json, pathlib, runpy, socket, sys, tempfile
+from unittest.mock import patch
+module = runpy.run_path(sys.argv[1])
+new = {'reviewer': {'model': 'sonnet', 'effort': 'medium'}}
+coder = {'reviewer': {'model': 'gpt-6.2-sol', 'effort': 'high', 'fast': True}}
 with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
     worker = module['Worker'](lambda event: None)
     folder = pathlib.Path(directory)
@@ -236,19 +341,17 @@ with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
         for fixture in fixtures: stack.enter_context(fixture)
         env, _ = worker.agent_environment('', native=True)
     bootstrap = pathlib.Path(env['AGENTRIX_BOOTSTRAP'])
-    assert json.loads(bootstrap.with_suffix('.json.seats').read_bytes()) == new
+    assert json.loads(bootstrap.with_suffix('.json.seats').read_bytes())['seats'] == new
     launch = bootstrap.with_suffix('.json.launch-seats')
-    assert json.loads(launch.read_bytes()) == coder
+    encoded = {'format':'agentrix.seat-map', 'version':1, 'seats':coder}
+    assert json.loads(launch.read_bytes()) == json.loads(env['AGENTRIX_SEATS']) == encoded
     worker.write_claude_lead({'seatsMap': {}})
-    assert json.loads(launch.read_bytes()) == coder
+    assert json.loads(launch.read_bytes()) == encoded
 `);
 });
 
-test('SSH Bash applies Fast and Ultracode on conversation launches and reads legacy lead files', {
-  skip: process.platform === 'win32' && !process.env.AGENTRIX_TEST_BASH,
-}, t => {
-  const output = pythonProbe(t, String.raw`
-import os, pathlib, runpy, shutil, subprocess, sys, tempfile
+const bashSeatProbe = String.raw`
+import json, os, pathlib, runpy, shutil, subprocess, sys, tempfile
 module = runpy.run_path(sys.argv[1])
 bash = os.environ.get('AGENTRIX_TEST_BASH') or shutil.which('bash', path='/usr/bin:/bin')
 if not bash:
@@ -257,7 +360,7 @@ if not bash:
 with tempfile.TemporaryDirectory(prefix='remote-lead-shell-') as directory:
     root = pathlib.Path(directory)
     notify = root / 'notify'
-    notify.write_bytes(runpy.run_path(sys.argv[1])['NOTIFY_SOURCE'].encode('utf-8'))
+    notify.write_bytes(module['NOTIFY_SOURCE'].encode('utf-8'))
     (root / 'terminal-wire.json').write_text(sys.argv[2], encoding='utf-8')
     stub = root / 'claude'
     stub.write_bytes('''#!/bin/sh
@@ -286,7 +389,17 @@ PATH="$PWD:$PATH"
 claude --resume fixture
 claude
 claude --version
+__pg_role_tools='--mcp-config=fixture'
+printf '\\357\\273\\277' > "$AGENTRIX_CLAUDE_LEAD_FILE.env"
+printf '%s\\n' 'seats={}' 'ultracode=0' 'effort=medium' 'format=agentrix.lead-seat' 'model=opus' 'version=1' >> "$AGENTRIX_CLAUDE_LEAD_FILE.env"
+printf %s 'fast=1' >> "$AGENTRIX_CLAUDE_LEAD_FILE.env"
+printf '%s\\n' 'mode=conductor' 'format=agentrix.session-mode' 'version=1' > dispatch.json.mode.env
+claude
 printf '%s\\n' sonnet high 0 opus haiku '{}' > "$AGENTRIX_CLAUDE_LEAD_FILE"
+printf '%s\\n' 'seats={}' 'ultracode=1' 'effort=high' 'format=agentrix.lead-seat' 'model=opus' 'version=71' 'fast=1' > "$AGENTRIX_CLAUDE_LEAD_FILE.env"
+printf '%s\\n' 'version=71' 'mode=conductor' 'format=agentrix.session-mode' > dispatch.json.mode.env
+claude
+rm -- "$AGENTRIX_CLAUDE_LEAD_FILE.env" dispatch.json.mode.env
 claude
 printf '%s\\n' sonnet high 0 > "$AGENTRIX_CLAUDE_LEAD_FILE"
 claude
@@ -301,18 +414,28 @@ claude
                             env=env, encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90 if sys.platform == 'win32' else 40)
     assert result.returncode == 0, result.stderr
     conversation = ['--model', 'sonnet', '--effort', 'high']
+    def seat_map(seats):
+        return json.dumps({'format':'agentrix.seat-map', 'version':1, 'seats':seats}, separators=(',', ':'))
     assert [line.split('|') for line in result.stdout.splitlines() if line.startswith('values=')] == [
-        ['values=', '', '{}', *conversation, '--resume', 'fixture'],
-        ['values=', '', '{}', *conversation],
-        ['values=', '', 'null', '--version'],
-        ['values=', '', '{}', *conversation],
-        ['values=', '', 'null', *conversation],
-        ['values=', '', 'null', ''],
+        ['values=', '', seat_map({}), *conversation, '--resume', 'fixture'],
+        ['values=', '', seat_map({}), *conversation],
+        ['values=', '', seat_map(None), '--version'],
+        ['values=', '', seat_map({}), '--model', 'opus', '--effort', 'medium', '--mcp-config=fixture'],
+        ['values=', '', seat_map(None), ''],
+        ['values=', '', seat_map({}), *conversation],
+        ['values=', '', seat_map(None), *conversation],
+        ['values=', '', seat_map(None), ''],
     ], result.stdout
     assert [line for line in result.stdout.splitlines() if line.startswith('settings=')] == [
-        'settings=1|1', 'settings=1|1', 'settings=0|0', 'settings=0|0', 'settings=0|0', 'settings=0|0',
+        'settings=1|1', 'settings=1|1', 'settings=0|0', 'settings=1|0', 'settings=0|0', 'settings=0|0', 'settings=0|0', 'settings=0|0',
     ], result.stdout + result.stderr
-`, process.platform === 'win32' ? 110_000 : 50_000);
+    assert result.stderr.splitlines().count('座位文件版本不受支持') == 1, result.stderr
+`;
+
+test('SSH Bash applies Fast and Ultracode on conversation launches and reads legacy lead files', {
+  skip: process.platform === 'win32' && !process.env.AGENTRIX_TEST_BASH,
+}, t => {
+  const output = pythonProbe(t, bashSeatProbe, process.platform === 'win32' ? 110_000 : 50_000);
   if (output?.includes('SKIP Bash missing')) t.skip('Bash missing');
 });
 

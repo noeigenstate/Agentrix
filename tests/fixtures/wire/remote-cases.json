@@ -1,0 +1,50 @@
+[
+  {
+    "name": "SSH terminal manifest v0",
+    "kind": "envelope",
+    "format": "agentrix.terminal-wire",
+    "input": "{\"words\":{},\"claude\":{}}",
+    "version": 0
+  },
+  {
+    "name": "SSH terminal manifest v1",
+    "kind": "envelope",
+    "format": "agentrix.terminal-wire",
+    "input": "{\"claude\":{},\"format\":\"agentrix.terminal-wire\",\"words\":{},\"version\":1}",
+    "version": 1
+  },
+  {
+    "name": "SSH terminal manifest from a future release",
+    "kind": "envelope",
+    "format": "agentrix.terminal-wire",
+    "input": "{\"format\":\"agentrix.terminal-wire\",\"version\":17,\"words\":{},\"claude\":{}}",
+    "error": "wire.unsupported_version",
+    "received": "17"
+  },
+  {
+    "name": "SSH seat map v1",
+    "kind": "envelope",
+    "format": "agentrix.seat-map",
+    "input": "{\"format\":\"agentrix.seat-map\",\"version\":1,\"seats\":{\"developer\":{\"model\":\"sonnet\",\"effort\":\"high\"}}}",
+    "version": 1
+  },
+  {
+    "name": "SSH seat map rejects a boolean version",
+    "kind": "envelope",
+    "format": "agentrix.seat-map",
+    "input": "{\"format\":\"agentrix.seat-map\",\"version\":true,\"seats\":{}}",
+    "error": "wire.unsupported_version",
+    "received": "true"
+  },
+  {
+    "name": "SSH launcher routes by key",
+    "kind": "kv",
+    "format": "agentrix.launch-route",
+    "input": "route=conversation\nversion=1\nformat=agentrix.launch-route\n",
+    "expected": {
+      "route": "conversation",
+      "version": "1",
+      "format": "agentrix.launch-route"
+    }
+  }
+]

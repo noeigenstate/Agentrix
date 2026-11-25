@@ -1,6 +1,7 @@
 """Independent Python 3.6-compatible reader for the shared wire vectors."""
 import json
 import re
+import runpy
 import sys
 
 
@@ -51,10 +52,15 @@ def key_values(text, case, versions):
     return values
 
 
-def run_case(case):
+def fixture_text(case):
     text = case["input"]
     if "repeat" in case:
         text += case["repeat"][0] * case["repeat"][1]
+    return text
+
+
+def run_case(case):
+    text = fixture_text(case)
     channel = case.get("channel") or case.get("format") or ("JSONL" if case["kind"] == "envelope" else "key=value")
     versions = case.get("versions", [1])
     try:
@@ -67,5 +73,24 @@ def run_case(case):
         return {"code": error.args[0], "message": source + ": " + error.args[1]}
 
 
-with open(sys.argv[1], encoding="utf-8") as fixture:
-    print(json.dumps([run_case(case) for case in json.load(fixture)]))
+def run_worker_case(case, worker):
+    text = fixture_text(case)
+    options = {name: case[name] for name in ("format", "versions") if name in case}
+    try:
+        if case["kind"] == "envelope":
+            options.update({name: case[name] for name in ("channel", "legacy") if name in case})
+            return {"value": worker["read_wire_envelope"](text, **options)}
+        values = worker["read_key_value"](text, **options)
+        return {"value": values, "written": worker["write_key_value"](values, **options)}
+    except worker["WireError"] as error:
+        return {"code": error.code, "message": str(error)}
+
+
+if __name__ == "__main__":
+    with open(sys.argv[1], encoding="utf-8") as fixture:
+        cases = json.load(fixture)
+    if len(sys.argv) > 2:
+        worker = runpy.run_path(sys.argv[2])
+        print(json.dumps([run_worker_case(case, worker) for case in cases]))
+    else:
+        print(json.dumps([run_case(case) for case in cases]))

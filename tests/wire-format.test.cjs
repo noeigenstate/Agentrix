@@ -6,6 +6,7 @@ const path = require('node:path');
 const { WIRE_FIELDS, readEnvelope, readKeyValue, writeKeyValue, readRoleResult, readSessionMode, readLeadSeat } =
   require('../electron/features/agents/dispatch-events.cjs');
 const cases = require('./fixtures/wire/cases.json');
+const remoteCases = require('./fixtures/wire/remote-cases.json');
 
 function runCase({ input, repeat, kind, ...options }) {
   const text = input + (repeat ? repeat[0].repeat(repeat[1]) : '');
@@ -37,18 +38,28 @@ test('wire fixtures preserve fields and reject unsupported versions with their c
   }
 });
 
-test('Node and isolated Python read the same wire fixtures', t => {
+test('Node, the isolated Python reference and the SSH worker agree on the wire fixtures', t => {
   const commands = process.platform === 'win32' ? [['python3'], ['python'], ['py', '-3']] : [['python3']];
   const selected = commands.find(([command, ...args]) =>
     spawnSync(command, [...args, '-I', '-c', 'import sys; sys.exit(sys.version_info < (3, 6))'], { timeout: 5000, windowsHide: true }).status === 0);
   if (!selected && process.platform === 'win32') return t.skip('No Python 3.6+ interpreter accepting -I was found on Windows');
   assert.ok(selected, 'python3 -I is required');
   const [command, ...args] = selected;
-  const python = spawnSync(command, [...args, '-I', path.join(__dirname, 'helpers/wire-reference.py'), path.join(__dirname, 'fixtures/wire/cases.json')],
-    { encoding: 'utf8', timeout: 10000, windowsHide: true });
-  assert.ifError(python.error);
-  assert.equal(python.status, 0, python.stderr);
-  assert.deepEqual(JSON.parse(python.stdout), cases.map(runCase));
+  const reference = path.join(__dirname, 'helpers/wire-reference.py');
+  const worker = path.join(__dirname, '../integration/remote-worker.py');
+  function readFixture(file, ...paths) {
+    const python = spawnSync(command, [...args, '-I', '-B', reference, path.join(__dirname, 'fixtures/wire', file), ...paths],
+      { encoding: 'utf8', timeout: 10000, windowsHide: true });
+    assert.ifError(python.error);
+    assert.equal(python.status, 0, python.stderr);
+    return JSON.parse(python.stdout);
+  }
+  for (const [file, fixtures] of [['cases.json', cases], ['remote-cases.json', remoteCases]]) {
+    const expected = fixtures.map(runCase);
+    assert.deepEqual(readFixture(file), expected);
+    assert.deepEqual(readFixture(file, worker), expected.map((parsed, i) =>
+      parsed.value && fixtures[i].kind === 'kv' ? { ...parsed, written: writeKeyValue(parsed.value, fixtures[i]) } : parsed));
+  }
 });
 
 for (const shell of ['bash', 'zsh', 'PowerShell']) test(`${shell} reads versioned key=value fields when installed`, t => {
