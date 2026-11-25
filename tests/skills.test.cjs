@@ -1277,7 +1277,17 @@ test('history moves once, deletes with the skill, caps versions, and loads only 
   assert.ok(!fs.existsSync(folder)); assert.equal(store.history.latest(info.id), null);
 });
 
-test('legacy history is capped on startup and cross-volume moves carry versions once without app-write races', async t => {
+function emulateCrossVolumeMove(t) {
+  const rename = fs.renameSync.bind(fs);
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (path.basename(from) === 'source' && path.basename(to).startsWith('.agentrix-move-')) {
+      throw Object.assign(new Error('synthetic cross-volume move'), { code: 'EXDEV' });
+    }
+    return rename(from, to);
+  });
+}
+
+test('legacy history is capped on startup and cross-volume moves carry versions once', async t => {
   const { store, projects } = fixture(t, ({ dataDir }) => {
     const id = 'user:legacy', folder = path.join(dataDir, 'skill-history', safeId(id)), versions = [];
     for (let version = 1; version <= 25; version++) {
@@ -1290,19 +1300,90 @@ test('legacy history is capped on startup and cross-volume moves carry versions 
   const original = store.entry('user:legacy'), oldFolder = store.history.folder(original.id);
   assert.equal(store.read(original.id).versions.length, MAX_VERSIONS);
   assert.equal(fs.readdirSync(oldFolder).filter(name => name.endsWith('.md')).length, MAX_VERSIONS);
-  const rename = fs.promises.rename.bind(fs.promises);
-  t.mock.method(fs.promises, 'rename', async (from, to) => {
-    if (from === path.dirname(original.path)) {
-      assert.equal(store.refresh().find(item => item.id === original.id).version, 25);
-      const concurrent = await store.save(null, draft('concurrent'));
-      assert.deepEqual([concurrent.title, concurrent.summary, concurrent.source], ['concurrent', 'A tested procedure.', 'user']);
-      throw Object.assign(new Error('synthetic cross-volume move'), { code: 'EXDEV' });
-    }
-    return rename(from, to);
+  emulateCrossVolumeMove(t);
+  const copy = fs.cpSync.bind(fs);
+  t.mock.method(fs, 'cpSync', (from, to, options) => {
+    assert.equal(store.refresh().find(item => item.id === original.id).version, 25);
+    return copy(from, to, options);
   });
   const moved = await store.save(original.id, draft('legacy-moved', 'project', projects[0].id));
   assert.equal(moved.version, 26); assert.equal(store.read(moved.id).versions.length, MAX_VERSIONS);
   assert.ok(!fs.existsSync(oldFolder));
+});
+
+test('a concurrent empty destination blocks a skill move without replacing the folder', async t => {
+  const { store, projects } = fixture(t);
+  const original = await store.save(null, draft('original'));
+  const destination = path.join(projects[0].path, 'skills', 'claimed');
+  const mkdir = fs.mkdirSync.bind(fs);
+  let owner;
+  t.mock.method(fs, 'mkdirSync', (folder, options) => {
+    if (folder === destination) { mkdir(folder); owner = fs.statSync(folder).ino; }
+    return mkdir(folder, options);
+  });
+  await assert.rejects(store.save(original.id, draft('claimed', 'project', 'p1')), /同名/);
+  assert.equal(fs.statSync(destination).ino, owner);
+  assert.deepEqual(fs.readdirSync(destination), []);
+  assert.equal(store.read(original.id).text, fs.readFileSync(original.path, 'utf8'));
+});
+
+test('skill migration resumes after partial copy and partial removal without dropping original assets', async t => {
+  const { store, options, projects, dataDir, errors } = fixture(t);
+  const original = await store.save(null, draft('original'));
+  store.setOptions(original.id, { trigger: 'always' });
+  const resource = path.join('templates', 'keep.md');
+  put(path.join(path.dirname(original.path), resource), 'original resource');
+  const originalText = store.read(original.id).text;
+  const copy = fs.cpSync.bind(fs), remove = fs.rmSync.bind(fs);
+  const journal = path.join(dataDir, 'skill-moves');
+  const next = path.join(projects[0].path, 'skills', 'migrated');
+  const busy = Object.assign(new Error('fixture busy'), { code: 'EBUSY' });
+  emulateCrossVolumeMove(t);
+  const cp = t.mock.method(fs, 'cpSync', (_from, to) => { put(path.join(to, resource), 'partial'); throw busy; });
+  await assert.rejects(store.save(original.id, draft('migrated', 'project', 'p1')), busy);
+  assert.equal(fs.existsSync(path.join(next, 'SKILL.md')), false);
+  const record = JSON.parse(fs.readFileSync(path.join(journal, fs.readdirSync(journal)[0]), 'utf8'));
+  assert.equal(record.phase, 'copy');
+  const hold = path.join(path.dirname(path.dirname(original.path)), fs.readdirSync(path.dirname(path.dirname(original.path)))[0]);
+  assert.equal(fs.readFileSync(path.join(hold, 'source', resource), 'utf8'), 'original resource');
+  cp.mock.mockImplementation(copy);
+  const rm = t.mock.method(fs, 'rmSync', (folder, params) => {
+    if (folder === hold) { remove(path.join(hold, 'source', resource), { force: true }); throw busy; }
+    return remove(folder, params);
+  });
+  const recovered = new SkillsStore(options);
+  t.after(() => recovered.close());
+  const moved = recovered.list().find(skill => skill.id === 'project:p1:migrated');
+  assert.deepEqual([moved.trigger, moved.version, recovered.read(moved.id).text], ['always', 1, originalText]);
+  assert.equal(fs.readFileSync(path.join(next, resource), 'utf8'), 'original resource');
+  assert.equal(recovered.list().some(skill => skill.id === original.id), false);
+  assert.ok(errors.includes(busy));
+  rm.mock.mockImplementation(remove);
+  assert.equal(recovered.list().find(skill => skill.id === moved.id).version, 1);
+  assert.deepEqual(fs.readdirSync(journal), []);
+  assert.equal(fs.existsSync(hold), false);
+});
+
+test('a same-volume move resumes when publication stops after moving an asset', async t => {
+  const { store, options, projects } = fixture(t);
+  const original = await store.save(null, draft('source'));
+  const folder = path.dirname(original.path), target = path.join(projects[0].path, 'skills', 'renamed');
+  put(path.join(folder, 'a.md'), 'first asset');
+  put(path.join(folder, 'b.md'), 'second asset');
+  const rename = fs.renameSync.bind(fs), blocked = new Error('publication stopped');
+  const operation = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to === path.join(target, 'b.md')) throw blocked;
+    return rename(from, to);
+  });
+  await assert.rejects(store.save(original.id, draft('renamed', 'project', 'p1')), blocked);
+  assert.equal(fs.existsSync(original.path), false);
+  assert.equal(fs.existsSync(path.join(target, 'SKILL.md')), false);
+  assert.equal(fs.readFileSync(path.join(target, 'a.md'), 'utf8'), 'first asset');
+  operation.mock.mockImplementation(rename);
+  const restarted = new SkillsStore(options);
+  t.after(() => restarted.close());
+  assert.equal(restarted.read('project:p1:renamed').versions.length, 1);
+  assert.equal(fs.readFileSync(path.join(target, 'b.md'), 'utf8'), 'second asset');
 });
 
 test('delivery is reused until relevant changes and successful reads publish usage without refreshing notes', async t => {

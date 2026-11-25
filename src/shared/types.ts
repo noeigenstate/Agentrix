@@ -188,7 +188,7 @@ export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: strin
 // epoch (a string) is new for each PTY spawn; attach answers in the IPC envelope, like every Result method; seq orders data within one epoch.
 export type WorkerTerminalSnapshot = { epoch: string; seq: number; data: string; cols: number; rows: number; awaiting: 'owner' | null; exited: boolean };
 export type WorkerTerminalPacket = { terminalId: string; callId: string; epoch: string; seq: number; data: string; exited?: undefined } | { terminalId: string; callId: string; epoch: string; exited: true; exitCode: number | null; seq?: undefined; data?: undefined };
-export type WorkerScreenPacket = { epoch: string; seq: number; cols: number; rows: number; data: string; exited?: true };
+export type WorkerScreenPacket = { epoch: string; seq: number; cols: number; rows: number; data: string; exited?: true; snapshotRequired?: true };
 export type WorkerMenuFrame = {
   kind: 'question' | 'plan' | 'permission';
   title: string;
@@ -540,6 +540,7 @@ type Bridge = {
   attachWorkerTerminal(terminalId: string, callId: string): Promise<Result<WorkerTerminalSnapshot | null>>;
   onWorkerTerminalData(callback: (packet: WorkerTerminalPacket) => void): () => void;
   onWorkerScreen(callback: (packet: WorkerScreenPacket) => void): () => void;
+  workerScreenSnapshot(epoch: string): Promise<Result<WorkerScreenPacket | null>>;
   reportWorkerMenu(epoch: string, seq: number, menu: WorkerMenuFrame | null): void;
   workerTerminalKeys(terminalId: string, callId: string, epoch: string, data: string): void;
   resizeWorkerTerminal(terminalId: string, callId: string, epoch: string, cols: number, rows: number): void;

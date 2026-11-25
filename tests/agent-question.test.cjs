@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { Terminal } = require('@xterm/xterm');
 const { choiceIdentity, parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const { parseQuestion } = require('../src/features/cli-screens/questions.ts');
 
@@ -161,6 +162,7 @@ test('the worker screen observer disposes escaped terminal instances on exit and
   let push, active = true;
   const stop = observeWorkerMenus({
     onWorkerScreen(fn) { push = fn; return () => { active = false; }; },
+    workerScreenSnapshot: assert.fail,
     reportWorkerMenu() {},
   }, () => {
     const number = disposed.length;
@@ -172,4 +174,46 @@ test('the worker screen observer disposes escaped terminal instances on exit and
   push({ ...frame, epoch: 'second' });
   stop();
   assert.deepEqual(disposed, [0, 1]); assert.equal(active, false);
+});
+
+test('worker menus recover on a late join and a gap, and discard asynchronous work after disposal', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const { observeWorkerMenus } = require('../src/features/agents/worker-menu-screen.ts');
+  const requests = [], disposed = [], reports = [];
+  let push, report = Promise.withResolvers();
+  const stop = observeWorkerMenus({
+    onWorkerScreen(fn) { push = fn; return () => {}; },
+    workerScreenSnapshot(epoch) { const reply = Promise.withResolvers(); requests.push({ epoch, ...reply }); return reply.promise; },
+    reportWorkerMenu(epoch, seq, menu) { const result = { epoch, seq, menu }; reports.push(result); report.resolve(result); },
+  }, (cols, rows) => {
+    const terminal = new Terminal({ cols, rows });
+    const dispose = terminal.dispose.bind(terminal);
+    terminal.dispose = () => { disposed.push(terminal); dispose(); };
+    return terminal;
+  });
+  t.after(stop);
+  const frame = (seq, data = '', epoch = 'live') => ({ seq, data, epoch, cols: 120, rows: 40 });
+  const screen = read('claude-question').join('\r\n');
+  push({ ...frame(4), snapshotRequired: true });
+  assert.equal(requests[0].epoch, 'live');
+  push(frame(5, '\x1b[0m'));
+  requests[0].resolve({ ok: true, value: frame(4, screen) });
+  const first = await report.promise;
+  assert.equal(first.seq, 5); assert.equal(first.menu?.kind, 'question');
+  report = Promise.withResolvers();
+  push(frame(7));
+  push(frame(6, 'late packet'));
+  assert.equal(requests.length, 2);
+  requests[1].resolve({ ok: true, value: frame(8, screen) });
+  const second = await report.promise;
+  assert.equal(second.seq, 8); assert.equal(second.menu?.identity, first.menu.identity);
+  assert.equal(disposed.length, 1);
+  t.mock.timers.tick(5 * 60_000);
+  assert.equal(disposed.length, 2);
+  push(frame(9));
+  assert.equal(requests.length, 3);
+  push({ ...frame(9), exited: true });
+  requests[2].resolve({ ok: true, value: frame(9, screen) });
+  await requests[2].promise;
+  assert.deepEqual(reports.map(result => result.seq), [5, 8]);
 });

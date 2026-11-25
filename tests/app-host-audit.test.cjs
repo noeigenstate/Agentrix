@@ -126,6 +126,19 @@ test('C1 and F1 stale runtime files are removed while this run, ordinary files a
   assert.equal(fs.readFileSync(path.join(directory, 'runtime-File'), 'utf8'), 'regular file');
 });
 
+test('startup removes abandoned worker hook settings with their runtime and preserves the current runtime', t => {
+  const directory = temp(t);
+  const [old, current] = ['runtime-Old', 'runtime-Current'].map(name => path.join(directory, name));
+  const settings = runtime => path.join(runtime, 'worker-synthetic', 'settings.json');
+  for (const runtime of [old, current]) {
+    fs.mkdirSync(path.dirname(settings(runtime)), { recursive: true });
+    fs.writeFileSync(settings(runtime), '{"hooks":"private fixture"}');
+  }
+  cleanStaleRuntimeFolders({ fs, path, retryFileOperation, report: assert.fail }, directory, current);
+  assert.equal(fs.existsSync(settings(old)), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settings(current), 'utf8')), { hooks: 'private fixture' });
+});
+
 test('B7 a continuation error is reported without recording a session startup failure', async () => {
   const opened = { runtimeSessionId: 'fixture' }, error = new Error('continuation failed'), reported = [], startupErrors = new Map();
   const lifecycle = createTerminalLifecycle({ store: { findTerminal: () => ({ project: { path: 'fixture' }, record: {

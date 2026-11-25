@@ -12,6 +12,7 @@ function cleanStaleRuntimeFolders(deps, directory, current) {
   try {
     const root = fs.realpathSync(directory);
     const currentName = path.basename(current);
+    // A runtime tree also contains its worker directories, including private hook settings.
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name === currentName || !RUNTIME_FOLDER.test(entry.name)) continue;
       try { removeRuntimeFolder(deps, root, path.join(root, entry.name)); }

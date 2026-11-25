@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
@@ -33,6 +34,12 @@ const canonical = file => {
   const resolved = path.resolve(file);
   return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved;
 };
+const moveToken = /^[a-f0-9-]{36}$/;
+const folderIdentity = folder => {
+  const stat = fs.lstatSync(folder, { throwIfNoEntry: false });
+  return stat?.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+};
+const moveConflict = () => new Error('此作用范围已存在同名技能。');
 
 function launchSeatMap(map, catalog) {
   if (!map) return null;
@@ -68,6 +75,7 @@ class SkillsStore {
     getModels = () => [], modelProbes = {}, now = Date.now, seatSession = () => null }) {
     Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession, now });
     this.globalFolder = path.join(dataDir, 'skills');
+    this.moveFolder = path.join(dataDir, 'skill-moves');
     this.optionsFile = path.join(dataDir, 'skills.json');
     const stored = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
       && Object.values(value).every(item => item && typeof item === 'object' && !Array.isArray(item)));
@@ -222,6 +230,7 @@ class SkillsStore {
 
   refresh(initial = false, selected = null) {
     if (this.mutating) return this.infos();
+    if (this.recoverMoves()) selected = null;
     const roots = this.roots(), rootPaths = new Set(roots.map(item => item.root));
     const knownRoots = new Set([...this.knownRoots].filter(root => rootPaths.has(root)));
     const entries = new Map([...this.entries].filter(([, entry]) => rootPaths.has(entry.root)));
@@ -329,6 +338,113 @@ class SkillsStore {
     return { text: entry.text, versions: this.history.versions(id).map(({ projectId, ...item }) => ({ ...item, project: this.projectName(projectId || item.project, item.project) })), pending: entry.source === 'builtin' ? null : this.pendingText(entry) };
   }
 
+  movePaths(token, run) {
+    const refs = [run.from, run.to].map(ref => {
+      const root = this.target(ref.scope, ref.projectId);
+      const folder = path.dirname(checkedPath(root, ref.name));
+      const id = ref.scope === 'global' ? `user:${ref.name}` : `project:${ref.projectId}:${ref.name}`;
+      if (folder !== ref.folder) throw new Error('技能迁移的项目路径已改变。');
+      return { folder, id };
+    });
+    const [from, to] = refs;
+    const holding = path.join(path.dirname(from.folder), `.agentrix-move-${token}`);
+    return { from, to, holding, retired: path.join(holding, 'source'), staged: path.join(to.folder, `.agentrix-move-${token}`) };
+  }
+
+  recoverMoves() {
+    if (!fs.existsSync(this.moveFolder)) return false;
+    let recovered = false;
+    try {
+      for (const entry of fs.readdirSync(this.moveFolder, { withFileTypes: true })) {
+        const token = path.basename(entry.name, '.json');
+        if (!entry.isFile() || entry.name !== token + '.json' || !moveToken.test(token)) continue;
+        try {
+          const journal = path.join(this.moveFolder, entry.name);
+          this.finishMove(token, journal, JSON.parse(fs.readFileSync(journal, 'utf8')));
+          recovered = true;
+        } catch (error) { this.report(error); }
+      }
+    } catch (error) { this.report(error); }
+    return recovered;
+  }
+
+  finishMove(token, journal, run) {
+    const { from, to, holding, retired, staged } = this.movePaths(token, run);
+    if (folderIdentity(to.folder) !== run.destination || !run.destination) throw moveConflict();
+    if (run.phase === 'copy') {
+      if (folderIdentity(holding) !== run.holding) throw new Error('无法读取技能迁移的原目录。');
+      this.stageMove(from.folder, retired, staged);
+      writeFile(journal, JSON.stringify({ ...run, phase: 'publish' }));
+      run.phase = 'publish';
+    }
+    if (run.phase === 'publish') {
+      if (!folderIdentity(staged) || folderIdentity(holding) !== run.holding) throw new Error('无法读取技能迁移的暂存目录。');
+      const metadataFile = 'SKILL.md';
+      const names = fs.readdirSync(staged);
+      for (const name of [...names.filter(name => name !== metadataFile), ...names.filter(name => name === metadataFile)]) {
+        const destination = path.join(to.folder, name);
+        if (fs.lstatSync(destination, { throwIfNoEntry: false })) throw moveConflict();
+        fs.renameSync(path.join(staged, name), destination);
+      }
+      if (fs.existsSync(this.history.folder(from.id))) this.history.move(from.id, to.id);
+      if (this.options[from.id]) {
+        this.options[to.id] = this.options[from.id];
+        delete this.options[from.id];
+      }
+      if (!this.persistOptions()) throw new Error('无法保存技能迁移后的设置。');
+      writeFile(journal, JSON.stringify({ ...run, phase: 'cleanup' }));
+      run.phase = 'cleanup';
+    }
+    if (run.phase !== 'cleanup') throw new Error('无法识别技能迁移的阶段。');
+    if (folderIdentity(holding) === run.holding) fs.rmSync(holding, { recursive: true, force: true });
+    if (folderIdentity(staged)) fs.rmdirSync(staged);
+    fs.rmSync(journal, { force: true });
+  }
+
+  stageMove(source, retired, staged) {
+    // On the same volume a successful rename leaves the only complete copy at staged, even if journaling failed.
+    if (!folderIdentity(retired) && folderIdentity(staged)) return;
+    if (!folderIdentity(retired)) fs.renameSync(source, retired);
+    fs.rmSync(staged, { recursive: true, force: true });
+    try { fs.renameSync(retired, staged); }
+    catch (error) {
+      if (error.code !== 'EXDEV') throw error;
+      // A partial copy can be retried because the entire original is still in the holding folder.
+      fs.cpSync(retired, staged, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+    }
+  }
+
+  moveSkill(old, file, draft) {
+    const token = randomUUID(), journal = path.join(this.moveFolder, token + '.json');
+    const run = { phase: 'copy',
+      from: { scope: old.scope, projectId: old.projectId, name: old.folder, folder: path.dirname(old.path) },
+      to: { scope: draft.scope, projectId: draft.projectId, name: draft.name, folder: path.dirname(file) } };
+    const { to, holding } = this.movePaths(token, run);
+    fs.mkdirSync(path.dirname(to.folder), { recursive: true });
+    fs.mkdirSync(this.moveFolder, { recursive: true });
+    this.claimSkillFolder(to.folder);
+    try {
+      fs.mkdirSync(holding, { mode: 0o700 });
+      run.holding = folderIdentity(holding);
+      run.destination = folderIdentity(to.folder);
+      writeFile(journal, JSON.stringify(run));
+    } catch (error) {
+      if (run.holding && folderIdentity(holding) === run.holding) fs.rmdirSync(holding);
+      fs.rmdirSync(to.folder);
+      throw error;
+    }
+    try { this.finishMove(token, journal, run); }
+    catch (error) {
+      if (run.phase !== 'cleanup') throw error;
+      this.report(error);
+    }
+  }
+
+  claimSkillFolder(folder) {
+    try { fs.mkdirSync(folder); }
+    catch (error) { if (error.code === 'EEXIST') throw moveConflict(); throw error; }
+  }
+
   async save(id, draft, assets = []) {
     this.refresh();
     const old = id === null ? null : this.entry(id, true);
@@ -337,22 +453,18 @@ class SkillsStore {
     const file = checkedPath(root, draft.name);
     const nextId = draft.scope === 'global' ? `user:${draft.name}` : `project:${draft.projectId}:${draft.name}`;
     const moved = old && old.id !== nextId, folderMoved = old && canonical(old.path) !== canonical(file);
-    if ((!old || folderMoved) && fs.existsSync(path.dirname(file))) throw new Error('此作用范围已存在同名技能。');
+    if ((!old || folderMoved) && fs.existsSync(path.dirname(file))) throw moveConflict();
     this.mutating = (this.mutating || 0) + 1;
     try {
       if (moved) {
-        if (folderMoved) {
-          await fs.promises.mkdir(root, { recursive: true });
-          try { await fs.promises.rename(path.dirname(old.path), path.dirname(file)); }
-          catch (error) {
-            if (error.code !== 'EXDEV') throw error;
-            await fs.promises.cp(path.dirname(old.path), path.dirname(file), { recursive: true });
-            await fs.promises.rm(path.dirname(old.path), { recursive: true });
-          }
-        } else if (old.folder !== draft.name) fs.renameSync(path.dirname(old.path), path.dirname(file));
-        this.history.move(old.id, nextId);
-        this.options[nextId] = this.options[old.id];
-        delete this.options[old.id]; this.entries.delete(old.id);
+        if (folderMoved) this.moveSkill(old, file, draft);
+        else {
+          if (old.folder !== draft.name) fs.renameSync(path.dirname(old.path), path.dirname(file));
+          this.history.move(old.id, nextId);
+          this.options[nextId] = this.options[old.id];
+          delete this.options[old.id];
+        }
+        this.entries.delete(old.id);
       }
       for (const asset of assets) if (asset.relative !== 'SKILL.md') writeFile(path.join(path.dirname(file), asset.relative), await fs.promises.readFile(asset.file));
       writeFile(file, text);

@@ -9,7 +9,7 @@ function registerApplicationIpc(host) {
   else registerUnavailableNative(handle);
   registerTitlebarState(host, listen);
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => host.window, claudeFastRefusal: () => store.claudeFastMode?.reason });
-  workerTerminals.register({ handle, listen });
+  workerTerminals.register({ handle, listen, getWebContents: () => host.window?.webContents, report });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     routingOwned: projectId => skills.routingOwned(projectId),
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
@@ -159,7 +159,8 @@ function registerAppTerminal(host, { handle, listen }) {
   const { registerTerminalIpc, findProject, sessions, nativeSpecs, startTerminal, claudeConfigDir, writeFileAtomic,
     store, fs, handoffFile, confirmTerminalClose, restorePlans, disposeTerminal, startupErrors, broadcast, scheduleState, applyActivity, pollAfterSubmission, send } = host;
   return registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), nativeHost: id => nativeSpecs.has(id), startTerminal,
-    fastSettings: { claudeConfigDir, writeFileAtomic },
+    fastSettings: { claudeConfigDir, writeFileAtomic, onQuit: fn => host.app?.once('will-quit', fn),
+      report: error => { console.error('Fast settings:', error.message); host.report?.(error); } },
     addTerminal: id => store.addTerminal(id), removeTerminal: id => { store.removeTerminal(id); fs.promises.rm(handoffFile(id), { force: true }).catch(() => {}); },
     confirmTerminalClose, forgetRestorePlan: id => restorePlans.delete(id),
     disposeTerminal, clearStartupError: id => startupErrors.delete(id), broadcast, getProjectById: id => store.projects.find(p => p.id === id),

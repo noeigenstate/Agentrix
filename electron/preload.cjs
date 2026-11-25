@@ -151,7 +151,12 @@ contextBridge.exposeInMainWorld('agentrix', {
   // A dispatched worker's hidden terminal (worker-terminals): its keys reach it only while it waits for the owner.
   attachWorkerTerminal: (terminalId, callId) => ipcRenderer.invoke('worker-terminal:attach', terminalId, callId),
   onWorkerTerminalData: callback => listen('worker-terminal:data', callback),
-  onWorkerScreen: callback => listen('worker-terminal:screen', callback),
+  onWorkerScreen: callback => {
+    const off = listen('worker-terminal:screen', callback);
+    ipcRenderer.send('worker-terminal:screen-ready');
+    return off;
+  },
+  workerScreenSnapshot: epoch => ipcRenderer.invoke('worker-terminal:screen-snapshot', epoch),
   reportWorkerMenu: (epoch, seq, menu) => ipcRenderer.send('worker-terminal:menu', epoch, seq, menu),
   workerTerminalKeys: (terminalId, callId, epoch, data) => ipcRenderer.send('worker-terminal:keys', terminalId, callId, epoch, data),
   resizeWorkerTerminal: (terminalId, callId, epoch, cols, rows) => ipcRenderer.send('worker-terminal:resize', terminalId, callId, epoch, cols, rows),

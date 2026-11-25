@@ -6,6 +6,7 @@ const { ts, syntax, nodes } = require('./helpers/source-syntax.cjs');
 require('./fixtures/team-isolation.cjs');
 const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -113,8 +114,11 @@ async function fixture(t, { detached = false, screenMonitoring = false, now, per
     cancel: timer => typeof timer === 'number' ? permissionClock?.cancel(timer) : clearTimeout(timer), kill: pty => pty.kill() });
   const registerChannel = (channel, handler) => { channels[channel] = handler; };
   terminals.register({ handle: registerChannel, listen: registerChannel });
-  if (screenMonitoring) observeWorkerMenus({ onWorkerScreen: listener => { screenListener = listener; },
-    reportWorkerMenu: channels['worker-terminal:menu'] }, (cols, rows) => new Terminal({ cols, rows, scrollback: 0 }));
+  if (screenMonitoring) t.after(observeWorkerMenus({
+    onWorkerScreen: listener => { screenListener = listener; return () => { screenListener = undefined; }; },
+    workerScreenSnapshot: async epoch => ({ ok: true, value: channels['worker-terminal:screen-snapshot'](epoch) }),
+    reportWorkerMenu: channels['worker-terminal:menu'],
+  }, (cols, rows) => new Terminal({ cols, rows, scrollback: 0 })));
   registerClaudeWorker({ control, claude: {}, settings: () => assert.fail('a terminal worker reads no Claude path setting'), terminals,
     roleResultServer: (id, folder) => roleResultServer(path.resolve('integration/dispatch.cjs'), id, folder) });
   const brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
@@ -493,7 +497,7 @@ test('an intervention is written once when idle and never resent', async t => {
 // One worker terminal behind main's worker handler, without the helper. The clock is the test's: the 15 s notice and the
 // one-second poll run when the test says, every other wait at once.
 const SESSION = '11111111-1111-4111-8111-111111111111';
-async function unit(t, { calls = null, send, register, remove, kill, clock, payload = {}, operations } = {}) {
+async function unit(t, { calls = null, send, register, remove, kill, clock, payload = {}, operations, screenMonitoring } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-unit-')));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const parent = parentTerminal(root); parent.write({ sessionKey: 'synthetic-owner' });
@@ -501,7 +505,7 @@ async function unit(t, { calls = null, send, register, remove, kill, clock, payl
   const terminals = createWorkerTerminals({ spawn: fakeSpawn(spawned), claudeFile: () => path.join(root, 'stand-in', 'claude'), hooks: hooksFor,
     parent: () => ({ env: parent.env, sessionKey: 'synthetic-owner', bootstrapFile: parent.bootstrap }),
     calls: () => calls || { setAwaiting: (id, value) => awaited.push([id, value]) }, runtimeDir: () => root, claudeHome: () => parent.claudeHome,
-    send: send || ((channel, data) => sent.push([channel, data])), ...(remove ? { remove } : {}),
+    send: send || ((channel, data) => sent.push([channel, data])), screenMonitoring, ...(remove ? { remove } : {}),
     ...(clock ? { now: clock.now, cancel: clock.cancel } : {}),
     schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : ms === 1000 ? polls.push(fn) : clock ? clock.schedule(fn, ms) : setTimeout(fn, 0),
     kill: kill || (pty => { killed.push(pty); pty.kill(); }) });
@@ -1468,11 +1472,18 @@ test("the split's bridge runs through main's IPC adapter and the preload", async
   Module._load = function (request, ...rest) { return request === 'electron' ? electron : original.call(this, request, ...rest); };
   try { delete require.cache[require.resolve('../electron/preload.cjs')]; require('../electron/preload.cjs'); } finally { Module._load = original; }
   const adapter = createIpcAdapter({ ipcMain, getWindow: () => ({ webContents }), devUrl: null, t: text => text, report: error => { throw error; } });
-  const f = await unit(t, { send: (channel, data) => webContents.send(channel, data), register: terminals => terminals.register(adapter) });
+  const f = await unit(t, { screenMonitoring: true, send: (channel, data) => webContents.send(channel, data),
+    register: terminals => terminals.register({ ...adapter, getWebContents: () => webContents }) });
   const bridge = exposed.agentrix, callId = 'dispatch:run-1', data = [];
   t.after(bridge.onWorkerTerminalData(value => data.push(value)));
   f.pty.emit('before the split');
   assert.deepEqual(data, [], 'nothing is pushed before attach');
+  const screens = [];
+  t.after(bridge.onWorkerScreen(packet => screens.push(packet)));
+  const [ready] = screens;
+  assert.equal(ready.snapshotRequired, true);
+  assert.deepEqual(await bridge.workerScreenSnapshot(ready.epoch),
+    { ok: true, value: { epoch: ready.epoch, seq: 1, data: 'before the split', cols: 120, rows: 30 } });
   const attached = await bridge.attachWorkerTerminal('terminal', callId);
   // The adapter's Result, { ok, value }, with the epoch a string.
   assert.equal(attached.ok, true); assert.equal(typeof attached.value.epoch, 'string');
@@ -1494,6 +1505,48 @@ test("the split's bridge runs through main's IPC adapter and the preload", async
   await f.control({ type: 'stop' }); await f.result;
 });
 
+test('screen snapshots and renderer reloads keep worker view subscriptions separate', async t => {
+  const contents = new EventEmitter(), channels = new Map();
+  const register = (channel, fn) => channels.set(channel, fn);
+  const f = await unit(t, { screenMonitoring: true, register: terminals => terminals.register({
+    handle: register, listen: register, getWebContents: () => contents,
+  }) });
+  const invoke = (op, ...args) => channels.get('worker-terminal:' + op)(...args);
+  const pushed = () => f.sent.filter(([channel]) => channel === 'worker-terminal:data').map(([, data]) => data.data);
+  const call = ['terminal', 'dispatch:run-1'];
+  f.pty.emit('first'); f.pty.emit('second');
+  invoke('screen-ready');
+  const ready = f.sent.at(-1)[1], { epoch } = ready;
+  assert.deepEqual(ready, { epoch, seq: 2, cols: 120, rows: 30, data: '', snapshotRequired: true });
+  assert.deepEqual(invoke('screen-snapshot', epoch), { epoch, seq: 2, cols: 120, rows: 30, data: 'firstsecond' });
+  assert.equal(invoke('screen-snapshot', 'stale'), null);
+  f.notices[0]();
+  invoke('keys', ...call, epoch, 's');
+  invoke('resize', ...call, epoch, 90, 20);
+  f.pty.emit('hidden only');
+  assert.deepEqual([f.pty.writes, pushed()], [[], []]);
+  assert.equal(f.pty.size, null);
+  for (const [event, details] of [
+    ['did-start-navigation', { isMainFrame: true, isSameDocument: false }], ['render-process-gone'], ['destroyed'],
+  ]) {
+    invoke('attach', ...call); invoke('attach', ...call);
+    contents.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
+    contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true });
+    invoke('detach', ...call);
+    f.pty.emit(event);
+    const before = f.pty.writes.length;
+    invoke('keys', ...call, epoch, 'a');
+    assert.equal(f.pty.writes.length, before + 1);
+    contents.emit(event, details);
+    f.pty.emit('unsubscribed');
+    invoke('keys', ...call, epoch, 'b');
+    assert.equal(f.pty.writes.length, before + 1);
+  }
+  assert.deepEqual(pushed(), ['did-start-navigation', 'render-process-gone', 'destroyed']);
+  await f.control({ type: 'stop' }); await f.result;
+  assert.equal(invoke('screen-snapshot', epoch), null);
+});
+
 test('closing never fails while Windows holds the folder', async t => {
   let tries = 0;
   const busy = Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
@@ -1503,8 +1556,11 @@ test('closing never fails while Windows holds the folder', async t => {
   await until(() => !fs.existsSync(path.join(f.root, 'worker-run-1')), 'the folder after the retries');
   assert.equal(tries, 3);
   // A PTY whose exit is never seen and a folder that never goes: the run still ends, and quit still settles.
-  const g = await unit(t, { remove: () => { throw busy; }, kill: () => {} });
+  const reports = [];
+  const g = await unit(t, { remove: () => { throw busy; }, kill: () => {},
+    register: terminals => terminals.register({ handle() {}, listen() {}, report: error => reports.push(error) }) });
   await g.control({ type: 'stop' });
   assert.deepEqual(await g.result, { status: 'interrupted' });
   await g.terminals.closeAll();
+  assert.deepEqual(reports.map(error => error.cause), [busy]);
 });

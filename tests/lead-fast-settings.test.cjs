@@ -6,22 +6,66 @@ const path = require('node:path');
 const { registerLeadFastSettings } = require('../electron/features/terminal/lead-fast-settings.cjs');
 const { writeFileAtomic } = require('../electron/atomic-write.cjs');
 
-function fixture(t, atomic = writeFileAtomic) {
+function fixture(t, atomic = writeFileAtomic, options = {}) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-fast-settings-'));
   t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
   const file = path.join(folder, 'settings.json');
-  let handler, remote = false;
+  let handler, quit, remote = false;
   const session = { sessionId: 'pty', agent: 'claude', cliActive: true, usageEnv: { CLAUDE_CONFIG_DIR: folder } };
   registerLeadFastSettings({
     handle: (channel, fn) => { assert.equal(channel, 'terminal:leadFastSettings'); handler = fn; },
     getSession: () => session, findProject: () => ({ kind: remote ? 'ssh' : 'local' }), claudeConfigDir: () => folder, writeFileAtomic: atomic,
+    onQuit: callback => { quit = callback; }, ...options,
   });
-  return { file, session, setRemote: () => { remote = true; },
+  return { file, session, quit, setRemote: () => { remote = true; },
     begin: (target, sessionId = 'pty') => handler('terminal', { sessionId, target }),
     end: (token, confirmed = true) => handler('terminal', { token, confirmed }),
     read: () => fs.readFileSync(file, 'utf8'), write: text => fs.writeFileSync(file, text),
   };
 }
+
+test('an unacknowledged settings change restores at 90 seconds without further IPC', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const start = Date.now(), f = fixture(t, writeFileAtomic, { now: () => start });
+  f.write('{"theme":"dark","fastMode":false}');
+  fs.utimesSync(f.file, new Date(start - 1000), new Date(start - 1000));
+  f.begin(true);
+  f.write('{"theme":"light","fastMode":true}');
+  fs.utimesSync(f.file, new Date(start + 1000), new Date(start + 1000));
+  t.mock.timers.tick(89_999);
+  assert.equal(JSON.parse(f.read()).fastMode, true);
+  t.mock.timers.tick(1);
+  assert.deepEqual(JSON.parse(f.read()), { theme: 'light', fastMode: false });
+});
+
+test('quit restores only a matching write in the switch window and reports a locked file', t => {
+  const start = Date.now(), reports = [];
+  let locked = true;
+  const f = fixture(t, (...args) => { if (locked) throw new Error('locked'); return writeFileAtomic(...args); },
+    { now: () => start, report: error => reports.push(error.message) });
+  const write = (data, offset) => {
+    f.write(JSON.stringify(data));
+    fs.utimesSync(f.file, new Date(start + offset), new Date(start + offset));
+  };
+  write({ fastMode: true }, -1000);
+  f.begin(false);
+  write({}, 1000);
+  f.quit();
+  assert.equal(reports.length, 1);
+  assert.deepEqual(JSON.parse(f.read()), {});
+  locked = false;
+  f.quit();
+  assert.deepEqual(JSON.parse(f.read()), { fastMode: true });
+  f.begin(false);
+  write({ fastMode: false, theme: 'user' }, 2000);
+  f.quit();
+  assert.deepEqual(JSON.parse(f.read()), { fastMode: false, theme: 'user' });
+  f.begin(true);
+  write({ fastMode: true, theme: 'later' }, 91_000);
+  f.quit();
+  assert.deepEqual(JSON.parse(f.read()), { fastMode: true, theme: 'later' });
+  assert.equal(reports.length, 1);
+});
 
 test('fast settings restores the original bytes if only fastMode changed, on or off', t => {
   const f = fixture(t);

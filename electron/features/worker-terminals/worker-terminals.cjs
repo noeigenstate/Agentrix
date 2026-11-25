@@ -179,6 +179,19 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   const workers = new Map();
   const byId = id => workers.get(id) || null;
   const byCall = (terminalId, callId) => [...workers.values()].find(w => w.parent === terminalId && `dispatch:${w.runId}` === callId) || null;
+  const byEpoch = epoch => typeof epoch === 'string' ? [...workers.values()].find(w => w.epoch === epoch) : null;
+  const screen = (w, data) => ({ epoch: w.epoch, seq: w.seq, cols: w.cols, rows: w.rows, data });
+  const watched = new WeakSet();
+  let report = () => {};
+
+  function watchContents(contents) {
+    if (!contents?.on || watched.has(contents)) return;
+    watched.add(contents);
+    const clear = () => { for (const w of workers.values()) w.attachments.delete(contents); };
+    contents.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => { if (isMainFrame && !isSameDocument) clear(); });
+    contents.on('render-process-gone', clear);
+    contents.once('destroyed', clear);
+  }
   function trackTimer(timers, fn, ms, resolve = null) {
     const timer = schedule(() => { timers.delete(timer); fn(); }, ms);
     timers.set(timer, resolve);
@@ -301,7 +314,7 @@ try {
     startNotice(w);
   }
   function screenPacket(w, data, ended = false) {
-    if (screenMonitoring) send('worker-terminal:screen', { epoch: w.epoch, seq: w.seq, cols: w.cols, rows: w.rows, data, ...(ended && { exited: true }) });
+    if (screenMonitoring) send('worker-terminal:screen', { ...screen(w, data), ...(ended && { exited: true }) });
   }
   function observeMenu(w) {
     if (!w.screenFrame || w.screenFrame.seq !== w.seq) return;
@@ -568,7 +581,13 @@ try {
       if (!w.exited && w.epoch) screenPacket(w, '', true);
       for (const listener of w.listeners) { try { listener?.dispose(); } catch {} }
       for (let tries = 1; ; tries++) {
-        try { remove(w.folder); break; } catch { if (tries >= REMOVE_TRIES) break; }
+        try { remove(w.folder); break; }
+        catch (error) {
+          if (tries >= REMOVE_TRIES) {
+            try { report(new Error('暂时无法清理角色终端的临时目录，下次启动会重试。', { cause: error })); } catch {}
+            break;
+          }
+        }
         await new Promise(resolve => trackTimer(w.cleanupTimers, resolve, SETTLE_MS * tries, resolve));
       }
       workers.delete(w.id);
@@ -626,23 +645,36 @@ try {
       }
       return true;
     },
-    register({ handle, listen }) {
+    register({ handle, listen, getWebContents, report: reportError }) {
+      if (reportError) report = reportError;
+      const owner = viewId => getWebContents ? getWebContents() : viewId;
+      handle('worker-terminal:screen-snapshot', epoch => {
+        const w = byEpoch(epoch);
+        return screenMonitoring && w?.pty && !w.exited && !w.closed ? screen(w, w.chunks.join('')) : null;
+      });
+      listen('worker-terminal:screen-ready', () => {
+        if (!screenMonitoring) return;
+        for (const w of workers.values()) {
+          if (w.pty && !w.exited && !w.closed) send('worker-terminal:screen', { ...screen(w, ''), snapshotRequired: true });
+        }
+      });
       listen('worker-terminal:menu', (epoch, seq, frame) => {
-        const w = [...workers.values()].find(worker => worker.epoch === epoch);
+        const w = byEpoch(epoch);
         if (!w?.pty || w.exited || w.closed || w.seq !== seq) return;
         w.screenFrame = { seq, frame };
         observeMenu(w);
       });
       handle('worker-terminal:attach', (terminalId, callId, viewId = 'owner') => {
-        const w = byCall(terminalId, callId);
-        if (!w?.pty || w.closed) return null;
-        w.attachments.set(viewId, (w.attachments.get(viewId) || 0) + 1);
-        return { epoch: w.epoch, seq: w.seq, data: w.chunks.join(''), cols: w.cols, rows: w.rows, awaiting: w.awaiting, exited: !!w.exited };
+        const w = byCall(terminalId, callId), contents = owner(viewId);
+        if (!w?.pty || w.closed || !contents) return null;
+        watchContents(contents);
+        w.attachments.set(contents, (w.attachments.get(contents) || 0) + 1);
+        return { ...screen(w, w.chunks.join('')), awaiting: w.awaiting, exited: !!w.exited };
       });
       // Keys only from an attached split, only while the worker waits for the owner.
       listen('worker-terminal:keys', (terminalId, callId, epoch, data, viewId = 'owner') => {
         const w = byCall(terminalId, callId);
-        if (w?.pty && w.attachments.has(viewId) && !w.exited && !w.closed && w.epoch === epoch && w.awaiting === 'owner'
+        if (w?.pty && w.attachments.has(owner(viewId)) && !w.exited && !w.closed && w.epoch === epoch && w.awaiting === 'owner'
             && typeof data === 'string' && data.length <= KEYS_LIMIT) {
           if (!isTerminalResponse(data)) {
             if (w.menu.answered) return;
@@ -655,16 +687,17 @@ try {
           writeKeys(w, data); flushInput(w);
         }
       });
-      listen('worker-terminal:resize', (terminalId, callId, epoch, cols, rows) => {
+      listen('worker-terminal:resize', (terminalId, callId, epoch, cols, rows, viewId = 'owner') => {
         const w = byCall(terminalId, callId);
+        if (!w?.attachments.has(owner(viewId))) return;
         if (!w?.pty || w.exited || w.epoch !== epoch || !Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2 || cols > 500 || rows > 250) return;
         if (w.cols === cols && w.rows === rows) return;
         w.cols = cols; w.rows = rows; w.pty.resize(cols, rows);
         if (screenMonitoring) { w.seq++; screenPacket(w, ''); }
       });
       listen('worker-terminal:detach', (terminalId, callId, viewId = 'owner') => {
-        const w = byCall(terminalId, callId), count = w?.attachments.get(viewId) || 0;
-        if (count > 1) w.attachments.set(viewId, count - 1); else w?.attachments.delete(viewId);
+        const w = byCall(terminalId, callId), contents = owner(viewId), count = w?.attachments.get(contents) || 0;
+        if (count > 1) w.attachments.set(contents, count - 1); else w?.attachments.delete(contents);
       });
     },
     closeAll: () => Promise.all([...workers.values()].map(w => w.close())),
