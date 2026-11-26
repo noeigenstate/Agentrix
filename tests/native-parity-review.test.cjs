@@ -37,22 +37,6 @@ test('B1 local Codex start and resume transmit developer instructions', async t 
   const next = codex(root, { spec: { providerSessionId: opened.providerSessionId } }); await next.runtime.resume();
   assert.equal(next.wire().findLast(row => row.method === 'thread/resume' && row.params.threadId).params.config.developer_instructions, 'LOCAL_STARTUP_NOTE');
 });
-test('B2 Windows dispatch checks elevated readiness and rejects a read-only downgrade without retrying', async t => {
-  const f = codex(directory(t), { platform: 'win32', mode: 'windows-sandbox', spec: { owner: 'dispatch' } });
-  await assert.rejects(f.runtime.start(), { code: 'sandbox_mismatch', requestedSandbox: 'workspace-write', appliedSandbox: 'readOnly' });
-  assert.equal(f.launches.length, 1);
-  assert.deepEqual(f.launches[0].slice(0, 3), ['app-server', '--listen', 'stdio://']);
-  assert.ok(f.launches[0].includes('windows.sandbox=elevated'));
-  const wire = f.wire();
-  const starts = wire.filter(row => ['thread/start', 'thread/resume'].includes(row.method) && row.params.cwd);
-  assert.equal(starts.length, 1);
-  assert.equal(starts[0].params.config['windows.sandbox'], 'elevated');
-  assert.equal(starts[0].params.sandbox, 'workspace-write');
-  assert.equal(starts[0].params.approvalPolicy, 'never');
-  const readiness = wire.findIndex(row => row.method === 'windowsSandbox/readiness');
-  assert.ok(readiness >= 0 && readiness < wire.indexOf(starts[0]));
-  assert.deepEqual(wire[readiness].params, {});
-});
 test('B2 a Windows owner using ask still retries once with a request-scoped unelevated sandbox', async t => {
   const f = codex(directory(t), { platform: 'win32', mode: 'windows-sandbox', spec: { permissions: 'ask' } });
   await f.runtime.start(); const starts = f.wire().filter(row => ['thread/start', 'thread/resume'].includes(row.method) && row.params.cwd);

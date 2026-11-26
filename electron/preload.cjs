@@ -133,7 +133,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   notifyDecision: (projectId, title, kind) => ipcRenderer.invoke('decision:notify', projectId, title, kind),
   onDecisionShow: callback => listen('decision:show', callback),
   onError: callback => listen('app:error', callback),
-  onSandboxProgress: callback => listen('app:sandbox-progress', callback),
+  acknowledgeRolePermissionsNotice: terminalId => ipcRenderer.send('app:role-permissions-notice-shown', terminalId),
   minimize: () => ipcRenderer.send('window:minimize'),
   maximize: () => ipcRenderer.send('window:maximize'),
   toggleFullScreen: () => ipcRenderer.send('window:fullscreen'),

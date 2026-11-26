@@ -28,8 +28,43 @@ test('carried workers use the shared manifest projection', () => {
   assert.equal(require('../electron/features/claude-runtime/locator.cjs').REQUIRED, shared.adapterOf('claude').manifest.install.minVersion);
   for (const { id } of carried) assert.equal(adapterOf(id).worker, workerOf(id));
   assert.equal(workerOf('codex').command({}), 'native');
-  assert.deepEqual(workerOf('codex').policy(true), { sandbox: 'read-only', approvalPolicy: 'never' });
-  assert.deepEqual(workerOf('codex').policy(false), { sandbox: 'workspace-write', approvalPolicy: 'never' });
+});
+
+test('workers can run tests and Unity, and refuse explicit Git operations inside shell wrappers', () => {
+  const { workerRefusal } = require('../electron/features/cli-adapters/workers.cjs');
+  for (const readOnly of [false, true]) {
+    const check = command => workerRefusal({ readOnly }, { operation: 'command', command });
+    for (const command of ['git commit -m test', 'git -C "my repo" push', 'git reset HEAD --hard',
+      'bash -lc "git -C nested reset --hard HEAD"', 'powershell.exe -Command "git -C nested commit -m x"',
+      "pwsh -c 'git -C nested push'", 'git status && git push', "git com''mit", 'git com`mit',
+      'git -c color.ui=never -C "my repo" CLEAN -fd', 'cmd /c "git restore path"', 'cmd.exe /C git stash',
+      'cmd /c ""C:\\Program Files\\Git\\bin\\git.exe" clean -fd"', 'git --git-dir nested/.git restore path',
+      '& "C:\\Program Files\\Git\\bin\\git.exe" checkout -- path', '/usr/bin/git checkout other', 'GIT SWITCH other',
+      'git merge other', 'git rebase other', 'git cherry-pick HEAD', 'git revert HEAD', 'git update-ref refs/heads/topic HEAD',
+      'git branch -f topic HEAD', 'git branch -D topic', 'git tag topic',
+      'git com\\\nmit', 'git com`\r\nmit']) assert.equal(check(command), 'git_forbidden', command);
+    for (const command of ['git status', 'git reset --soft HEAD~1', 'git -C nested log', 'npm test', 'Unity -batchmode -runTests',
+      'pwsh -c "git -C nested status"', 'git log --grep commit', 'git diff -- docs/push.md',
+      'rg "git commit"', 'rg "some text; git commit"', 'cmd /c "git log --grep commit"', 'git branch -av',
+      'git reset HEAD -- --hard']) assert.equal(check(command), null, command);
+  }
+});
+
+test('file approval checks every path against the cwd, glob and exact skill grant', t => {
+  const { workerRefusal } = require('../electron/features/cli-adapters/workers.cjs');
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-worker-policy-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const allow = ['src/**'];
+  const edit = (paths, scope = {}) => workerRefusal({ cwd, allow, ...scope }, { operation: 'edit', paths });
+  assert.equal(edit([path.join(cwd, 'src', 'new.txt')]), null);
+  assert.equal(edit(['src/new.txt'], { readOnly: true }), 'read_only');
+  assert.equal(edit(['src/new.txt', '../escape.txt']), 'outside_worktree');
+  assert.equal(edit(['src/new.txt', 'outside.txt']), 'outside_scope');
+  assert.equal(edit([], {}), 'invalid_path');
+  assert.equal(edit(['src/SKILL.md']), 'skill_not_authorized');
+  assert.equal(edit(['src/SKILL.md'], { allow: ['src/SKILL.md'] }), null);
+  fs.symlinkSync(path.dirname(cwd), path.join(cwd, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(edit(['linked/escape.txt'], { allow: ['**'] }), 'outside_worktree');
 });
 
 test('a Claude print role with a result server uses a strict tool allowlist', () => {

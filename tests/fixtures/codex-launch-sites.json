@@ -220,14 +220,6 @@
     "id": "electron/features/codex-app-server/index.cjs:f348e9cb3b41216bc5011a5b"
   },
   {
-    "text": "launch(cmd, ['/d', '/v:off', '/s', '/c', '\"\"%AGENTRIX_SETUP_CLI%\" ' + args.join(' ') + '\"'], options)",
-    "id": "electron/features/codex-app-server/index.cjs:435fcd15a89bc1496a515d0b"
-  },
-  {
-    "text": "launch(file, args, options)",
-    "id": "electron/features/codex-app-server/index.cjs:cf9a69a6aa97d8bafb57dec6"
-  },
-  {
     "text": "resolveExecutable(env)",
     "id": "electron/features/codex-app-server/index.cjs:3a908719d731205401b693b4"
   },
@@ -236,8 +228,8 @@
     "id": "electron/features/codex-app-server/index.cjs:74b6934bfd7d22001795421f"
   },
   {
-    "text": "spawnProcess(executable, [...appServerArgs, ...configArgs], { cwd: wireCwd, env, windowsHide: true,\n          detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/codex-app-server/index.cjs:cc642ea748279b64475965a4"
+    "text": "spawnProcess(executable, appServerArgs, { cwd: wireCwd, env, windowsHide: true,\n          detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
+    "id": "electron/features/codex-app-server/index.cjs:9d4adf99d93058ded6418cc7"
   },
   {
     "text": "run(path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\n          const drives = error ? [] : String(stdout).trim().split(';').filter(drive => /^[A-Za-z]:$/.test(drive)).map(drive => `${drive.toUpperCase()}\\\\`);\n          resolve(drives.length ? drives : fallback);\n        })",
@@ -246,10 +238,6 @@
   {
     "text": "run(nodePath.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\n        if (error) return resolve(null);\n        const found = { files: [], folders: [] };\n        for (const line of Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')) {\n          const [kind, raw] = line.split('\\t'), value = raw?.trim().replace(/^\"(.*)\"$/, '$1');\n          if (value && nodePath.win32.isAbsolute(value) && (kind === 'file' || kind === 'folder')) found[`${kind}s`].push(value);\n        }\n        resolve(found);\n      })",
     "id": "electron/features/codex-runtime/locator.cjs:5e1cb0fd74fce32e757a5400"
-  },
-  {
-    "text": "launch(powershell, args, options, error => {\n    resolve(!error ? 'succeeded' : ({ 2: 'invalidHome', 3: 'declined', 4: 'unverified' })[error.code] || 'failed');\n  })",
-    "id": "electron/features/codex-sandbox-setup/elevate.cjs:894e60cd8066d20907092d1e"
   },
   {
     "text": "execFile('git', ['-C', project.path, ...args], { windowsHide: true, timeout: 3000 }, (error, stdout) => done(error ? '' : stdout.trim()))",
@@ -540,12 +528,16 @@
     "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },
   {
+    "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
+    "id": "integration/dispatch.cjs:2b9c6f710d0d32d63f38f180"
+  },
+  {
     "text": "launch(process.execPath, ['-e', script, __filename, file], {\n      cwd: options.cwd, env, detached: true, windowsHide: true, stdio: ['ignore', descriptor, descriptor],\n    })",
     "id": "integration/dispatch.cjs:0d06e497f7ec9a5ac21b7973"
   },
   {
-    "text": "run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached,\n      startTimeout: 60000, roleFallback: entry.roleFallback, roleArtifacts })",
-    "id": "integration/dispatch.cjs:aa7c4cd929f0b37b505c9352"
+    "text": "run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached,\n      startTimeout: 60000, roleArtifacts })",
+    "id": "integration/dispatch.cjs:c7d545117692ee81bac3c9f6"
   },
   {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",

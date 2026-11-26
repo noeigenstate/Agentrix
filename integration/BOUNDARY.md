@@ -50,17 +50,12 @@ All briefs ask roles to report blocked actions under Needs approval. Claude brie
 Roles defer choices affecting scope, reversibility or product behavior under Needs decision. On settlement, that answer heading adds a fixed end-line note and a boolean to detached role status and results.
 `roles_status` shows full running roles and the ten newest endings first observed in the last ten minutes. Each ending is summarized on one line with its reason and refusal count.
 `earlierEnded` counts endings past the ten-minute window. `omittedRecentEnded` counts recent endings beyond the cap. `role_result` gives full details.
-A local Windows Codex role reports its sandbox wait in the detached receipt and in role status during confirmation.
-Its detached launcher allows eight extra minutes for authorization.
 A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation.
 It returns the abbreviated base commit. A same-project `cwd` uses its own HEAD by default and when `from` is explicitly `HEAD`.
 Other explicit refs resolve in the project repository.
 A failed checkout or launch rolls back the new worktree and branch.
-Before creating a worktree or dispatching a local Windows Codex seat, the role tools share a readiness check within the lead conversation.
-A ready result lasts for that conversation. Other results expire after five seconds. A Claude lead without a recorded seat skips preflight.
-A known unready sandbox redirects a Claude lead's seat to its Claude model with low, medium or high seat effort (otherwise the lead's effort) and fast off, or gives a Codex lead built-in sub-agent instructions.
-The detached helper retains the fallback as its declared route and reports the original seat model and reason on start and end.
-Unknown readiness follows the usual launch path. Codex role startup still verifies elevated sandbox readiness independently.
+Codex roles keep their declared seats and start without a Windows or SSH sandbox readiness probe.
+The first confirmed dispatch of either provider shows a one-time notice in the lead conversation and saves the acknowledgment in the application profile.
 Local MCP roles own marked temp folders for their briefs, answers and logs. The detached helper records process IDs and stamps confirmed settlement before publishing its final receipt.
 The MCP sweeps asynchronously on startup and when it observes an end, at most once a minute. It expires settled folders after seven days,
 removes marked orphans after 30 days, and can evict read results oldest first above 256 folders. POSIX ownership and mode are checked again before removal,

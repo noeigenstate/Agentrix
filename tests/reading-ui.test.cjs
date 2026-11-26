@@ -70,6 +70,7 @@ function loadUI(name, overrides = {}) {
     if (key === './PendingPromptEntries') return loadUI('features/reading/PendingPromptEntries.tsx', overrides);
     if (key === './ReadingQuote') return loadUI('features/reading/ReadingQuote.tsx', overrides);
     if (key === './MessageMenu') return loadUI('features/reading/MessageMenu.tsx', overrides);
+    if (key === './IconButton') return loadUI('shared/IconButton.tsx', overrides);
     if (key === './NativeToast') return loadUI('features/native-session/NativeToast.tsx', overrides);
     if (key === './message-menu') return require('../src/features/reading/message-menu.ts');
     if (key === 'react-dom') return { createPortal: node => node };
@@ -2055,6 +2056,119 @@ test('real Claude queue records render without an echo and promote once in produ
   assert.doesNotMatch(html, /is-queued/);
   state.entries = log.list.filter(entry => entry.role === 'user').map(entry => ({ ...entry, queued: true }));
   html = render(); assert.match(html, /QUEUED_FROM_TERMINAL/); assert.doesNotMatch(html, /welcome preserved/);
+});
+
+test('Claude resume shows the lost card until a later same-text send is taken up', t => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { addPendingPrompt, createPendingPrompts, reconcilePendingPrompts } = require('../src/features/reading/pending-prompts.ts');
+  const log = new ConversationLog(), sessionId = 'session', content = 'Is there a better approach?';
+  const stamp = offset => new Date(Date.UTC(2026, 10, 25, 14, 31) + offset).toISOString();
+  const enqueue = offset => ({ type: 'queue-operation', operation: 'enqueue', timestamp: stamp(offset), sessionId, content });
+  const resume = { type: 'attachment', uuid: 'resume', timestamp: stamp(33000), sessionId, version: '2.1.332', isSidechain: false,
+    attachment: { type: 'hook_success', hookEvent: 'SessionStart', hookName: 'SessionStart:resume', exitCode: 0 } };
+  const { state, render } = readingHarness(t);
+  Object.assign(state.terminal, { agent: 'claude', codexActivity: 'working' });
+  let pending = createPendingPrompts(sessionId);
+  const send = (id, offset) => { pending = addPendingPrompt(pending, id, content, Date.parse(stamp(offset))); };
+  const feed = (record, queueOnly = false) => claudeConversation(log, record, undefined, { queueOnly });
+  const html = () => {
+    state.entries = log.list;
+    pending = reconcilePendingPrompts(pending, sessionId, log.list, Date.parse(stamp(42000)));
+    state.pending = pending.prompts;
+    return render();
+  };
+
+  // Claude Code 2.1.332 left just the enqueue in the previous process. Its resume did not consume it.
+  send('before-resume', 32800); feed(enqueue(32926), true);
+  assert.match(html(), /reading-pending is-queued/);
+  feed(resume, true);
+  const restored = html();
+  assert.match(restored, /reading-pending is-undelivered/);
+  assert.match(restored, /Not delivered: the agent did not receive this message/);
+  assert.match(restored, /<button[^>]*>Send again<\/button>/);
+  assert.match(restored, /<button[^>]*>Discard<\/button>/);
+  assert.doesNotMatch(restored, /is-queued/);
+  assert.equal(restored.split(content).length - 1, 1);
+  assert.deepEqual(pending.prompts, []);
+
+  feed({ type: 'user', uuid: 'older', sessionId, timestamp: stamp(32900), message: { content }, parentUuid: null });
+  assert.match(html(), /reading-pending is-undelivered/, 'an older same-text user message does not replace the card');
+  feed(enqueue(32926), true);
+  send('after-resume', 33100); feed(enqueue(33200));
+  feed(resume);
+  const queued = html();
+  assert.match(queued, /reading-pending is-queued/);
+  assert.match(queued, /reading-pending is-undelivered/);
+  const source = 'command', delivery = 'delivery', sent = stamp(33110);
+  const absorbed = { type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', timestamp: stamp(42899),
+    sessionId, content, commandUuid: source, deliveryId: delivery };
+  const receipt = { type: 'attachment', uuid: 'attachment', sessionId, timestamp: sent, isSidechain: false, version: '2.1.332',
+    renderedRole: 'system', rendered: [{ content: `<system-reminder>\nThe user sent a new message while you were working:\n${content}\n</system-reminder>` }],
+    attachment: { type: 'queued_command', prompt: content, commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true,
+      source_uuid: source, delivery_id: delivery, timestamp: sent } };
+  feed(absorbed); feed(receipt); feed(receipt); feed(enqueue(32926), true);
+  const delivered = html();
+  const userSections = timelineSections(delivered).filter(section => section.includes(content));
+  assert.equal(userSections.length, 2);
+  assert.equal(userSections.filter(section => /reading-step is-user/.test(section) && !section.includes('reading-pending')).length, 2);
+  assert.doesNotMatch(delivered, /is-queued|is-undelivered|while you were working/);
+  assert.deepEqual(pending.prompts, []);
+});
+
+test('a direct Claude user message replaces only one of two identical lost queue messages', () => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { pendingPromptCards } = require('../src/features/reading/pending-prompts.ts');
+  const log = new ConversationLog(), content = 'Run this manually';
+  const feed = (ms, record) => claudeConversation(log, { timestamp: new Date(ms).toISOString(), ...record });
+  feed(1000, { type: 'queue-operation', operation: 'enqueue', uuid: 'one', content });
+  feed(2000, { type: 'queue-operation', operation: 'enqueue', uuid: 'two', content });
+  feed(3000, { type: 'attachment', attachment: { type: 'hook_success', hookEvent: 'SessionStart', hookName: 'SessionStart:resume' } });
+  const direct = { type: 'user', uuid: 'manual-send', message: { content } };
+  feed(4000, direct);
+  feed(4000, direct);
+  assert.deepEqual(pendingPromptCards([], log.list).prompts.map(prompt => prompt.id), ['q:two']);
+  feed(5000, { ...direct, uuid: 'second-manual-send' });
+  assert.deepEqual(pendingPromptCards([], log.list).prompts, []);
+});
+
+test('recovered Claude messages send only on request and discard only the chosen card', async t => {
+  const cardModule = loadUI('features/reading/PendingPromptEntries.tsx', { './Markdown': { Markdown: ({ text }) => text } });
+  const h = workingComposerHarness(t, 'claude', { './PendingPromptEntries': cardModule });
+  const storage = new Map();
+  stubGlobals(t, { localStorage: { getItem: id => storage.get(id), setItem: (id, value) => storage.set(id, value) } });
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const log = new ConversationLog();
+  const enqueue = (uuid, at, content) => claudeConversation(log, { type: 'queue-operation', operation: 'enqueue', uuid, timestamp: new Date(at).toISOString(), content });
+  enqueue('retry', 1000, '<pasted_content>\nSend this again\n</pasted_content>');
+  enqueue('discard', 2000, 'Discard this one');
+  claudeConversation(log, { type: 'attachment', timestamp: new Date(3000).toISOString(),
+    attachment: { type: 'hook_success', hookEvent: 'SessionStart', hookName: 'SessionStart:resume' } });
+  enqueue('waiting', 4000, 'Still queued');
+  h.view.records = [...log.list];
+  const pending = () => elements(h.tree()).find(element => element.type?.name === 'PendingPromptEntries').props;
+  const action = (id, label) => {
+    const props = pending(), prompt = props.prompts.find(prompt => prompt.id === id);
+    assert.ok(prompt && props.undelivered(prompt));
+    const card = cardModule.PendingPromptEntries({ ...props, prompts: [prompt] });
+    return elements(card).find(button => button.type === 'button' && button.props.children === label).props.onClick;
+  };
+  await h.tick(25000);
+  assert.deepEqual(h.pasted, []);
+  assert.deepEqual(h.written, []);
+  action('q:discard', 'Discard')();
+  h.render();
+  assert.deepEqual(pending().prompts.map(prompt => prompt.id), ['q:retry', 'q:waiting']);
+  assert.equal(pending().queued(pending().prompts[1]), true);
+
+  const sendAgain = action('q:retry', 'Send again');
+  sendAgain(); sendAgain();
+  h.render(); await h.tick(0); await h.tick(400);
+  assert.deepEqual(h.pasted.map(item => item.text), ['Send this again']);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  assert.ok(h.view.records.some(entry => entry.queued && entry.text === 'Send this again' && entry.id !== 'q:retry'));
+  h.remount();
+  assert.deepEqual(pending().prompts.filter(pending().undelivered), []);
+  assert.equal(storage.size, 2);
 });
 
 test('a queue receipt removes the stale card and keeps message order, while a withdrawn card is invisible', t => {

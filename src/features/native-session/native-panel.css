@@ -93,3 +93,5 @@
 .native-toast { position: absolute; left: 50%; bottom: 12px; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 8px 14px 8px 12px; border: 1px solid var(--border); border-radius: 999px;
   background: var(--bg-menu); color: var(--text-1); font-size: 13px; transform: translateX(-50%); animation: native-panel-rise .16s ease-out; }
 .native-toast svg { flex: none; color: var(--success); }
+.native-toast-dismissible { width: max-content; max-width: calc(100% - 24px); }
+.native-toast-dismissible svg { color: var(--text-2); }

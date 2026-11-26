@@ -38,7 +38,12 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
       if(request.method==='initialize')result={userAgent:'codex/0.166.0'};
       if(request.method==='windowsSandbox/readiness')result={status:'ready'};
       if(request.method==='command/exec')result={exitCode:0,stdout:request.params.cwd};
-      if(['thread/start','thread/resume'].includes(request.method)){threadRequest=request;result={thread:{id:fixture.badSession&&fs.existsSync(path.join(fixture.root,'count'))?fixture.otherSession:p.threadId||fixture.session,turns:[]},cwd:process.cwd(),sandbox:{type:p.sandbox==='read-only'?'readOnly':'workspaceWrite'}};}
+      if(['thread/start','thread/resume'].includes(request.method)){
+        threadRequest=request;
+        const id=fixture.badSession&&fs.existsSync(path.join(fixture.root,'count'))?fixture.otherSession:p.threadId||fixture.session;
+        const types={'read-only':'readOnly','danger-full-access':'dangerFullAccess'};
+        result={thread:{id,turns:[]},cwd:process.cwd(),approvalPolicy:p.approvalPolicy,sandbox:{type:types[p.sandbox]||'workspaceWrite'}};
+      }
       rpc({id:request.id,result});
     }));
   } else for await (const chunk of process.stdin) brief += chunk;

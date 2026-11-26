@@ -119,11 +119,10 @@ const { claudeConfigDir, findClaudeSession } = require('./claude-sessions.cjs');
 const { AgentsManager, claudeState, codexState, onPath } = require('./agents.cjs');
 const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
-let offerCodexSandboxSetup;
 const { codexLocator, codexExecutable, codexAccounts, projectAccounts } = createCodexServices({
   createCodexLocator, scanDrives, fixedDrives, os, path, app, readNativeJson, writeNativeJson, CodexAccountUsage, adapterOf,
   createResetRpc, createProjectAccounts, readClaudeAccountCache,
-  get agents() { return agents; }, get offerCodexSandboxSetup() { return offerCodexSandboxSetup; },
+  get agents() { return agents; },
 });
 const { ClaudeAccountUsage } = require('./features/agents/claude-account-usage.cjs');
 const claudeAccounts = createClaudeAccountService({ ClaudeAccountUsage, adapterOf, electronNet,
@@ -150,7 +149,7 @@ const { setBranch, captureBranch, getBranch, forgetBranch, remoteBranch } = crea
 const projectGit = new ProjectGit(id => remoteFor(id));
 const startupErrors = new Map();
 const restorePlans = new Map();
-const { findProject, folderOf, publicState, reorderTerminals, disposeProjectTerminals } = createPublicState({
+const { findProject, folderOf, publicState: readPublicState, reorderTerminals, disposeProjectTerminals } = createPublicState({
   app, t, sessions, readingHistory, startupErrors, restorePlans, getBranch, desktopGlassBackend,
   get store() { return store; }, get windowZoom() { return windowZoom; }, get macTitlebar() { return macTitlebar; },
   get desktopGlassActive() { return desktopGlassActive; }, get desktopGlassWindow() { return desktopGlassWindow; },
@@ -298,6 +297,13 @@ function broadcast() {
 function scheduleState() { if (!stateTimer) stateTimer = setTimeout(() => { stateTimer = null; broadcast(); }, 700); }
 function report(error) { send('app:error', String(error?.message || error)); }
 
+function publicState() {
+  const pending = store.pendingRolePermissionsNotice;
+  return { ...readPublicState(), rolePermissionsNotice: pending && {
+    ...pending, message: t('角色现在和总指挥使用同一账号和权限运行，可以联网；提交和推送仍由总指挥负责。'),
+  } };
+}
+
 const interventions = createInterventions({ resolve: resolveIntervention,
   noteInput: (target, messageId, message) => sessions.get(target.terminalId)?.calls?.ownerInput(target.callId, messageId, message),
   pushControl: (runId, control) => dispatchControl?.pushControl(runId, control),
@@ -332,7 +338,7 @@ if (!app.requestSingleInstanceLock()) {
         if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
       }
     }
-    const { probeDirectory, modelProbes } = createModelProbes({
+    const { modelProbes } = createModelProbes({
       app, path, fs, seatModelRuntimes, agents, probeCodex, spawn: require('node:child_process').spawn, codexExecutable,
       loadCodexProbe: () => import('./features/codex-app-server/index.cjs'),
       probeClaude, createSdkLoader, resolveClaudeExecutable, claudeLocator, apiEnvironment, listModels, netRequest, electronNet,
@@ -388,6 +394,8 @@ if (!app.requestSingleInstanceLock()) {
       version: app.getVersion(), distribution: distributionOf({ isPackaged: app.isPackaged, platform: process.platform, installed }), onChange: updateListener(),
     });
     registerAppProtocols({ protocol, root, electronNet, previewResources, t });
+    const { listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
+    listen('app:role-permissions-notice-shown', terminalId => store.acknowledgeRolePermissionsNotice(terminalId));
     registerApplicationIpc({
       createIpcAdapter, ipcMain, devUrl, t, report, registerUnavailableNative, registerSkillsIpc, skills, dialog, store,
       workerTerminals, registerAgentsIpc, agents, shell, sessions, findProject, dashboard, readingHistory, listAgentCommands, interventions,
@@ -424,22 +432,6 @@ if (!app.requestSingleInstanceLock()) {
     };
     const backdrop = openMainWindow(windowStartup, shellIcon);
     if (backdrop) await backdrop;
-    if (process.platform === 'win32') {
-      const mainWindow = window;
-      mainWindow.once('show', () => {
-        const { createSandboxSetup } = require('./features/codex-sandbox-setup/index.cjs');
-        offerCodexSandboxSetup = createSandboxSetup({ find: async () => { await codexFirst; return codexExecutable(); },
-          cwd: probeDirectory, show: options => dialog.showMessageBox(mainWindow, options), t,
-          dismissed: () => store.settings.codexSandboxPromptDismissed,
-          dismiss: () => store.updateSettings({ codexSandboxPromptDismissed: true }),
-          progress: message => {
-            mainWindow.setProgressBar(message ? 2 : -1, { mode: message ? 'indeterminate' : 'none' });
-            mainWindow.webContents.send('app:sandbox-progress', message);
-          },
-          active: () => !quitting && !mainWindow.isDestroyed() });
-        void offerCodexSandboxSetup();
-      });
-    }
     await loadMainWindow(windowStartup);
     for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();

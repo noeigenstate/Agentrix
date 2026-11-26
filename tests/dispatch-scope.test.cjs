@@ -46,23 +46,86 @@ function fixture(t) {
     await Promise.allSettled(workers.map(worker => worker.result));
   });
   t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
-  function start(name, allow, writes, cwd = linked, flags = []) {
+  function start(name, allow, writes, cwd = linked, flags = [], permission = 'acceptEdits') {
     const base = path.join(root, randomUUID()), brief = base + '.md', configFile = base + '.json';
     const config = { sessionId: randomUUID(), writes: writes.map(([file, text]) => [path.join(cwd, file), text]),
       writeGate: base + '.write', written: base + '.written', release: base + '.release' };
     fs.writeFileSync(brief, 'Synthetic task'); fs.writeFileSync(configFile, JSON.stringify(config));
     fs.mkdirSync(path.join(cwd, '.dispatch'), { recursive: true });
-    let stdout = '';
-    const result = run(['claude', '--role', 'exec', '--title', name, '--model', 'synthetic-model', '--effort', 'high', '--permission', 'acceptEdits',
+    let stdout = '', end;
+    const started = Promise.withResolvers();
+    const result = run(['claude', '--role', 'exec', '--title', name, '--model', 'synthetic-model', '--effort', 'high', '--permission', permission,
       '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, '.dispatch', name + '.md'), '--allow', allow, ...flags], {
       env: { PATH: '', DISPATCH_SCOPE_FIXTURE: configFile }, stdout: { write: text => { stdout += text; } },
+      onEvent(event) {
+        if (event.type === 'dispatch.started') started.resolve();
+        if (event.type === 'dispatch.ended') end = event;
+      },
       resolveExecutable: () => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server-scope.cjs')] }),
       launch: (file, args, options) => lifetime.child(spawn(file, args, options)),
     });
-    const worker = { ...config, result, stdout: () => stdout }; workers.push(worker); return worker;
+    const worker = { ...config, result, started: started.promise, end: () => end, stdout: () => stdout }; workers.push(worker); return worker;
   }
   return { root, main, linked, start };
 }
+
+test('the end result reports branch-only and commit-only changes without moving either ref back', { timeout: 15000 }, async t => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync('git', args, { cwd: f.linked, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+  const state = () => ({ branch: git('symbolic-ref', '--short', 'HEAD'), commit: git('rev-parse', 'HEAD') });
+  for (const [name, change] of [['branch', () => git('switch', '-c', 'synthetic-new')],
+    ['commit', () => git('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '--allow-empty', '-qm', 'Synthetic change')]]) {
+    const before = state(), worker = f.start(name, 'a/**', []);
+    await worker.started;
+    change();
+    const after = state();
+    fs.writeFileSync(worker.writeGate, 'go'); fs.writeFileSync(worker.release, 'done');
+    assert.equal(await worker.result, 0);
+    const nameOfRef = 'refs/heads/' + after.branch;
+    assert.deepEqual(worker.end().gitChange, { before, after, refCount: 1,
+      refs: [{ name: nameOfRef, before: name === 'branch' ? null : before.commit, after: after.commit }] });
+    assert.match(worker.stdout(), /Git HEAD changed during run \(author unknown\)/);
+    assert.deepEqual(state(), after);
+  }
+});
+
+test('Git ref changes are reported even when HEAD stays in place', { timeout: 15000 }, async t => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync('git', args, { cwd: f.linked, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+  const commit = git('rev-parse', 'HEAD'), before = { branch: 'synthetic-linked', commit };
+  git('update-ref', 'refs/heads/deleted', commit);
+  const worker = f.start('refs', 'a/**', []);
+  await worker.started;
+  git('update-ref', '-d', 'refs/heads/deleted');
+  git('update-ref', 'refs/tags/synthetic-tag', commit);
+  git('update-ref', 'refs/remotes/origin/synthetic-branch', commit);
+  fs.writeFileSync(worker.writeGate, 'go'); fs.writeFileSync(worker.release, 'done');
+  assert.equal(await worker.result, 0);
+  assert.deepEqual(worker.end().gitChange, { before, after: before, refCount: 3, refs: [
+    { name: 'refs/heads/deleted', before: commit, after: null },
+    { name: 'refs/remotes/origin/synthetic-branch', before: null, after: commit },
+    { name: 'refs/tags/synthetic-tag', before: null, after: commit },
+  ] });
+  assert.match(worker.stdout(), /Git refs changed during run \(author unknown\)/);
+  assert.doesNotMatch(worker.stdout(), /Git HEAD changed/);
+});
+
+test('read-only scope checks retain peer and owner edits with unknown authorship', { timeout: 15000 }, async t => {
+  const f = fixture(t), readOnly = f.start('reader', 'b/**', [], f.linked, [], 'dontAsk');
+  await readOnly.started;
+  const writable = f.start('writer', 'a/**', [['a/base.txt', 'Writable role draft']]);
+  await writable.started;
+  fs.writeFileSync(writable.writeGate, 'go');
+  await until(() => fs.existsSync(writable.written));
+  fs.writeFileSync(path.join(f.linked, 'b/base.txt'), 'Owner draft');
+  fs.writeFileSync(readOnly.writeGate, 'go'); fs.writeFileSync(readOnly.release, 'done');
+  assert.equal(await readOnly.result, 0);
+  assert.match(readOnly.stdout(), /files changed during run: 2 \(author unknown\)/);
+  assert.deepEqual(readOnly.end().scope.files, ['a/base.txt', 'b/base.txt']);
+  assert.equal(fs.readFileSync(path.join(f.linked, 'a/base.txt'), 'utf8'), 'Writable role draft');
+  assert.equal(fs.readFileSync(path.join(f.linked, 'b/base.txt'), 'utf8'), 'Owner draft');
+  fs.writeFileSync(writable.release, 'done'); await writable.result;
+});
 
 for (const aliasPeer of [false, true]) test('N1: disjoint workers sharing a linked worktree preserve each other even after the peer finishes'
   + (aliasPeer ? ' (Windows short-path canonicalization)' : ''), { timeout: 20000 }, async t => {

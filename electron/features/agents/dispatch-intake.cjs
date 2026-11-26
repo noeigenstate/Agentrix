@@ -75,7 +75,10 @@ function createDispatchIntake(deps) {
     }
     const accepted = acceptDispatch(s, event, callsOf(s, project), undefined, admissionKey);
     if (accepted) {
-      if (event.type === 'dispatch-start' && event.agent === 'claude' && event.unconfirmed !== true) rememberClaudeSource(event.sessionId, 'dispatch');
+      if (event.type === 'dispatch-start' && event.unconfirmed !== true) {
+        if (event.agent === 'claude') rememberClaudeSource(event.sessionId, 'dispatch');
+        try { deps.store?.queueRolePermissionsNotice?.(s.terminalId); } catch (error) { deps.report(error); }
+      }
       if (event.type === 'dispatch-end') deps.roleEnded?.(s, project, event);
       broadcast();
     }

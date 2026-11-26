@@ -31,6 +31,44 @@ const { DashboardRecords } = require('../electron/features/dashboard/records.cjs
 const { dispatchDirectory } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
+const { WorkspaceStore } = require('../electron/state.cjs');
+
+test('the first confirmed role notice survives restart until its conversation acknowledges it', t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-notice-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const file = path.join(folder, 'workspace.json');
+  let store = new WorkspaceStore(file);
+  const first = store.add(fs.mkdtempSync(path.join(folder, 'first-'))).project;
+  const second = store.add(fs.mkdtempSync(path.join(folder, 'second-'))).project;
+  const intake = () => createDispatchIntake({ store, broadcast() {}, rememberClaudeSource() {},
+    callsOf: () => ({ dispatch: () => true }) });
+  const start = (host, project, terminalId = project.id, extra = {}) => {
+    const session = { terminalId, sessionKey: 'fixture-key' };
+    return host.acceptDispatchEvent(session, project, { type: 'dispatch-start', id: randomUUID(), projectId: terminalId,
+      sessionKey: session.sessionKey, agent: 'codex', role: '执行', title: 'Check', cwd: folder, brief: 'brief.md',
+      out: 'answer.md', model: 'gpt-6.2-sol', effort: 'low', fast: false, sessionId: 'role-session', startedAt: 1, ...extra });
+  };
+  const host = intake(), terminalId = store.addTerminal(first.id);
+  start(host, first, terminalId, { sessionKey: 'wrong-key' });
+  start(host, first, terminalId, { unconfirmed: true });
+  assert.equal(store.pendingRolePermissionsNotice, null);
+  start(host, first, terminalId);
+  start(host, second);
+  const target = { projectId: first.id, terminalId };
+  assert.deepEqual(store.pendingRolePermissionsNotice, target);
+  assert.equal(store.settings.rolePermissionsNoticeSeen, false);
+  store = new WorkspaceStore(file);
+  assert.deepEqual(store.pendingRolePermissionsNotice, target, 'refresh or restart still has the original conversation target');
+  store.acknowledgeRolePermissionsNotice(second.id);
+  store.updateSettings({ rolePermissionsNoticeSeen: true });
+  assert.equal(store.settings.rolePermissionsNoticeSeen, false);
+  store.acknowledgeRolePermissionsNotice(terminalId);
+  store.acknowledgeRolePermissionsNotice(terminalId);
+  store = new WorkspaceStore(file);
+  assert.equal(store.settings.rolePermissionsNoticeSeen, true);
+  start(intake(), second);
+  assert.equal(store.pendingRolePermissionsNotice, null);
+});
 
 function fakeClaudeWorker(records, finished) {
   const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, remote: true,

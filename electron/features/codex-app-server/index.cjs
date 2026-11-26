@@ -13,7 +13,7 @@ const { scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/co
 const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
-const { ELEVATED_SANDBOX_CONFIG, ELEVATED_SANDBOX_ARGS, sandboxHome, verifyRoleCwd } = require('./sandbox-refresh.cjs');
+
 const { startupDetail } = require('../agents/start-failure.cjs');
 const { routingCommand, routingPatch, routingOwned } = require('../agents/agent-command.cjs');
 const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
@@ -31,15 +31,6 @@ const PERMISSIONS = {
 };
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
-const ELEVATED_SETUP_MESSAGE = '如果 Agentrix 启动时显示沙箱设置提示，请选择「设置」。你也可以在管理员 PowerShell 中运行以下命令后重试。 {command}';
-function elevatedSetupMessage(env, codexHome, translate = value => value) {
-  const user = env.USERNAME && (env.USERDOMAIN ? env.USERDOMAIN + '\\' + env.USERNAME : env.USERNAME);
-  const quote = value => "'" + value.replaceAll("'", "''") + "'";
-  const userArg = user ? quote(user) : translate('<你的 Windows 用户>');
-  const command = `codex sandbox setup --elevated --user ${userArg} --codex-home ${quote(sandboxHome(env, codexHome))}`;
-  return translate(ELEVATED_SETUP_MESSAGE).replace('{command}', () => command);
-}
-const ELEVATED_VERSION_MESSAGE = '当前安装的 Codex 版本过旧，无法为角色启用 Windows 沙箱。请更新 Codex 后重试。';
 // Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
 const REMOTE_WRITE = '远端 Codex 只给了只读沙箱，无法使用「先询问」。远端是 Windows 时，请在远端 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"（Agentrix 不会改远端的配置），或改用「全部放开」或「按 Codex 配置」。';
 const SANDBOX_REFUSALS = {
@@ -95,7 +86,7 @@ function replaceContextCwd(context, cwd, wireCwd) {
   const bounded = new RegExp(`(^|${delimiters})(${alternatives})(?=$|[\\\\/]|${delimiters})`, 'g');
   return context.replace(bounded, (_match, before, from) => before + paths.get(from));
 }
-function stopProcess(child, { preserveDescendants = false, onTreeStopFailure = () => {} } = {}) {
+function stopProcess(child, { onTreeStopFailure = () => {} } = {}) {
   if (!child) return Promise.resolve();
   // A CLI metadata child can inherit stdout after the app-server itself exits.
   // Release our pipe ends on proved local exit; a pipe holder is not a live server.
@@ -103,7 +94,7 @@ function stopProcess(child, { preserveDescendants = false, onTreeStopFailure = (
   if (child.exitCode != null || child.signalCode != null) { release(); return Promise.resolve(); }
   // Windows finds the tree only through a live app-server, and Codex's children outlive it (no job ends them): the tree is
   // stopped before our input ends (Codex leaves on end of input), and the stop ends when the server has gone and taskkill has finished.
-  const tree = !preserveDescendants && !child.remote && process.platform === 'win32' && child.pid;
+  const tree = !child.remote && process.platform === 'win32' && child.pid;
   return new Promise((resolve, reject) => {
     let gone = false, treeStopped = !tree;
     const remove = () => { clearTimeout(timer); child.removeListener('close', closed); child.removeListener('exit', exited); };
@@ -123,46 +114,11 @@ function stopProcess(child, { preserveDescendants = false, onTreeStopFailure = (
           }
           treeStopped = true; settle();
         });
-    } else if (preserveDescendants) {
-      // A .cmd shim's app-server inherits this pipe and exits on EOF.
-      child.stdin.end();
-      child.kill('SIGKILL');
     } else {
       try { process.kill(-child.pid, 'SIGKILL'); }
       catch (error) { if (error.code !== 'ESRCH') onTreeStopFailure(error); child.kill('SIGKILL'); }
     }
   });
-}
-
-async function withSandboxServer(file, { cwd, env }, { launch = spawn, rpcFactory = createRpc, stop = stopProcess } = {}, query, refresh = false) {
-  const args = ['app-server', '--listen', 'stdio://', ...ELEVATED_SANDBOX_ARGS];
-  const options = { cwd, env: workerEnvironment(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
-  let child, rpc;
-  try {
-    if (/\.cmd$/i.test(file)) {
-      // Pass the shim path through a single quoted variable expansion.
-      const cmd = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
-      options.env.AGENTRIX_SETUP_CLI = file;
-      options.windowsVerbatimArguments = true;
-      child = launch(cmd, ['/d', '/v:off', '/s', '/c', '""%AGENTRIX_SETUP_CLI%" ' + args.join(' ') + '"'], options);
-    } else {
-      child = launch(file, args, options);
-    }
-    rpc = rpcFactory(child);
-    await rpc.request('initialize', { clientInfo: { name: 'agentrix-sandbox-setup', version: '1.0.0' }, capabilities: { experimentalApi: true } });
-    rpc.notify('initialized');
-    return await query(rpc);
-  } finally {
-    rpc?.close();
-    // The ACL worker may still be running when the UI deadline expires.
-    if (refresh) await stop(child, { preserveDescendants: true });
-    else await stop(child);
-  }
-}
-
-async function readiness(file, context, deps) {
-  const result = await withSandboxServer(file, context, deps, rpc => rpc.request('windowsSandbox/readiness', {}));
-  return result?.status ?? null;
 }
 
 function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis,
@@ -250,23 +206,20 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         events.publish('session.state', { state, reason });
       };
       const windowsLocal = () => platform === 'win32' && spec.kind !== 'ssh';
-      const elevatedRole = () => windowsLocal() && spec.owner === 'dispatch' && !(spec.env || process.env).SSH_CONNECTION;
       const place = () => windowsLocal() ? 'windows' : spec.kind === 'ssh' ? 'ssh' : null;
       const releaseThread = threadId => rpc?.request('thread/unsubscribe', { threadId }).catch(() => {});
       // Only the owner's own writable session has a permissions choice.
       const ownPermissions = () => spec.owner === 'gui' && !spec.readOnly;
-      // A read-only worker only reads, and a writable worker writes its workspace; the owner's own session runs as its permissions
-      // choice says. spec.policy is a caller's explicit policy and overrides that choice: the dispatch helper sends approvalPolicy 'never'
-      // (integration/dispatch.cjs), the real-CLI tests a sandbox. Approval requests always go to the user.
+      // Dispatch answers Codex approvals using the role's assignment. The owner's session keeps its own permissions choice.
       function threadPolicy() {
-        if (elevatedRole()) return { sandbox: spec.readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'never' };
-        const policy = spec.policy || (ownPermissions() ? PERMISSIONS[spec.permissions] : {});
-        const sandbox = spec.readOnly ? 'read-only' : policy.sandbox || (spec.owner === 'dispatch' ? 'workspace-write' : null);
+        if (spec.owner === 'dispatch') return { sandbox: 'danger-full-access', approvalPolicy: 'untrusted' };
+        const policy = ownPermissions() ? PERMISSIONS[spec.permissions] : {};
+        const sandbox = spec.readOnly ? 'read-only' : policy.sandbox;
         return { ...(sandbox ? { sandbox } : {}), ...(policy.approvalPolicy ? { approvalPolicy: policy.approvalPolicy } : {}) };
       }
       // Windows without a configured sandbox answers a writable request read-only: the same request is made once more with a request-scoped
       // unelevated sandbox, which changes neither the user's configuration nor another request.
-      const unelevated = (params, result) => windowsLocal() && !elevatedRole() && params.sandbox === 'workspace-write' && result.sandbox?.type === 'readOnly'
+      const unelevated = (params, result) => windowsLocal() && params.sandbox === 'workspace-write' && result.sandbox?.type === 'readOnly'
         ? { ...params, config: { ...params.config, 'windows.sandbox': 'unelevated' } } : null;
       function bind(threadId) {
         const home = spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
@@ -348,6 +301,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           scopes.delete(spec.scopeId || spec.runtimeSessionId);
           events.publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'unknown', observedAtMs: now(), state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server' });
         } else {
+          if (spec.owner === 'dispatch') requests.observeFileChange(method, params);
           if (manualCommand === 'compact' && params.item?.type === 'contextCompaction') params = { ...params, item: { ...params.item, trigger: 'manual' } };
           events.notification(method, params);
           // The receipt follows the message it names: the host matches a taken-up prompt by that item's text, and a
@@ -399,10 +353,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         resetting = task; await task;
       }
       async function connectThread(executable, env, onStage, isReconnecting) {
-        // Readiness uses app-server's startup config, so the process and the thread must request the same backend.
-        // Codex treats bare `elevated` as a literal string, so Windows launchers need no embedded quotes.
-        const configArgs = elevatedRole() ? ELEVATED_SANDBOX_ARGS : [];
-        child ||= spawnProcess(executable, [...appServerArgs, ...configArgs], { cwd: wireCwd, env, windowsHide: true,
+        child ||= spawnProcess(executable, appServerArgs, { cwd: wireCwd, env, windowsHide: true,
           detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
         rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
           onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
@@ -417,26 +368,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         onStage('initialize');
         const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
         assertOpen();
-        let compatibility;
-        try { compatibility = assertCompatible(init); }
-        catch (error) {
-          if (elevatedRole() && error.code === 'unsupported_codex_version') error.message = translate(ELEVATED_VERSION_MESSAGE);
-          throw error;
-        }
+        const compatibility = assertCompatible(init);
         rpc.notify('initialized');
-        if (elevatedRole()) {
-          onStage('sandbox_readiness');
-          let readiness;
-          try { readiness = await rpc.request('windowsSandbox/readiness', {}); }
-          catch (error) {
-            if (error.code !== -32601) throw error;
-            throw Object.assign(new Error(translate(ELEVATED_VERSION_MESSAGE)), { code: 'unsupported_codex_version' });
-          }
-          if (readiness?.status !== 'ready') {
-            const message = elevatedSetupMessage(env, spec.codexHome, translate);
-            throw Object.assign(new Error(message), { code: 'elevated_sandbox_not_ready' });
-          }
-        }
         onStage('capability_probe'); await probeCapabilities(rpc);
         assertOpen();
         return compatibility;
@@ -445,7 +378,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function acceptThread(result, options, { threadId, resumed, resuming }) {
         if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
           && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
-        assertSandbox(options.sandbox, result.sandbox, elevatedRole() ? null : place());
+        assertSandbox(options.sandbox, result.sandbox, place());
+        if (spec.owner === 'dispatch' && result.approvalPolicy !== options.approvalPolicy) {
+          throw Object.assign(new Error('Codex did not apply the worker approval policy.'), { code: 'approval_policy_mismatch' });
+        }
         startedWritable = options.sandbox === 'workspace-write';
         if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
         assertOpen();
@@ -502,11 +438,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
           const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}),
-            // A role runs with approvals off, where Codex refuses any MCP call not approved in config; only finish_role is pre-approved.
+            // The worker may submit its result without a separate approval.
             ...(spec.roleServer && { mcp_servers: spec.owner === 'dispatch'
               ? { agentrix_role: { ...spec.roleServer, tools: { finish_role: { approval_mode: 'approve' } } } }
-              : { agentrix: spec.roleServer } }),
-            ...(elevatedRole() && ELEVATED_SANDBOX_CONFIG) };
+              : { agentrix: spec.roleServer } }) };
           const requestThread = (options, resumeId) => rpc.request(resumeId ? 'thread/resume' : 'thread/start', {
             ...options, ...(resumeId && { threadId: resumeId, excludeTurns: true }), config: { ...config, ...options.config },
           });
@@ -531,11 +466,6 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             assertOpen();
           }
           acceptThread(result, options, { threadId, resumed, resuming });
-          if (elevatedRole()) {
-            stage = 'sandbox_cwd';
-            await verifyRoleCwd({ rpc, cwd: wireCwd, env, home: sandboxHome(env, spec.codexHome), assertOpen, translate,
-              sandbox: { ...result.sandbox, networkAccess: false }, onWait: spec.onSandboxWait });
-          }
           // Dispatch needs the resumed model context, not a copy of its historical output.
           if (resumed && spec.owner !== 'dispatch') await replayHistory();
           assertOpen();
@@ -544,7 +474,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
         } catch (error) {
           error.stage ||= stage;
-          const stop = () => close({ preserveDescendants: stage === 'sandbox_cwd' });
+          const stop = () => close();
           // The reason is only added: working it out must never replace the error or skip the close below.
           try {
             if (!error.detail) {
@@ -835,13 +765,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         requests.cancelAll({ resume: true });
         if (active) await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId });
       }
-      async function close({ preserveDescendants = false } = {}) {
+      async function close() {
         if (closed) return;
         closed = true; threadKnown(); settingsSeen?.(); connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
         releaseTurnInputs(turnEntries);
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
         rpc?.close();
-        try { await stopChild(child, { preserveDescendants, onTreeStopFailure }); }
+        try { await stopChild(child, { onTreeStopFailure }); }
         finally {
           if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);
           try { child?.dispose?.(); } finally { setState('stopped'); }
@@ -901,7 +831,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         skillsRead = task; return task;
       }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
-        answer: (id, answer) => requests.answer(id, answer), cancel: id => requests.cancel(id), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
+        answer: (id, answer) => requests.answer(id, answer), cancel: id => requests.cancel(id),
+        workerIntent: id => requests.workerIntent(id),
+        snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
         readLimits, readAccount, commands, models, runOptions, applyRouting, activity: events.activity, tokenRate: events.tokenRate,
         shell: async (id, command) => {
           try { await send({ clientMessageId: id, text: '!' + command }); return { exitCode: null }; }
@@ -923,4 +855,4 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   };
 }
 
-module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess, elevatedSetupMessage, withSandboxServer, readiness, replaceContextCwd, releaseTurnInputs };
+module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess, replaceContextCwd, releaseTurnInputs };

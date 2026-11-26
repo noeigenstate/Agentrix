@@ -365,7 +365,7 @@ test('settings reject invalid layout and font values', () => {
   assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), {
     startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '',
     focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null,
-    terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', codexSandboxPromptDismissed: false, shell: 'powershell', notifications: true, sound: false,
+    terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', rolePermissionsNoticeSeen: false, shell: 'powershell', notifications: true, sound: false,
     closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true,
     voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full', claudeBackgroundTasks: false,
   });

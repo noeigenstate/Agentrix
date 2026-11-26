@@ -11,6 +11,7 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 The S2 worker facet will expose `resultServer({ command, args, env })` for the role's own stdio result server.
 The facet translates its descriptor into provider launch options or the native runtime's server spec.
 The terminal migration uses the shared launch field names and supplies separate delivery note components.
+Git approval checks recognize explicit subcommands. The final snapshot can detect ref changes made by a script or alias.
 
 ## Owns
 - `electron/features/cli-adapters/**`
@@ -26,9 +27,11 @@ The terminal migration uses the shared launch field names and supplies separate 
 - `bindNativeAdapters` (`electron/features/cli-adapters/registry.cjs`) — binds each host's runtime as `native.create(spec, emit)`. The registered facet loads the factory with `native.load()`.
 
 - `workerOf` (`electron/features/cli-adapters/workers.cjs`) — the CJS worker registry for dispatch, including CLI argv, normalized output, permission and standing rules.
+- `workerRefusal` (`electron/features/cli-adapters/workers.cjs`) — shared command and file scope decisions for worker approvals. The Claude worker policy also exposes it with the role's access level bound.
 - `worker-manifests` (`electron/features/cli-adapters/manifests/worker.cjs`) — the carried install floors and ordered model matches projected from the shared manifests.
 
 ## May import
+- `electron/boundaries.cjs` (allowed file glob matching)
 - `electron/features/agents/dispatch-events.cjs` (structured launch field table)
 - `electron/features/claude-runtime/adapter.cjs` (Claude Code install, hooks and transcript)
 - `electron/features/codex-runtime/adapter.cjs` (Codex install and transcript)

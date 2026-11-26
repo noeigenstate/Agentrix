@@ -11,8 +11,8 @@ function ended(id, reason = 'exit', fields = {}) {
     result: { source: 'final-text', out: 'answer.md' }, routing: null, ...fields });
 }
 
-function waiting(id, message = 'waiting for sandbox permissions') {
-  return dispatchEvent('waiting', id, { kind: 'sandbox', message });
+function waiting(id, message) {
+  return dispatchEvent('waiting', id, { kind: 'owner', message });
 }
 
 function running(id, message) {

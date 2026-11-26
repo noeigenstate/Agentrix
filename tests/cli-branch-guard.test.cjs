@@ -7,7 +7,7 @@ const { ROOT, moduleOfFile, walk, loadBaseline, writeBaseline } = require('./hel
 const BASELINE = 'tests/fixtures/cli-branch-baseline';
 const WRITE = 'node tests/cli-branch-guard.test.cjs --write';
 const SOURCE = /\.(?:cjs|mjs|ts|tsx|py|ps1|bash|zsh)$/;
-const SKIP = /^(?:electron\/features\/(?:cli-adapters|claude-runtime|claude-sdk|codex-app-server|codex-runtime|codex-sandbox-setup)|src\/features\/cli-screens)$/;
+const SKIP = /^(?:electron\/features\/(?:cli-adapters|claude-runtime|claude-sdk|codex-app-server|codex-runtime)|src\/features\/cli-screens)$/;
 const literal = id => `(?:'${id}'|"${id}"|\x60${id}\x60)`;
 const cli = literal('(?:claude|codex)');
 const operator = String.raw`(?:(?<![=!])[!=]={1,2}(?!=)|(?<![\w-])-(?:i|c)?(?:eq|ne)\b)`;

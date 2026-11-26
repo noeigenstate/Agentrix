@@ -150,10 +150,20 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       fs.writeFileSync(config, originalConfig);
       const blankWindows = fs.readFileSync(config, 'utf8').replace('[windows]\nsandbox = "unelevated"\n', '');
       fs.writeFileSync(config, blankWindows);
+      const { workerRefusal } = require('../electron/features/cli-adapters/workers.cjs');
       const workerEvents = [], worker = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX, spawnProcess: launch })
-        .create({ ...spec('write-proof'), owner: 'dispatch', providerSessionId: null }, event => workerEvents.push(event));
+        .create({ ...spec('write-proof'), owner: 'dispatch', providerSessionId: null }, event => {
+          workerEvents.push(event);
+          if (event.type === 'request.opened') queueMicrotask(() => {
+            const { requestId } = event.payload, intent = worker.workerIntent(requestId);
+            const denied = !intent || workerRefusal({ cwd, allow: ['proof.txt'] }, intent);
+            worker.answer(requestId, { decision: denied ? 'deny' : 'allow' });
+          });
+        });
       sessions.push(worker);
-      await worker.start(); assert.equal(worker.threadResponse.sandbox.type, 'workspaceWrite');
+      await worker.start();
+      assert.equal(worker.threadResponse.sandbox.type, 'dangerFullAccess');
+      assert.equal(worker.threadResponse.approvalPolicy, 'untrusted');
       await worker.send({ clientMessageId: 'write-proof', text: 'REVIEW_WRITE_PROOF' });
       for (let n = 0; n < 1000 && !workerEvents.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 20));
       assert.ok(workerEvents.some(event => event.type === 'turn.completed'), 'real tool round completed');
@@ -163,7 +173,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       }
       const written = fs.readFileSync(path.join(cwd, 'proof.txt'));
       assert.match(written.toString(written[0] === 0xff && written[1] === 0xfe ? 'utf16le' : 'utf8'), /REVIEW_WRITTEN/);
-      assert.equal(fs.readFileSync(config, 'utf8'), blankWindows, 'retry did not write user configuration');
+      assert.equal(fs.readFileSync(config, 'utf8'), blankWindows, 'dispatch did not write user configuration');
       await worker.close();
     }
     // External helpers and the Lab have no GUI control socket. Both fresh and
@@ -183,7 +193,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       if (resume.length) assert.ok(stdout.includes('session ' + threadId));
       assert.doesNotMatch(stdout, /fallback/);
     }
-    assert.equal(helperLaunches.length, process.platform === 'win32' ? 3 : 2); assert.ok(helperLaunches.every(args => args[0] === 'app-server'));
+    assert.equal(helperLaunches.length, 2); assert.ok(helperLaunches.every(args => args[0] === 'app-server'));
     const directory = path.join(root, 'native'); fs.mkdirSync(directory);
     const settingsFile = path.join(directory, 'settings.json');
     fs.writeFileSync(settingsFile, JSON.stringify({ claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: null, codexAutoReset: false }));

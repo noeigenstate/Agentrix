@@ -7,7 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { validateSmallScope, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole,
+const { validateSmallScope, answerDetachedRole,
   renderDispatchLine, renderDispatchStart } = require('./dispatch.cjs');
 const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, readRoleResultFile, roleResultFields,
   RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
@@ -21,14 +21,13 @@ const PROTOCOL = '2025-06-18';
 const RECENT_END_MS = 10 * 60 * 1000;
 const RECENT_END_LIMIT = 10;
 const SUMMARY_TITLE_LIMIT = 64;
-const READINESS_CACHE_MS = 5000;
 const exec = promisify(execFile);
 const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? value : undefined;
 
 const text = description => ({ type: 'string', description });
 const TOOLS = [
   { name: 'start_role',
-    description: 'Start a role with its seat settings. Returns a run id and any worktree base and source, or instructions when dispatch is unavailable. '
+    description: 'Start a role with its seat settings. Returns a run id and any worktree base and source. '
       + 'Claude roles can run commands and decide whether to run tests and which task-related tests to run. '
       + 'They must never commit, push, or run git reset --hard. Read-only roles must leave project files untouched.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
@@ -202,8 +201,8 @@ function summarize(run) {
     ...(run.needsDecision && { needsDecision: true }), refusedCount: run.refusedCount ?? run.refused?.length ?? 0 };
 }
 
-function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
-  platform = process.platform, checkReadiness = roleReadiness, checkSshReadiness = sshRoleReadiness, now = Date.now, tempRoot = os.tmpdir(), cleanup = false }) {
+function createRoleTools({ env = process.env, cwd = process.cwd(), engine,
+  now = Date.now, tempRoot = os.tmpdir(), cleanup = false }) {
   const runs = new Map();
   const ssh = env.AGENTRIX_REMOTE_ROLE_TOOLS === '1';
   let lastRoleCwd;
@@ -217,31 +216,6 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     } }).finally(() => { sweeping = false; });
   }
   sweep();
-  let readiness;
-  function sandboxStatus() {
-    if (!readiness || readiness.until <= now()) {
-      const entry = { until: Infinity };
-      entry.result = Promise.resolve().then(() => (ssh ? checkSshReadiness : checkReadiness)(cwd, env)).catch(() => ssh ? 'unavailable' : null)
-        .then(status => {
-          if (status !== 'ready') entry.until = now() + READINESS_CACHE_MS;
-          return status;
-        });
-      readiness = entry;
-    }
-    return readiness.result;
-  }
-  async function sandboxRoute(agent, seat) {
-    const leadWorker = workerOf(leadAgent);
-    if (!leadWorker || !workerOf(agent).needsSandbox?.({ ssh, env, platform })) return {};
-    const lead = leadWorker.leadSeat && (leadSeat ?? leadWorker.leadSeat(env.AGENTRIX_BOOTSTRAP));
-    const matchingLead = lead && agentOfModel(lead.model) === leadAgent ? lead : null;
-    if (!ssh && leadWorker.leadSeat && !matchingLead) return {};
-    const status = await sandboxStatus();
-    if (ssh ? status === 'ready' : status !== 'notConfigured' && status !== 'updateRequired') return {};
-    const reason = !ssh ? null : status === 'missing' ? '远端未找到 Codex。请在远端登录 shell 中安装 Codex。'
-      : '远端 Codex Linux 沙箱不可用。请管理员用 sysctl user.max_user_namespaces 检查，设为合适的正数后重试，例如 sudo sysctl -w user.max_user_namespaces=1024。';
-    return leadWorker.sandboxFallback({ ssh, env, reason, lead: matchingLead, seat, elevatedSetupMessage });
-  }
   const call = async (args, options) => {
     const events = [];
     const timing = new Map();
@@ -345,11 +319,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
-      const configuredAgent = agentOfModel(seats[id].model);
-      const { instruction, roleFallback, reason } = await sandboxRoute(configuredAgent, seats[id]);
-      if (ssh && !conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
-      if (instruction) return { instruction };
-      const agent = roleFallback ? leadAgent : configuredAgent;
+      const agent = agentOfModel(seats[id].model);
       const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree, folder, from, lastRoleCwd);
       let waitingId;
       try {
@@ -363,7 +333,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
           ...(small ? ['--small'] : []),
           ...workerOf(agent).roleArgs(readOnly),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
-          roleArtifacts: artifacts, ...(roleFallback && { roleFallback }),
+          roleArtifacts: artifacts,
           onTiming: status => {
             if (waitingId || !(status.waiting || status.ownerWait)) return;
             waitingId = status.id;
@@ -384,7 +354,6 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         runs.set(runId, run);
         lastRoleCwd = work;
         return { id: runId, seat, ...(started ? { started: renderDispatchStart(started) } : { state: 'starting' }),
-          ...(reason && { instruction: `${reason} 已将此席位改派给 Claude 模型 ${roleFallback.model}。` }),
           ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base, baseSource: checkout.baseSource }) };
       } catch (error) {
         if (waitingId) runs.delete(waitingId);

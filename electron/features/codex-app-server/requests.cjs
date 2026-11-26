@@ -9,9 +9,10 @@ const CANCELLED = {
   command: { decision: 'cancel' }, 'file-change': { decision: 'cancel' }, permissions: { permissions: {}, scope: 'turn' },
   elicitation: { action: 'cancel', content: null, _meta: null }, question: { answers: {} },
 };
+const COMMAND_KINDS = new Set(['command', 'humanCommand', 'writeStdin']);
 
 function createRequests(rpc, events, state, isActive = () => true) {
-  const pending = new Map();
+  const pending = new Map(), fileChanges = new Map();
   function settle(requestId, resolution, resume = true) {
     const task = pending.get(requestId);
     if (!task) return;
@@ -29,6 +30,27 @@ function createRequests(rpc, events, state, isActive = () => true) {
   }
   const cancel = requestId => resolve(requestId, CANCELLED[pending.get(requestId)?.kind], 'cancelled');
   return {
+    observeFileChange(method, { item, turnId }) {
+      if (item?.type !== 'fileChange' || typeof item.id !== 'string' || turnId && turnId !== events.binding.turnId) return;
+      if (method === 'item/completed') fileChanges.delete(item.id);
+      if (method !== 'item/started' || !Array.isArray(item.changes)) return;
+      const paths = item.changes.flatMap(change =>
+        [change?.path, ...[change?.kind?.move_path, change?.kind?.movePath].filter(destination => destination != null)]);
+      fileChanges.set(item.id, paths);
+      if (fileChanges.size > 400) fileChanges.delete(fileChanges.keys().next().value);
+    },
+    workerIntent(requestId) {
+      const task = pending.get(requestId);
+      if (task?.kind === 'file-change') return { operation: 'edit', paths: fileChanges.get(task.params.itemId) || [] };
+      if (task?.kind !== 'command') return null;
+      const { kind = 'command', command, commandActions } = task.params;
+      if (!COMMAND_KINDS.has(kind)) return { operation: 'command' };
+      // 0.170 uses the command field for the actual stdin text.
+      if (kind === 'writeStdin') return { operation: 'command', command };
+      const inner = Array.isArray(commandActions) ? commandActions.map(action => action?.command) : [];
+      const commands = inner.concat(command).filter(value => typeof value === 'string' && value.trim());
+      return { operation: 'command', command: commands.join('\n'), summary: inner.length === 1 ? inner[0] || command : command || commands[0] };
+    },
     open(message) {
       const kind = METHODS[message.method], params = message.params || {};
       if (pending.size >= 100) return rpc.reject(message.id, -32000);
@@ -88,6 +110,7 @@ function createRequests(rpc, events, state, isActive = () => true) {
     },
     cancel,
     cancelAll({ resume = false } = {}) {
+      fileChanges.clear();
       for (const id of [...pending.keys()]) {
         const task = settle(id, 'cancelled', resume);
         try { rpc.respond(task.id, CANCELLED[task.kind]); } catch {}

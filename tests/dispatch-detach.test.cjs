@@ -90,7 +90,7 @@ test('wait for any returns on a missing receipt while ordinary wait keeps observ
   }
 });
 
-test('detached startup reports the sandbox wait while status can read it and claim the eventual start', async t => {
+test('detached startup reports an owner wait while status can read it and claim the eventual start', async t => {
   const store = receipts(t), statuses = [];
   let id, text = '', status = '';
   const launch = (_file, args) => {
@@ -101,8 +101,8 @@ test('detached startup reports the sandbox wait while status can read it and cla
     return child;
   };
   store.observe = async (check, timeout) => {
-    assert.equal(timeout, process.platform === 'win32' ? 9 * 60_000 : 60_000);
-    await store.update(id, { admitted: true, waiting: waitingEvent(id) });
+    assert.equal(timeout, 60_000);
+    await store.update(id, { admitted: true, waiting: waitingEvent(id, 'waiting for the owner') });
     assert.equal(check(), undefined);
     assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, stdout: { write: line => { status += line; } } }), 75);
     await store.update(id, { started: startEvent(id), waiting: null });
@@ -114,9 +114,9 @@ test('detached startup reports the sandbox wait while status can read it and cla
     store, env: {}, launch, stdout: { write: line => { text += line; } }, onTiming: info => statuses.push(info),
   });
   assert.equal(code, 0);
-  assert.match(status, /still running.*waiting for sandbox permissions/);
-  assert.match(text, /waiting for sandbox permissions\n\[dispatch\] started/);
-  assert.equal(statuses[0].waiting.message, 'waiting for sandbox permissions');
+  assert.match(status, /still running.*waiting for the owner/);
+  assert.match(text, /waiting for the owner\n\[dispatch\] started/);
+  assert.equal(statuses[0].waiting.message, 'waiting for the owner');
   assert.equal(store.read(id).waiting, null);
 });
 
@@ -130,28 +130,6 @@ test('detached launcher saves absolute cwd and notices a helper load failure imm
     },
   });
   assert.equal(result, 1); assert.match(text, /failed to start/); assert.equal(store.read(saved.id).settled, true);
-});
-
-test('a detached Claude fallback keeps its declared route in the child receipt', async t => {
-  const store = receipts(t), bootstrap = path.join(store.directory, 'bootstrap.json');
-  const roleFallback = { configured: 'gpt-6.2-sol', model: 'sonnet', effort: 'medium', fast: false };
-  updateDispatchSeats(bootstrap, { developer: { model: 'gpt-6.2-sol', effort: 'minimal', fast: true } });
-  const argv = ['claude', '--detach', '--role', 'review', '--title', 'Fixture', '--seat', 'developer', '--permission', 'plan',
-    '--cwd', store.directory, '--brief', 'brief.md', '--out', 'answer.md'];
-  let saved;
-  await startDetached(argv, { store, env: { AGENTRIX_BOOTSTRAP: bootstrap }, roleFallback, stdout: { write() {} },
-    launch: (_file, args) => {
-      saved = store.read(path.basename(args.at(-1), '.json'));
-      updateDispatchSeats(bootstrap, { developer: { model: 'opus', effort: 'max', fast: true } });
-      const child = new EventEmitter();
-      child.unref = () => {};
-      queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 1, null); });
-      return child;
-    },
-  });
-  assert.deepEqual(saved.roleFallback, roleFallback);
-  const options = argumentsOf(saved.argv, { AGENTRIX_BOOTSTRAP: bootstrap }, undefined, saved.roleFallback);
-  assert.deepEqual(options.expectedSeat, { model: 'sonnet', effort: 'medium', fast: false });
 });
 
 test('unadmitted helper timeout records settlement after observing its exit', async t => {

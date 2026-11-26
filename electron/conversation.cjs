@@ -166,11 +166,20 @@ class ConversationLog {
   }
 }
 
-function dropQueued(log, index, cancelled = false) {
+function dropQueued(log, index, cancelled = false, undeliveredAt) {
   const [entry] = log.queue.splice(index, 1);
-  // A hidden receipt stops withdrawn or historical accepted sends from being automatically retried.
-  if (cancelled) log.put({ ...entry, cancelled: true });
+  // Retire the activity queue item by ID. The reading view can still offer a message lost during resume.
+  if (cancelled) log.put({ ...entry, cancelled: true, ...(undeliveredAt === undefined ? {} : { undeliveredAt }) });
   else log.drop(entry.id);
+}
+
+function retireResentPrompt(log, entry) {
+  const key = promptKey(entry.original);
+  const hasPicture = item => item.images?.length || /\[Image #\d+\]/.test(item.original);
+  // Replace one lost card per new user message. A text-only resend cannot replace a lost picture.
+  const lost = log.list.find(item => !item.undeliveredReplaced && item.undeliveredAt !== undefined && item.undeliveredAt <= entry.at
+    && promptKey(item.original) === key && (!hasPicture(item) || hasPicture(entry)));
+  if (lost) log.put({ ...lost, undeliveredReplaced: true });
 }
 
 // Removal and receipt can be written in either order. Keep just the unpaired signal, without retaining pictures.
@@ -188,7 +197,7 @@ function claudeQueue(log, record, queueOnly) {
     const command = /^\s*<command-name>/.test(original || '') || (/^\/[^\s/]+(?:\s|$)/.test(text) || text.startsWith('!')) && !/[\r\n]/.test(text);
     if (original === null || command) return;
     const id = `q:${record.uuid || createHash('sha256').update(JSON.stringify(record)).digest('hex')}`;
-    if (log.queue.some(entry => entry.id === id)) return;
+    if (log.queue.some(entry => entry.id === id) || log.list.some(entry => entry.id === id && entry.undeliveredAt !== undefined)) return;
     const entry = withImages({ id, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original, queued: true }, record.content, log);
     log.queue.push(entry); log.put(entry);
     return;
@@ -252,6 +261,7 @@ function receivedPrompt(log, entry, { inOrder = false, fromQueue = false, queueO
     for (const delivery of log.deliveries) if (delivery.id === receipt.id) delivery.ignored = true;
     return;
   }
+  if (!replay) retireResentPrompt(log, entry);
   // A workOnly observation consumes once; its later full observation must still publish the same entry.
   if (!queueOnly) { if (previous?.queued) log.drop(entry.id); log.put(entry, inOrder); }
 }
@@ -259,15 +269,24 @@ function receivedPrompt(log, entry, { inOrder = false, fromQueue = false, queueO
 function claudeConversation(log, record, cwd, { queueOnly = false } = {}) {
   if (record?.type === 'queue-operation') { if (!record.isSidechain) claudeQueue(log, record, queueOnly); return; }
   if (!record || record.isSidechain) return;
-  const queued = record?.type === 'attachment' && record.attachment?.type === 'queued_command' ? record.attachment : null;
-  if (queued && !record.isSidechain) {
-    const original = promptText(queued.prompt, { ...record, ...queued });
+  const attachment = record.type === 'attachment' ? record.attachment : null;
+  if (attachment?.type === 'hook_success' && attachment.hookEvent === 'SessionStart' && attachment.hookName === 'SessionStart:resume') {
+    // A resumed Claude process starts with an empty input queue. The old process can exit without recording removals.
+    const resumedAt = Date.parse(record.timestamp);
+    for (let index = log.queue.length - 1; index >= 0; index--) {
+      if (log.queue[index].at < resumedAt) dropQueued(log, index, true, resumedAt);
+    }
+    return;
+  }
+  if (attachment?.type === 'queued_command') {
+    const original = promptText(attachment.prompt, { ...record, ...attachment });
     if (original === null) {
-      receivedPrompt(log, { id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), original: messageText(queued.prompt) }, { ignored: true });
+      receivedPrompt(log, { id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), original: messageText(attachment.prompt) }, { ignored: true });
       return;
     }
     const text = promptCommand(original) || clean(original);
-    const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(), role: 'user', text: bounded(text), original }, queued.prompt, log);
+    const entry = withImages({ id: `u:${record.uuid || record.timestamp}`, at: Date.parse(record.timestamp) || Date.now(),
+      role: 'user', text: bounded(text), original }, attachment.prompt, log);
     if (text || entry.images) receivedPrompt(log, entry, { fromQueue: true, queueOnly });
     return;
   }

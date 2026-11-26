@@ -1,7 +1,10 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { matches } = require('../../boundaries.cjs');
 const { imageMetadata } = require('../../oversized-record.cjs');
-const { claudeLeadSeat } = require('../agents/call-seat.cjs');
 const { routingVerdict: strictRoutingVerdict } = require('../dashboard/records-routing.cjs');
 const manifests = require('./manifests/worker.cjs');
+const { gitMutationInCommand } = require('./worker-git.cjs');
 
 const word = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -82,9 +85,52 @@ const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const WORKER_DENIED = ['EnterPlanMode'];
 const READ_ONLY_DENIED = [...EDIT_TOOLS, ...WORKER_DENIED, 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
 const roleResultConfig = server => ({ mcpServers: { agentrix_role: server } });
+
 const FORBIDDEN_GIT_OPERATIONS = ['commit', 'push', 'reset --hard'];
+// The older terminal hook embeds this regexp in a standalone script.
 const forbiddenGit = new RegExp('\\bgit\\b[^\\n;&|]*(?:' + FORBIDDEN_GIT_OPERATIONS
   .map(operation => '\\b' + operation.replace(' ', '\\b[^\\n;&|]*') + '\\b').join('|') + ')', 'i');
+
+function realTarget(file) {
+  let parent = file;
+  const suffix = [];
+  while (!fs.lstatSync(parent, { throwIfNoEntry: false })) {
+    const next = path.dirname(parent);
+    if (next === parent) throw new Error('Invalid path');
+    suffix.unshift(path.basename(parent));
+    parent = next;
+  }
+  return path.join(fs.realpathSync.native(parent), ...suffix);
+}
+
+function pathRefusal(root, file, edit, allow) {
+  if (typeof file !== 'string' || !file.trim() || file.includes('\0')) return 'invalid_path';
+  if (file.startsWith('~') || /^[A-Za-z]:[^\\/]/.test(file)) return 'outside_worktree';
+  let relative;
+  try { relative = path.relative(root, realTarget(path.isAbsolute(file) ? file : root + path.sep + file)); }
+  catch { return 'invalid_path'; }
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) return 'outside_worktree';
+  if (!edit) return null;
+  const normalized = relative.replaceAll('\\', '/');
+  if ([file, normalized].some(name => path.basename(name).toLowerCase() === 'skill.md') && !allow.includes(normalized)) return 'skill_not_authorized';
+  return normalized && matches(allow, normalized) ? null : 'outside_scope';
+}
+
+function workerRefusal({ cwd, readOnly, allow = [] }, { operation, command, paths = [] }) {
+  if (typeof command === 'string' && gitMutationInCommand(command)) return 'git_forbidden';
+  if (operation === 'command' && (typeof command !== 'string' || !command.trim())) return 'invalid_command';
+  const edit = operation === 'edit';
+  if (edit && readOnly) return 'read_only';
+  if (!paths.length) return edit ? 'invalid_path' : null;
+  let root;
+  try { root = realTarget(path.resolve(cwd)); }
+  catch { return 'invalid_path'; }
+  for (const file of paths) {
+    const reason = pathRefusal(root, file, edit, allow);
+    if (reason) return reason;
+  }
+  return null;
+}
 
 const isReadOnly = options => options.readOnly || ['plan', READ_ONLY_MODE].includes(options.permission);
 
@@ -109,6 +155,7 @@ function workerToolEnvironment(env, platform = process.platform) {
 
 const claudePermission = readOnly => readOnly ? READ_ONLY_MODE : 'acceptEdits';
 const claudePolicy = (readOnly, platform, configFile, server) => ({ args: workerToolArgs(readOnly, platform, configFile), mode: claudePermission(readOnly),
+  refusal: ({ cwd, allow }, intent) => workerRefusal({ cwd, allow, readOnly }, intent),
   ...(server && { mcpConfig: roleResultConfig(server) }) });
 
 function claudeCommand(options) {
@@ -201,29 +248,16 @@ function workerOutput(normalizeRecord) {
   return { output, records };
 }
 
-function claudeRoutingVerdict(actual, declared, fallback = false) {
+function claudeRoutingVerdict(actual, declared) {
   // Bundled alias floor (major, minor): bump this one line with a supported release.
   const CLAUDE_ALIAS_FLOOR = [5, 5];
-  const target = fallback ? declared?.model?.replace(/\[(?:1m|fast)\]$/gi, '') : declared?.model;
+  const target = declared?.model;
   const current = /^(opus|sonnet|haiku)$/.test(target) && CLAUDE_ALIAS_FLOOR;
   const model = actual.model?.replace(/(?:\[(?:1m|fast)\]|-\d{8})+$/gi, '');
   const resolved = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:[.-](\d+))?(?:[.-]\d+)*$/.exec(model || '');
   const follows = current && resolved?.[1] === target && (Number(resolved[2]) > current[0]
     || Number(resolved[2]) === current[0] && Number(resolved[3] || 0) >= current[1]);
-  const sameFallback = fallback && (target === model || target === 'fable' && resolved?.[1] === 'fable');
-  return strictRoutingVerdict(actual, follows || sameFallback ? { ...declared, model: actual.model } : declared);
-}
-
-function claudeSandboxFallback({ lead, seat, reason }) {
-  if (!lead) return { instruction: reason + ' 请在模型路由中为 Claude 总指挥选择 Claude 模型后重试。' };
-  return { roleFallback: { configured: seat.model, model: lead.model,
-    effort: ['low', 'medium', 'high'].includes(seat.effort) ? seat.effort : lead.effort, fast: false }, reason };
-}
-
-function codexSandboxFallback({ ssh, reason, env, elevatedSetupMessage }) {
-  if (ssh) return { instruction: reason + ' 请用 Codex 内置的子代理完成这个席位的工作。' };
-  const instruction = '这台电脑尚未完成 Codex 角色沙箱设置。请用 Codex 内置的子代理完成这个席位的工作。';
-  return { instruction: instruction + ' ' + elevatedSetupMessage(env) };
+  return strictRoutingVerdict(actual, follows ? { ...declared, model: actual.model } : declared);
 }
 
 function workerRules(rules) {
@@ -237,7 +271,8 @@ function workerRules(rules) {
     return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
       inline ? 'Follow the Code standards below in any code you write or review.' : `Code standard: ${standard} in any code you write or review.`,
       `Scope: ${scope}`,
-      rules.git,
+      ...(options.lab ? [] : ['Roles run with the same account and permissions as the orchestrator and can access the network.']),
+      'Do not commit, push, or run git reset --hard. Do not change files outside the project. Do not start another worker or agent.',
       'Run no GUI smoke test and never read or write the system clipboard.',
       ...(rules.commands ? [rules.commands] : []),
       'Run only the tests the task touches, never the whole suite.',
@@ -256,7 +291,6 @@ function workerRules(rules) {
   };
 }
 
-const localWindows = (env, platform = process.platform) => platform === 'win32' && !env.SSH_CONNECTION;
 const claudeWorker = Object.freeze({
   command: claudeCommand, policy: claudePolicy, validate: claudeOptions, ...workerOutput(claudeRecord),
   resultServer: roleResultConfig,
@@ -266,25 +300,21 @@ const claudeWorker = Object.freeze({
   acceptsRateRecord: (meter, record) => (!record.isSidechain || meter.sidechain) && !!(record.uuid || record.message || meter.pending.size),
   applyRateRecord: (meter, record) => meter.claude(record),
   parseSettings: claudeSettings,
-  sandboxFallback: claudeSandboxFallback, leadSeat: claudeLeadSeat,
   rules: workerRules({
     readOnlyScope: 'This task is read-only: do not change, create, or delete project files.',
-    git: 'Do not commit, push, or run git reset --hard. Do not start another worker or agent.',
     commands: 'You may run commands and tests. Decide whether to run tests and which to run based on the task.',
     answer: 'Never call ExitPlanMode.',
   }),
 });
 const codexWorker = Object.freeze({
-  command: () => 'native', policy: readOnly => ({ sandbox: readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'never' }),
+  command: () => 'native',
   validate: options => { if (options.permission) throw new Error('--permission is only for Claude'); },
   ...workerOutput(codexRecord), roleArgs: readOnly => readOnly ? ['--read-only'] : [],
   nativeUsage: value => ({ usage: codexUsage(value.input, value.cachedInput, value.output), cost: null }),
-  routingVerdict: strictRoutingVerdict, localWindows, sandboxFallback: codexSandboxFallback,
+  routingVerdict: strictRoutingVerdict,
   applyRateRecord: (meter, record) => meter.codex(record),
   parseSettings: codexSettings,
-  needsSandbox: ({ ssh, env, platform }) => ssh || localWindows(env, platform),
-  rules: workerRules({ readOnlyScope: 'This task is read-only: change, create and delete no file.',
-    git: 'Do not commit or push, and do not start another worker or agent.' }),
+  rules: workerRules({ readOnlyScope: 'This task is read-only: change, create and delete no file.' }),
 });
 
 const workers = new Map([['claude', claudeWorker], ['codex', codexWorker]]);
@@ -293,4 +323,4 @@ const brokerMethods = new Set([...workers.values()].map(worker => worker.brokerM
 const agentOfModel = model => manifests.find(({ models }) => models.match.test(model)).id;
 
 module.exports = { workerOf, brokerMethods, claudeSettings, codexSettings, claudeFastModeEcho, agentOfModel, defaultWorkerRules: codexWorker.rules, isReadOnly, word, count,
-  READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED, workerToolArgs, workerToolEnvironment, forbiddenGit };
+  READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED, workerToolArgs, workerToolEnvironment, forbiddenGit, workerRefusal };

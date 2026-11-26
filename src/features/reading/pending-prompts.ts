@@ -1,29 +1,33 @@
-import { isPasteSummary, withoutImageLabels, type ScreenAgent } from '../cli-screens/index.ts';
+import { hasImageLabel, isPasteSummary, withoutImageLabels, type ScreenAgent } from '../cli-screens/index.ts';
 import type { PasteReceipt } from '../terminal/terminal-screen';
 // Renderer echoes are replaced only by newly observed user records, one record per send.
 export const PENDING_PROMPT_TIMEOUT = 20_000;
 // The reading view keeps 400 entries; the user records seen are bounded well above that.
 const SEEN_LIMIT = 1000;
-type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; receivedAt?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
-export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[]; imageCount?: number };
+type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; receivedAt?: number;
+  queued?: boolean; cancelled?: boolean; undeliveredAt?: number; undeliveredReplaced?: boolean; images?: string[] };
+export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[]; imageCount?: number; undelivered?: boolean };
 export type PendingPrompts = { sessionId: string | null; prompts: readonly PendingPrompt[]; seen: readonly string[] };
 // A paste request in flight is ambiguous even if no echo has appeared. Only an unattempted/rejected paste can be
 // retried from an empty input; a confirmed paste may instead be finished from its exact, still-unsent input.
 export type WaitingAttempt = { epoch?: number; parse?: number; phase: 'ready' | 'pasting' | 'pasted' | 'entered' | 'rejected'; echo?: string; resuming?: boolean; paste?: PasteReceipt };
-export type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: readonly string[]; earlier?: readonly PendingPrompt[]; attempt?: WaitingAttempt; recoveries?: number };
+export type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: readonly string[];
+  earlier?: readonly PendingPrompt[]; attempt?: WaitingAttempt; recoveries?: number; retryOf?: string };
 type ReceiptPrompt = Pick<PendingPrompt, 'text' | 'at'> & { seen?: readonly string[] };
 
 export const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
 
 const timely = (prompt: { at: number }, record: UserRecord) => {
   const at = record.receivedAt ?? record.at;
-  return at === undefined || at >= prompt.at - 500;
+  return (record.undeliveredAt === undefined || prompt.at < record.undeliveredAt) && (at === undefined || at >= prompt.at - 500);
 };
+const withoutPasteTags = (text: string) => text.replace(/<\/?pasted_content\b[^>]*>\n?/g, '');
+const boundedTranscript = (text: string) => text.length === 20003 && text.endsWith('\n\n…');
 const transcriptMatches = (message: string, record: string, original?: string) => {
-  const bounded = record.length === 20003 && record.endsWith('\n\n…');
+  const bounded = boundedTranscript(record);
   // The producer retains the full original beside its 20,000-character display. Shared prefixes cannot identify
   // distinct long sends. Keep the legacy prefix fallback only for records without that original.
-  if (bounded && original !== undefined) record = withoutImageLabels(original.replace(/<\/?pasted_content\b[^>]*>\n?/g, '')).trim();
+  if (bounded && original !== undefined) record = withoutImageLabels(withoutPasteTags(original)).trim();
   const normalized = normalizePrompt(message);
   return normalized === normalizePrompt(record)
     || (bounded && original === undefined && normalized.startsWith(normalizePrompt(record.slice(0, 20000))));
@@ -65,12 +69,21 @@ export function reconcileOutbox(messages: WaitingMessage[], records: readonly Us
 }
 
 // Pair queue records and renderer echoes one-to-one. Raw-terminal sends and reloads have no echo;
-// the transcript still owns a queued card, its timestamp and its position ahead of later sends.
+// the transcript still owns queued and undelivered cards and their position ahead of later sends.
 export function pendingPromptCards(prompts: readonly PendingPrompt[], records: readonly UserRecord[]) {
   const remaining = [...prompts], queuedIds = new Set<string>();
   const cards: PendingPrompt[] = [];
   for (const record of records) {
-    if (!record.queued || record.cancelled || record.role !== 'user') continue;
+    if (record.role !== 'user' || !record.queued || record.undeliveredReplaced) continue;
+    if (record.undeliveredAt !== undefined) {
+      const shown = record.text ?? '';
+      const original = record.original ?? shown;
+      const text = boundedTranscript(shown) ? withoutImageLabels(withoutPasteTags(original)).trim() : shown;
+      cards.push({ id: record.id, role: 'user', text, at: record.at ?? 0,
+        sending: false, undelivered: true, images: record.images, imageCount: record.images?.length || Number(hasImageLabel(original)) });
+      continue;
+    }
+    if (record.cancelled) continue;
     const echo = takeReceipt(remaining, record);
     const card: PendingPrompt = { ...echo, id: echo?.id ?? record.id, role: 'user', text: echo?.text ?? record.text ?? '', at: record.at ?? echo?.at ?? 0, sending: false, images: record.images ?? echo?.images };
     cards.push(card); queuedIds.add(card.id);
@@ -108,10 +121,11 @@ export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string
     // The echo with the same text, or one this record ends with: a prompt Claude put back after an interrupt can
     // precede what was sent.
     const text = normalizePrompt(entry.text ?? '');
+    const lost = entry.undeliveredAt !== undefined;
     let index = prompts.findIndex(prompt => matchesPrompt(prompt, entry));
-    if (index < 0) index = prompts.findIndex(prompt => timely(prompt, entry) && text.endsWith(normalizePrompt(prompt.text)));
+    if (index < 0 && !lost) index = prompts.findIndex(prompt => timely(prompt, entry) && text.endsWith(normalizePrompt(prompt.text)));
     // A matching text receipt cannot acknowledge pictures. Leave it unseen so a later thumbnail update can confirm it.
-    if (index >= 0 && (entry.images?.length ?? 0) < (prompts[index].imageCount ?? 0)) continue;
+    if (index >= 0 && !(lost && hasImageLabel(entry.original ?? '')) && (entry.images?.length ?? 0) < (prompts[index].imageCount ?? 0)) continue;
     seen.add(entry.id); changed = true;
     if (index >= 0) prompts.splice(index, 1);
   }

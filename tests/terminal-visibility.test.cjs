@@ -29,6 +29,7 @@ function loadUI(name, overrides = {}) {
     if (key === 'reading-mode') return { useTerminalChoice: () => [], syncReading() {}, readingShown: item => !!item.sessionId && item.cliActive };
     if (key === 'NativeSessionView') return { NativeSessionView: () => null };
     if (key === 'NativePathNote') return { NativePathNote: () => null };
+    if (key === 'NativeToast') return { NativeToast: ({ text }) => React.createElement('span', { role: 'status' }, text) };
     if (key === 'native-store.ts') return { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} };
     if (key === 'ReadingView') return { ReadingView: () => null };
     if (key === 'VoiceButton') return { VoiceButton: () => null };
@@ -103,6 +104,51 @@ test('a single visible agent fills the card while hidden shell panes remain rend
   assert.match(expanded, /is-active-terminal[^>]*data-terminal-id="shell"/);
   props.project.terminals.push(terminal('claude', { cliActive: true, agent: 'claude' }));
   assert.match(renderToStaticMarkup(React.createElement(ProjectTerminals, props)), /has-splits/);
+});
+
+test('the first-role notice appears only in the conversation that dispatched the role', () => {
+  const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', { AgentLauncher: { AgentLauncher: () => null } });
+  const props = { project: { id: 'p', name: 'Project', terminals: [terminal('shell'), terminal('codex', { cliActive: true })] },
+    focused: true, activeId: 'shell', roleNotice: { projectId: 'p', terminalId: 'codex', message: 'Role permissions changed', dismiss() {} },
+    fontSize: 14, setActiveId() {}, onExpand() {} };
+  const html = renderToStaticMarkup(React.createElement(ProjectTerminals, props));
+  const splits = Array.from(html.matchAll(/data-terminal-id="([^"]+)"[^>]*>([\s\S]*?)<\/section>/g));
+  assert.deepEqual(splits.map(([, id, contents]) => [id, contents.includes('Role permissions changed')]), [['shell', false], ['codex', true]]);
+  const render = overrides => renderToStaticMarkup(React.createElement(ProjectTerminals, { ...props, ...overrides }));
+  assert.doesNotMatch(render({ visible: false }), /Role permissions changed/);
+  assert.doesNotMatch(render({ focused: false, roleNotice: { ...props.roleNotice, terminalId: 'shell' } }), /Role permissions changed/);
+  assert.match(render({ focused: false }), /Role permissions changed/);
+});
+
+test('the notice acknowledges once when the toast enters the visible window', t => {
+  const node = {}, events = new EventTarget();
+  const document = Object.assign(events, { visibilityState: 'hidden' });
+  let intersection, cleanup, acknowledged = 0;
+  class Observer {
+    constructor(callback) { intersection = ratio => callback([{ intersectionRatio: ratio }]); }
+    observe(target) { assert.equal(target, node); }
+    disconnect() { intersection = undefined; }
+  }
+  const globals = { document, IntersectionObserver: Observer };
+  for (const [name, value] of Object.entries(globals)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+    t.after(() => { if (previous) Object.defineProperty(globalThis, name, previous); else delete globalThis[name]; });
+    globalThis[name] = value;
+  }
+  const { NativeToast } = loadUI('native-session/NativeToast.tsx', { IconButton: { IconButton: () => null },
+    react: { useRef: () => ({ current: node }), useEffect: run => { cleanup = run(); } } });
+  NativeToast({ text: 'Role permissions changed', onShown: () => { acknowledged++; } });
+  intersection(1);
+  assert.equal(acknowledged, 0, 'a hidden window cannot acknowledge');
+  intersection(0);
+  document.visibilityState = 'visible';
+  events.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(acknowledged, 0, 'an offscreen toast cannot acknowledge');
+  intersection(1);
+  intersection(1);
+  assert.equal(acknowledged, 1);
+  cleanup();
+  assert.equal(intersection, undefined);
 });
 
 test('a shell-only card offers the launcher and live count without unmounting its pane', () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Play, Plus, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ImageSquare, Microphone } from '@phosphor-icons/react';
-import type { Project, Result } from '../../shared/types';
+import type { Project, Result, RolePermissionsNotice } from '../../shared/types';
 import { nativeTells, useNativeEntries } from '../native-session/native-store.ts';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
 import { terminalInUse, visibleTerminals } from '../terminal/terminal-visibility.ts';
@@ -37,8 +37,10 @@ function isRoundComplete(project: Project) {
   return project.cliActive && project.codexActivity === 'complete' && !project.unread && !project.error;
 }
 
-export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, onFocus, onAction, onError, onOpenLink, onRevealProject, dragging, dropTarget }: {
+export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, onFocus, onAction, onError,
+  onOpenLink, onRevealProject, dragging, dropTarget, roleNotice }: {
   project: Project; index: number; hidden: boolean; focused: boolean; fontSize: number; now: number;
+  roleNotice?: RolePermissionsNotice & { dismiss: () => void; onShown?: () => void };
   navTarget?: number; navPosition?: string;
   // The activity pane (what the agent is doing, step by step) shows beside the terminal of an expanded project; its toggle is in the title bar.
   activityOpen: boolean;
@@ -125,7 +127,9 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
       </div>}
     </header>
     {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
-    <ProjectTerminals project={project} visible={!hidden} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
+    <ProjectTerminals project={project} visible={!hidden} focused={focused} fontSize={fontSize} activeId={activeTerminalId}
+      setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction}
+      onError={onError} onOpenLink={onOpenLink} roleNotice={roleNotice} />
     {showActivity && <ActivityPane terminal={currentTerminal} terminals={project.terminals} projectId={project.id} />}
     {project.error && !project.terminals.some(terminal => nativeTells(natives.get(terminal.id), project.error!)) && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
   </article>;

@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { createRoleTools, serve, TOOLS } = require('../integration/role-tools.cjs');
-const { argumentsOf, run, sshRoleReadiness, dispatchEvent } = require('../integration/dispatch.cjs');
+const { argumentsOf, run, dispatchEvent } = require('../integration/dispatch.cjs');
 
 // A bootstrap with a mode file and live seats, as main writes them beside a session's bootstrap.
 function session(t, mode, seats = { developer: { model: 'gpt-6.2-sol', effort: 'high', fast: true }, reviewer: { model: 'opus', effort: 'high' } }) {
@@ -24,7 +24,7 @@ function session(t, mode, seats = { developer: { model: 'gpt-6.2-sol', effort: '
   return { env: { AGENTRIX_BOOTSTRAP: bootstrap }, folder, cleanups };
 }
 
-const { started: startEvent, ended: endEvent, waiting: waitingEvent, running: runningEvent, failure: failEvent, stopped: stopEvent } =
+const { started: startEvent, ended: endEvent, running: runningEvent, failure: failEvent, stopped: stopEvent } =
   require('./helpers/dispatch-events.cjs');
 
 // The engine stand-in records each call and emits the same wire events as the helper.
@@ -72,43 +72,6 @@ test('the versioned mode is authoritative, with the old mode used only when it i
   assert.equal(fake.calls.length, 1);
 });
 
-test('a remote Codex sandbox probe requires command output even with a successful exit', async () => {
-  const check = (stdout, stderr) => sshRoleReadiness('/remote/project', { PATH: '/remote/bin' }, async () => '/remote/bin/codex',
-    (file, args, options, callback) => {
-      assert.equal(file, '/remote/bin/codex');
-      assert.deepEqual(args, ['sandbox', '--', '/bin/echo', 'agentrix-sandbox-ready']);
-      assert.equal(options.cwd, '/remote/project');
-      assert.deepEqual(options.env, { PATH: '/remote/bin' });
-      callback(null, stdout, stderr);
-    });
-  assert.equal(await check('', 'bwrap: Creating new namespace failed'), 'unavailable');
-  assert.equal(await check('agentrix-sandbox-ready\n', ''), 'ready');
-});
-
-test('an unavailable SSH sandbox reroutes Claude leads and gives Codex leads built-in agent instructions', async t => {
-  const { env, folder } = session(t, 'conductor');
-  env.AGENTRIX_REMOTE_ROLE_TOOLS = '1';
-  fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.lead', 'opus\nmedium\n');
-  const fake = engine((args, _timing, context) => {
-    assert.equal(args[0], 'claude');
-    assert.deepEqual(context.roleFallback, { configured: 'gpt-6.2-sol', model: 'opus', effort: 'high', fast: false });
-    return startEvent('run-1', 'claude');
-  });
-  const options = { env, cwd: folder, engine: fake.run, tempRoot: folder, checkSshReadiness: async () => 'unavailable' };
-  const request = { seat: 'developer', title: 'Review', brief: 'Read', readOnly: true };
-  const claude = createRoleTools({ ...options, leadAgent: 'claude' });
-  const started = await claude.tools.start_role(request);
-  assert.equal(started.id, 'run-1');
-  assert.match(started.instruction, /sysctl user.max_user_namespaces.*改派.*opus/);
-  const codex = createRoleTools({ ...options, leadAgent: 'codex' });
-  assert.match((await codex.tools.start_role(request)).instruction, /sysctl user.max_user_namespaces.*内置的子代理/);
-  await assert.rejects(codex.tools.answer_role({ id: 'run-1' }), /SSH roles have no interactive menu/);
-  assert.equal(fake.calls.length, 1);
-  fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'native');
-  assert.deepEqual(claude.list(), []);
-  await assert.rejects(claude.tools.start_role(request), /Conductor mode is off/);
-});
-
 test('start_role launches the seat on its own agent in the background and checks scope', async t => {
   const { env, folder } = session(t, 'conductor');
   const fake = engine(args => args.includes('--detach') ? startEvent('run-1', 'codex', { model: 'gpt-6.2-sol', effort: 'high', fast: true }) : []);
@@ -142,27 +105,6 @@ test('start_role refuses empty or whitespace-only briefs and titles before calli
     }
   }
   assert.equal(fake.calls.length, 0);
-});
-
-test('roles_status shows sandbox progress during start_role confirmation', async t => {
-  const { env, folder } = session(t, 'conductor');
-  const waiting = Promise.withResolvers(), ready = Promise.withResolvers();
-  const fake = engine(async (args, onTiming) => {
-    if (!args.includes('--detach')) return runningEvent('run-1', 'waiting for sandbox permissions');
-    onTiming({ id: 'run-1', waiting: waitingEvent('run-1') });
-    waiting.resolve();
-    await ready.promise;
-    return startEvent('run-1');
-  });
-  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
-  const started = tools.start_role({ seat: 'developer', title: 'Inspect', brief: 'Read it', readOnly: true });
-  await waiting.promise;
-  try {
-    const { roles } = await tools.roles_status();
-    assert.equal(roles[0].id, 'run-1');
-    assert.match(roles[0].activity, /waiting for sandbox permissions/);
-  } finally { ready.resolve(); }
-  assert.equal((await started).id, 'run-1');
 });
 
 test('role wait and result return structured refusals while status summarizes the settled receipt', async t => {
@@ -490,150 +432,20 @@ test('a Claude role reports the effort passed to its fake CLI when the CLI leave
   assert.match(started.started, /model claude-sonnet-5-5 effort medium fast off · routing ok ·/);
 });
 
-test('a native Claude lead without MCP seat arguments reads the live lead seat for fallback', async t => {
-  const { env, folder } = session(t, 'conductor', {
-    developer: { model: 'gpt-6.2-sol', effort: 'xhigh', fast: true },
-    qa: { model: 'gpt-6.2-sol', effort: 'high', fast: true },
-  });
-  const command = [], ends = new Map();
-  let checks = 0, observedModel;
-  const route = createRoleTools({ env, cwd: folder, platform: 'win32', leadAgent: 'claude',
-    checkReadiness: async () => { checks++; return 'notConfigured'; },
-    engine: async (args, { onEvent, roleFallback }) => {
-      if (args[0] === 'wait') { onEvent(ends.get(args[1])); return; }
-      const events = [];
-      await run(args.filter(arg => arg !== '--detach'), {
-        env: { AGENTRIX_BOOTSTRAP: env.AGENTRIX_BOOTSTRAP }, roleFallback, onEvent: event => events.push(event),
-        locateClaude: async () => 'fake-claude',
-        launch: (file, argv) => {
-          assert.equal(file, 'fake-claude');
-          command.push(argv);
-          const child = Object.assign(new EventEmitter(), {
-            pid: 12345, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
-          });
-          queueMicrotask(() => {
-            child.stdout.end(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake-session', model: observedModel }) + '\n');
-            child.stderr.end(); child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null);
-          });
-          return child;
-        },
-      });
-      const end = events.find(event => event.type === 'dispatch.ended');
-      assert.ok(end, JSON.stringify(events));
-      ends.set(end.id, end);
-      events.forEach(onEvent);
-    },
-  });
-  for (const [seat, lead, actual, effort] of [['developer', 'sonnet', 'claude-sonnet-5-5', 'medium'], ['qa', 'fable', 'claude-fable-5-1', 'high']]) {
-    fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.lead', `${lead}\nmedium\n1\nnull\n`);
-    observedModel = actual;
-    const wording = `gpt-6.2-sol → ${actual}，因为这台电脑尚未完成 Codex 沙箱设置。`;
-    const started = await route.tools.start_role({ seat, title: 'Review', brief: 'Read the diff', readOnly: true });
-    const argv = command.at(-1);
-    assert.equal(argv[argv.indexOf('--model') + 1], lead);
-    assert.equal(argv[argv.indexOf('--effort') + 1], effort);
-    assert.equal(argv[argv.indexOf('--settings') + 1], '{"fastMode":false}');
-    assert.match(started.started, /routing ok · fallback \(fast unverified\) ·/);
-    assert.ok(started.started.includes(wording));
-    const [ended] = await route.tools.wait_roles({ ids: [started.id], seconds: 0 });
-    assert.ok(ended.end.includes(wording));
-  }
-  assert.equal(checks, 1);
-});
-
-test('a terminal Claude lead keeps its launch seat after the lead sidecar changes', async t => {
-  const { env, folder } = session(t, 'conductor', { developer: { model: 'gpt-6.2-sol', effort: 'xhigh', fast: true } });
-  const leadSeat = { model: 'sonnet', effort: 'low' };
-  fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.lead', 'sonnet\nlow\n0\nnull\n');
-  const fake = engine((args, _, { roleFallback }) => {
-    assert.equal(args[0], 'claude');
-    assert.deepEqual(roleFallback, { configured: 'gpt-6.2-sol', ...leadSeat, fast: false });
-    return startEvent('run-1', 'claude');
-  });
-  const { tools } = createRoleTools({ env, cwd: folder, platform: 'win32', leadAgent: 'claude', leadSeat,
-    checkReadiness: () => 'notConfigured', engine: fake.run });
-  fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.lead', 'opus\nhigh\n1\nnull\n');
-  assert.equal((await tools.start_role({ seat: 'developer', title: 'Review', brief: 'Read the diff', readOnly: true })).id, 'run-1');
-});
-
-test('an unready Codex lead gets instructions before checkout, with coalesced checks and short cache expiry', async t => {
+test('local and SSH launches keep the configured Codex seat and use the project folder by default', async t => {
   const { env, folder } = session(t, 'conductor');
-  const pending = Promise.withResolvers();
-  const fake = engine(() => startEvent('run-1'));
-  let checks = 0, time = 100;
-  const { tools } = createRoleTools({ env, cwd: folder, platform: 'win32', leadAgent: 'codex', now: () => time, engine: fake.run,
-    checkReadiness: () => ++checks === 1 ? pending.promise : 'ready' });
-  const request = { seat: 'developer', title: 'Build', brief: 'Change this', allow: ['file'] };
-  const first = tools.start_role({ ...request, worktree: 'no-checkout' });
-  const second = tools.start_role(request);
-  pending.resolve('updateRequired');
-  const [result, other] = await Promise.all([first, second]);
-  assert.deepEqual(result, other);
-  assert.deepEqual(Object.keys(result), ['instruction']);
-  assert.match(result.instruction, /Codex 内置的子代理/);
-  assert.match(result.instruction, /codex sandbox setup --elevated/);
-  assert.deepEqual(await tools.roles_status(), { roles: [], earlierEnded: 0, omittedRecentEnded: 0 });
-  assert.equal(fake.calls.length, 0);
-  assert.equal(checks, 1);
-  time += 4999;
-  assert.deepEqual(await tools.start_role(request), result);
-  assert.equal(checks, 1);
-  time++;
-  assert.equal((await tools.start_role(request)).id, 'run-1');
-  assert.equal(fake.calls[0][0], 'codex');
-  assert.equal(checks, 2);
-  time += 60_000;
-  assert.equal((await tools.start_role(request)).id, 'run-1');
-  assert.equal(checks, 2);
-});
-
-test('notConfigured and unknown sandbox results expire on the injected clock', async t => {
-  const { env, folder } = session(t, 'conductor');
-  const fake = engine(() => startEvent('run-1'));
-  const request = { seat: 'developer', title: 'Review', brief: 'Read the diff', readOnly: true };
-  for (const status of ['notConfigured', null, new Error('method not found')]) {
-    let time = 100, checks = 0;
-    const { tools } = createRoleTools({ env, cwd: folder, platform: 'win32', leadAgent: 'codex', now: () => time, engine: fake.run,
-      checkReadiness: () => {
-        if (++checks > 1) return 'ready';
-        if (status instanceof Error) throw status;
-        return status;
-      } });
-    await tools.start_role(request);
-    time += 4999;
-    await tools.start_role(request);
-    assert.equal(checks, 1);
-    time++;
-    assert.equal((await tools.start_role(request)).id, 'run-1');
-    assert.equal(checks, 2);
-  }
-});
-
-test('role tool preflight skips a Claude lead without a seat, non-Windows, SSH and Claude roles', async t => {
-  const { env, folder } = session(t, 'conductor');
-  for (const [platform, ssh, leadAgent, seat, status, checksExpected] of [
-    ['win32', false, 'claude', 'developer', 'notConfigured', 0],
-    ['linux', false, 'claude', 'developer', 'notConfigured', 0],
-    ['darwin', false, 'codex', 'developer', 'notConfigured', 0],
-    ['win32', true, 'codex', 'developer', 'notConfigured', 0],
-    ['win32', false, 'codex', 'reviewer', 'notConfigured', 0],
-    ['win32', false, 'claude', 'reviewer', 'notConfigured', 0],
-  ]) {
-    let checks = 0;
-    const expected = seat === 'reviewer' ? 'claude' : 'codex';
-    const fake = engine((args, _timing, context) => {
-      assert.equal(args[0], expected);
-      assert.equal(context.roleFallback, undefined);
-      return startEvent('run-1', expected);
+  for (const remote of [false, true]) {
+    const fake = engine(args => {
+      assert.equal(args[0], 'codex');
+      assert.equal(args[args.indexOf('--cwd') + 1], folder);
+      assert.equal(argumentsOf(args, env).model, 'gpt-6.2-sol');
+      return startEvent('run-1', 'codex');
     });
-    const { tools } = createRoleTools({ env: { ...env, ...(ssh && { SSH_CONNECTION: 'remote' }) },
-      platform, leadAgent, cwd: folder, engine: fake.run, checkReadiness: async () => {
-        checks++;
-        if (status instanceof Error) throw status;
-        return status;
-      } });
-    assert.equal((await tools.start_role({ seat, title: 'Review', brief: 'Read the diff', readOnly: true })).started.split(' ')[0], expected);
-    assert.equal(checks, checksExpected);
+    const { tools } = createRoleTools({ env: { ...env, ...(remote && { AGENTRIX_REMOTE_ROLE_TOOLS: '1' }) }, cwd: folder, engine: fake.run });
+    const started = await tools.start_role({ seat: 'developer', title: 'Review', brief: 'Read the diff', readOnly: true });
+    assert.equal(started.id, 'run-1');
+    assert.equal(fake.calls.length, 1);
+    if (remote) await assert.rejects(tools.answer_role({ id: 'run-1' }), /SSH roles have no interactive menu/);
   }
 });
 

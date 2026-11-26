@@ -134,7 +134,8 @@ async function startAppServer(t, file, entry) {
 
 for (const [file, entry] of live.filter(([, entry]) => entry.appServer)) test(`${file} answers thread/start with the sandbox and approvals asked for`, async t => {
   const { request, home } = await startAppServer(t, file, entry);
-  for (const [sandbox, approvalPolicy] of [['danger-full-access', 'never'], ['workspace-write', 'on-request'], ['read-only', 'on-request']]) {
+  for (const [sandbox, approvalPolicy] of [['danger-full-access', 'never'], ['danger-full-access', 'untrusted'],
+    ['workspace-write', 'on-request'], ['read-only', 'on-request']]) {
     const { result, error } = await request('thread/start', { cwd: home, sandbox, approvalPolicy, approvalsReviewer: 'user' });
     assert.equal(error, undefined, `${file}: ${JSON.stringify(error)}`);
     assert.equal(result.sandbox?.type, TYPES[sandbox], `${file} answers ${sandbox} as ${result.sandbox?.type}`);

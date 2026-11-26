@@ -175,7 +175,7 @@ const codex = [
 ];
 
 async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, holdStderr = false,
-  hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread,
+  hold, timeout = 30000, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread, version,
   captureWakes = false, lab = false, readOnly = !extra.includes('--allow') } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
@@ -197,7 +197,8 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
   // hold of its own stays until the helper has printed its start (or failed-start) line, so no runner is too slow for it.
   // Outside the worker's folder: the scope check reports any file that appears there.
   const release = hold === undefined ? path.join(os.tmpdir(), `agentrix-dispatch-release-${randomUUID()}`) : null;
-  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold: hold ?? 150, holdStderr, release, sessionId: session, thread }));
+  await fs.writeFile(input, JSON.stringify({ lines: typeof lines === 'function' ? lines(directory) : lines, exitCode,
+    hold: hold ?? 150, holdStderr, release, sessionId: session, thread, version }));
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
@@ -206,7 +207,7 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
     ? `require(${JSON.stringify(wakeFixture)}).captureDispatchWakes(${JSON.stringify(server.address)}, ${JSON.stringify(wakeLog)});\n` : '';
   await fs.writeFile(runner, `${captureWakeScript}const {run}=require(${JSON.stringify(helper)});
 process.on('message', signal => process.emit(signal));
-run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTimeout},
+run(process.argv.slice(2), {startTimeout:${timeout},
   ${detached ? 'detached: { id: require("node:crypto").randomUUID(), admitted() {} },' : ''}
   ${lab ? 'labMeter: event => process.send(event),' : ''}
   resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
@@ -346,15 +347,13 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.equal(end.verdict, 'ok'); assert.equal(end.inputTokens, null); assert.equal(end.cachedTokens, null); assert.equal(end.reportedCostUsd, null);
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.equal(capture.cwd, f.directory); assert.match(capture.brief, /Unicode: 执行/);
-  const elevatedArgs = process.platform === 'win32' ? ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false'] : [];
-  assert.deepEqual(capture.args, [...commandOf(argumentsOf(f.args)), ...elevatedArgs]);
+  assert.deepEqual(capture.args, commandOf(argumentsOf(f.args)));
   const log = await fs.readFile(f.out + '.log', 'utf8');
   assert.ok(log.split('\n').filter(Boolean).map(JSON.parse).some(event => event.type === 'turn.completed'));
   const policy = capture.requests.find(request => request.method === 'thread/start').params;
-  assert.equal(policy.sandbox, 'read-only'); assert.equal(policy.serviceTier, 'fast');
+  assert.equal(policy.sandbox, 'danger-full-access'); assert.equal(policy.approvalPolicy, 'untrusted'); assert.equal(policy.serviceTier, 'fast');
   assert.equal(policy.config.model_reasoning_effort, 'max');
   assert.deepEqual(policy.config.mcp_servers.agentrix_role.args.slice(1, 3), ['mcp-role', start.id]);
-  // With approvals off Codex refuses unapproved MCP calls (seen on Codex 0.170): only finish_role is pre-approved.
   assert.deepEqual(policy.config.mcp_servers.agentrix_role.tools, { finish_role: { approval_mode: 'approve' } });
   assert.equal(capture.requests.find(request => request.method === 'turn/start' && request.params.threadId).params.input.at(-1).type, 'localImage');
   assert.ok(!log.includes('[dispatch]'));
@@ -602,40 +601,84 @@ test('Codex app-server structured failures retain capacity/error reasons and fai
   }
 });
 
-test('a blocking worker request is declined after the timeout and the worker finishes', async t => {
-  // Each waits its whole timeout, then gets the protocol's refusal for its kind: never an approval, and none that interrupts the turn.
+test('worker questions and forms receive their protocol refusals and the worker finishes', async t => {
   const requests = [
     ['item/tool/requestUserInput', { itemId: 'ask', isBlocking: true, questions: [{ id: 'q', header: 'Synthetic', question: 'Which synthetic option?' }] },
       'question opened: Which synthetic option?', 'cancelled', { answers: {} }],
     ['mcpServer/elicitation/request', { mode: 'form', message: 'Synthetic form', requestedSchema: { type: 'object', properties: { pick: { type: 'string' } } } },
       'elicitation opened: Synthetic form', 'cancelled', { action: 'cancel', content: null, _meta: null }],
-    ['item/commandExecution/requestApproval', { itemId: 'command', approvalId: 'a', command: 'echo synthetic' },
-      'command opened: echo synthetic', 'denied', { decision: 'decline' }],
   ];
-  const began = Date.now(), answer = 'Synthetic answer after the refusals.';
-  const f = await fixture(t, [...codex, ...requests.map(([method, params]) => ({ request: { method, params } })), { write: 'answer.md', text: answer }], { requestTimeout: 200 });
+  const answer = 'Synthetic answer after the refusals.';
+  const f = await fixture(t, [...codex, ...requests.map(([method, params]) => ({ request: { method, params } })), { write: 'answer.md', text: answer }]);
   const result = await f.finished;
-  assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason permission · refused 3: question request/);
-  assert.ok(Date.now() - began >= requests.length * 200, 'no request is refused before its timeout');
+  assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason permission · refused 2: question request/);
   assert.deepEqual(result.stdout.split('\n').flatMap(line => /^\[dispatch\] request [\w-]+ [\w-]+ (.+)$/.exec(line)?.[1] ?? []),
-    requests.flatMap(([, , opened, resolution]) => [opened, 'unanswered for 0.2 s; declining', resolution]));
+    requests.flatMap(([, , opened, resolution]) => [opened, 'requires owner approval; declining', resolution]));
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.deepEqual(capture.requests.filter(request => !request.method), requests.map((request, index) => ({ id: `request-${index}`, result: request.at(-1) })));
   assert.equal(await fs.readFile(f.out, 'utf8'), answer);
 });
 
-test('a detached Codex role declines blocking requests immediately and records declined items', { timeout: 15000 }, async t => {
-  const request = { method: 'item/commandExecution/requestApproval', params: { command: 'npm test --token=synthetic-secret', itemId: 'asked' } };
+test('Codex 0.170 command and file approvals use raw actions and every path from item/started', { timeout: 15000 }, async t => {
+  for (const readOnly of [true, false]) {
+    const f = await fixture(t, cwd => {
+      const command = (itemId, params) => ({ request: { method: 'item/commandExecution/requestApproval', params: { itemId, cwd, ...params } } });
+      const file = itemId => ({ request: { method: 'item/fileChange/requestApproval', params: { itemId, reason: null, grantRoot: null } } });
+      const started = (id, files) => ({ notify: { method: 'item/started', params: { item: { type: 'fileChange', id, status: 'inProgress',
+        changes: files.map(entry => {
+          const [filename, kind = { type: 'add' }] = [entry].flat();
+          return { path: path.resolve(cwd, filename), kind, diff: '+fixture\n' };
+        }) } } } });
+      const move = (id, field, dest) => [started(id, [['src/start.txt', { type: 'update', [field]: dest }]]), file(id)];
+      return [...codex,
+        command('unity', { kind: 'command', command: '"powershell.exe" -Command \'Unity -batchmode -runTests\'',
+          commandActions: [{ type: 'unknown', command: 'Unity -batchmode -runTests' }] }),
+        command('inner', { kind: 'command', command: 'powershell.exe -Command ' + ' '.repeat(8500),
+          commandActions: [{ type: 'unknown', command: 'git status' }, { type: 'unknown', command: "bash -lc 'git -C repo push'" }] }),
+        command('legacy', { command: 'pwsh -c "git -C repo reset --hard HEAD"' }),
+        command('legacy-ok', { command: 'git status', commandActions: null }),
+        command('missing-command', {}),
+        command('human', { kind: 'humanCommand', command: 'git status' }),
+        command('stdin', { kind: 'writeStdin', command: 'git restore -- src/file.txt\n', commandActions: [{ type: 'unknown', command: 'git status' }] }),
+        command('stdin-ok', { kind: 'writeStdin', command: 'yes\n' }),
+        command('unknown-kind', { kind: 'unknown', command: 'git status' }),
+        started('allowed', ['src/ok.txt']), file('allowed'),
+        started('mixed', [...Array.from({ length: 100 }, (_, i) => `src/file-${i}.txt`), 'out-of-scope.txt']), file('mixed'),
+        started('escape', ['../outside.txt']), file('escape'),
+        started('skill', ['src/SKILL.md']), file('skill'),
+        ...move('move-ok', 'move_path', 'src/new.txt'),
+        ...move('move-scope', 'move_path', 'new.txt'),
+        ...move('move-escape', 'move_path', path.resolve(cwd, '../outside.txt')),
+        ...move('move-legacy', 'movePath', '../outside.txt'),
+        file('missing-file'), { write: 'answer.md', text: 'Done' }];
+    }, { readOnly, extra: ['--allow', 'src/**'], version: '0.170.0' });
+    const result = await f.finished;
+    assert.equal(result.code, 0, result.stdout);
+    const { requests } = JSON.parse(await fs.readFile(f.capture, 'utf8'));
+    const edit = readOnly ? 'decline' : 'accept';
+    assert.deepEqual(requests.filter(row => /^request-/.test(row.id)).map(row => row.result.decision), [
+      'accept', 'decline', 'decline', 'accept', 'decline', 'accept', 'decline', 'accept', 'decline',
+      edit, 'decline', 'decline', 'decline', edit, 'decline', 'decline', 'decline', 'decline',
+    ]);
+    assert.deepEqual(f.events.at(-1).refused.map(item => item.reason), [
+      'git_forbidden', 'git_forbidden', 'invalid_command', 'git_forbidden', 'invalid_command',
+      ...(readOnly ? Array(9).fill('read_only') : ['outside_scope', 'outside_worktree', 'skill_not_authorized',
+        'outside_scope', 'outside_worktree', 'outside_worktree', 'invalid_path']),
+    ]);
+  }
+});
+
+test('a detached Codex role declines ungranted operations immediately and records declined items once', { timeout: 15000 }, async t => {
+  const request = { method: 'item/commandExecution/requestApproval', params: { command: 'git push --token=synthetic-secret', itemId: 'asked' } };
   const declined = id => ({ notify: { method: 'item/completed', params: { item: { id, type: 'commandExecution', status: 'declined', command: 'npm test' } } } });
-  const permissions = { method: 'item/permissions/requestApproval', params: { itemId: 'asked', permissions: { network: {} } } };
+  const permissions = { method: 'item/permissions/requestApproval', params: { isBlocking: false, itemId: 'asked', permissions: { network: {} } } };
   const f = await fixture(t, [...codex, { request }, { request: permissions }, declined('asked'), declined('other')], { detached: true });
   const result = await f.finished;
   assert.equal(result.code, 0);
   assert.match(result.stdout, /requires owner approval; declining/);
-  assert.match(result.stdout, /exit 0 reason permission · refused 3: command approval/);
+  assert.match(result.stdout, /exit 0 reason permission · refused 3: Command/);
   assert.doesNotMatch(result.stdout, /synthetic-secret/);
-  assert.deepEqual(f.events.at(-1).refused, [{ action: 'command approval: 运行测试', reason: 'approval_required' },
-    { action: 'permissions request', reason: 'approval_required' }, { action: 'command: 运行测试', reason: 'provider_declined' }]);
+  assert.deepEqual(f.events.at(-1).refused.map(item => item.reason), ['git_forbidden', 'approval_required', 'provider_declined']);
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.deepEqual(capture.requests.filter(entry => /^request-/.test(entry.id)), [
     { id: 'request-0', result: { decision: 'decline' } },
@@ -1098,8 +1141,7 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; f.releaseOn(stdout); }); child.stderr.resume();
   const [code] = await once(child, 'close');
   assert.equal(code, 0); assert.match(stdout, /routing ok/);
-  const elevatedArgs = process.platform === 'win32' ? ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false'] : [];
-  assert.deepEqual(JSON.parse(await fs.readFile(f.capture, 'utf8')).args, [...commandOf(argumentsOf(f.args)), ...elevatedArgs]);
+  assert.deepEqual(JSON.parse(await fs.readFile(f.capture, 'utf8')).args, commandOf(argumentsOf(f.args)));
 });
 
 const gitInit = async (directory, files) => {
@@ -1109,7 +1151,7 @@ const gitInit = async (directory, files) => {
 };
 const PROBE_FILES = '/brief.md\n/answer.md*\n/capture.json\n/fixture.json\n/runner.cjs\n/bootstrap.json\n/codex/\n';
 
-test('N5: resumed execution explicitly uses workspace-write and resumed read-only work stays read-only', () => {
+test('N5: resumed roles preserve their allow list and read-only assignment', () => {
   const base = ['--role', 'exec', '--title', 'T', '--model', 'gpt-6.1-sol', '--effort', 'max', '--cwd', '.', '--brief', 'b.md', '--out', 'o.md'];
   const options = argumentsOf(['codex', ...base, '--allow', 'src/**', '--allow', './docs/*.md', '--ledger', 'ledger.md', '--resume', session]);
   assert.deepEqual(options.allow, ['src/**', 'docs/*.md']);
@@ -1161,7 +1203,7 @@ test('small role briefs trim context by permission and preserve the default byte
     .replace(`\n\n${plainReply}\n\n# Task`, '\n\n# Task')
     .replace(/^- Skip a named skill.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
   assert.deepEqual([read, write].map(options => createHash('sha256').update(withoutSharedRules(options)).digest('hex')),
-    ['a4e77c0de3024b2799ec935ad5de6a43acf5b9606ee4d36172b1718ed7107765', '058e67881f8d5b2371fe75614d689dc797ce3fcccc273b3cda62596bf13b501f']);
+    ['a8e4f9ec033ee299dfe99fd93f8bdedf6547c4453b5689dcee841bf8b5e97069', 'c28cad60ff378f7abf4450429764ed77378231cb86a4540113f9f4a03a4b3599']);
 
   const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };
   const lookup = render({ ...read, small: true }, readOnlyTeam).toString();
@@ -1188,6 +1230,8 @@ test('standing rules inline bounded standards for normal briefs and keep referen
     const codex = section({ agent: 'codex', readOnly: true, small });
     const claude = section({ agent: 'claude', permission: 'plan', small });
     for (const text of [codex, claude]) {
+      assert.match(text, /same account and permissions as the orchestrator and can access the network/);
+      assert.match(text, /Do not commit, push, or run git reset --hard. Do not change files outside the project/);
       assert.match(text, /^- Never ask the user\. Finish independent work\. Record exact refusals in finish_role\.needsApproval\./m);
       assert.match(text, /Decide implementation.+one line.+smaller.+other/);
       assert.match(text, /(?:options.+effects.+recommendation.+finish_role\.needsDecision|finish_role\.needsDecision.+options.+effects.+recommendation)/);
@@ -1204,14 +1248,15 @@ test('standing rules inline bounded standards for normal briefs and keep referen
     assert.match(claude, /what you ran with its result/);
     assert.doesNotMatch(codex, /ExitPlanMode/);
   }
-  for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/, /Do not commit or push/,
-    /do not start another worker/, /no GUI smoke test/, /system clipboard/, /only the tests the task touches/, /Report what you changed/,
+  for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/,
+    /Do not start another worker/, /no GUI smoke test/, /system clipboard/, /only the tests the task touches/, /Report what you changed/,
     /language the task is written in/]) assert.match(scoped, rule);
   for (const readOnly of [section({ readOnly: true }), section({ permission: 'plan' })]) {
     assert.match(readOnly, /read-only: change, create and delete no file/);
     assert.match(readOnly, /Report what you found/);
     assert.doesNotMatch(readOnly, /Files you may change|what you changed/);
   }
+  assert.doesNotMatch(section({ lab: true }), /same account and permissions/);
   const writableClaude = section({ agent: 'claude', permission: 'acceptEdits' });
   assert.match(writableClaude, /Scope: Change only what the task needs\./);
   assert.match(writableClaude, /may run commands and tests\. Decide whether to run tests and which to run based on the task/);
@@ -1231,7 +1276,7 @@ test('standing rules inline bounded standards for normal briefs and keep referen
   const oversized = section({ allow: ['src/**'] });
   assert.match(oversized, references);
   assert.doesNotMatch(oversized, /# Code standards|汉/);
-  assert.ok(Buffer.byteLength(oversized) < 1500, `the reference section stays short (${Buffer.byteLength(oversized)})`);
+  assert.ok(Buffer.byteLength(oversized) < 1600, `the reference section stays short (${Buffer.byteLength(oversized)})`);
 });
 
 test('a read-only Claude headless role disables writing tools and detects tracked and new writes without allow globs', async t => {

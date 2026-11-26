@@ -9,11 +9,12 @@ import { terminalInUse, visibleTerminals } from './terminal-visibility.ts';
 import { ReadingView } from '../reading/ReadingView';
 import { readingShown, setReading, syncReading, useTerminalChoice } from '../reading/reading-mode';
 import { NativePathNote } from '../native-session/NativePathNote';
+import { NativeToast } from '../native-session/NativeToast';
 import { NativeSessionView } from '../native-session/NativeSessionView';
 import { useHandoff, type Handoff } from '../native-session/draft-handoff.ts';
 import { ensureNativeSession, nativeShown, useNativeEntries } from '../native-session/native-store.ts';
 import { TERMINAL_SPLITS, useReorder } from '../workspace/useProjectReorder';
-import type { AgentsState, Project, ProjectTerminal, Result } from '../../shared/types';
+import type { AgentsState, Project, ProjectTerminal, Result, RolePermissionsNotice } from '../../shared/types';
 import { t } from '../../shared/i18n';
 
 // The draft handoff of a run-mode switch, bound to its terminal by the card whatever the card shows (the reading view, the native view or the raw terminal),
@@ -36,8 +37,9 @@ function useInstalledAgents(local: boolean) {
   return local ? agents : null;
 }
 
-export function ProjectTerminals({ project, visible: projectVisible = true, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
+export function ProjectTerminals({ project, visible: projectVisible = true, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink, roleNotice }: {
   project: Project; visible?: boolean; focused: boolean; fontSize: number; activeId: string | null; setActiveId: (id: string) => void; onExpand: () => void;
+  roleNotice?: RolePermissionsNotice & { dismiss: () => void; onShown?: () => void };
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
   onError: (message: string) => void; onOpenLink: (projectId: string, target: string) => void;
 }) {
@@ -104,6 +106,8 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
             : native ? <NativeSessionView terminalId={terminal.id} projectId={project.id} autoFocus={focused && selected === terminal.id} switchState={terminal.switchState} handoff={handoff} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />
             // The card's launcher: a local project picks its agent here; an SSH project offers Codex (it runs on the other computer) and a plain terminal.
             : reading ? null : <AgentLauncher terminalId={terminal.id} projectId={project.id} kind={project.kind} onAction={onAction} onOpenTerminal={openTerminal} />}
+          {projectVisible && visibleIds.has(terminal.id) && roleNotice?.terminalId === terminal.id
+            && <NativeToast text={roleNotice.message} onDismiss={roleNotice.dismiss} onShown={roleNotice.onShown} />}
         </div>}</WithHandoff>
         {multiple && stopped && terminal.sessionId && <button className="button secondary small terminal-split-restart" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}
       </section></div>;

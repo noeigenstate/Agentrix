@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListChecks, CheckCircle, Info, Circle, Stamp, CirclesFour } from '@phosphor-icons/react';
-import type { AgentsState, AppUpdateState, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
+import type { AgentsState, AppUpdateState, Project, ProjectLocation, Result, RolePermissionsNotice, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
 import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AgentTabScope } from './features/agents/AgentCalls';
@@ -67,6 +67,13 @@ const NO_PROJECTS: Project[] = [];
 
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [displayedRoleNotice, setDisplayedRoleNotice] = useState<RolePermissionsNotice | false | null>(null);
+  const roleNotice = displayedRoleNotice ?? workspace?.rolePermissionsNotice;
+  const acknowledgeRoleNotice = useCallback(() => {
+    if (!roleNotice) return;
+    setDisplayedRoleNotice(roleNotice);
+    api.acknowledgeRolePermissionsNotice?.(roleNotice.terminalId);
+  }, [roleNotice]);
   useWorkspaceAppearance(workspace);
   const [agents, setAgents] = useState<AgentsState | null>(null);
   // Native full screen (F11, ⌃⌘F or an expanded project): the title bar auto-hides there.
@@ -94,7 +101,6 @@ export function App() {
     guideShown.current = true; if (workspace.settings.guideVersion) setGuide('news'); else startTour();
   }, [workspace?.guide, workspace?.settings.guideVersion]);
   const [error, setError] = useState<string | null>(null);
-  const [sandboxProgress, setSandboxProgress] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [addOpen, setAddOpen] = useState(false);
   const [sshAuth, setSSHAuth] = useState<SSHAuthPrompt[]>([]);
@@ -192,7 +198,6 @@ export function App() {
     const offState = api.onState(state => { pushed = true; setWorkspace(state); });
     const offFocus = api.onFocusProject(id => focusProjectRef.current(id));
     const offError = api.onError(reportError);
-    const offSandboxProgress = api.onSandboxProgress?.(setSandboxProgress);
     const offUpdates = api.onUpdateState(setUpdates);
     const offAgents = api.onAgents(setAgents);
     const offFullScreen = api.onFullScreen(setFullScreen);
@@ -206,7 +211,7 @@ export function App() {
     const clock = setInterval(() => setNow(Date.now()), 5000);
     return () => {
       live = false;
-      offState(); offFocus(); offError(); offSandboxProgress?.(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor();
+      offState(); offFocus(); offError(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor();
       clearInterval(clock); if (errorTimer.current) clearTimeout(errorTimer.current);
     };
   }, [perform, reportError, allowNavigation]);
@@ -393,6 +398,10 @@ export function App() {
                 const hidden = focusedId ? focusedId !== project.id : !visibleIds.has(project.id);
                 return <div key={project.id} className={`project-slot ${reorder.drag?.id === project.id ? 'drag-placeholder' : ''}`} data-project-slot={project.id} style={{ display: hidden ? 'none' : undefined }}><ProjectPanel project={project} index={index}
                   hidden={hidden} focused={focusedId === project.id && !previewFile}
+                  roleNotice={roleNotice && roleNotice.projectId === project.id ? {
+                    ...roleNotice, onShown: displayedRoleNotice ? undefined : acknowledgeRoleNotice,
+                    dismiss: () => { if (!displayedRoleNotice) acknowledgeRoleNotice(); setDisplayedRoleNotice(false); },
+                  } : undefined}
                   navTarget={projectSwitch?.id === project.id ? projectSwitch.sequence : undefined}
                   navPosition={projectSwitch?.id === project.id && switchPosition > 0 ? t('{position} / {total}', { position: switchPosition, total: navigation.current.length }) : undefined}
                   fontSize={settings.fontSize} now={now} activityOpen={settings.activityPane} onFocus={focusProject} onAction={perform} onError={reportError} onOpenLink={openLinkInPopup} onRevealProject={revealProject}
@@ -409,9 +418,9 @@ export function App() {
     </div>
     {popup && <Suspense fallback={null}><FilePopup target={popup} onError={reportError} /></Suspense>}
     <SeatsHost onError={reportError} />
-    {(error || sandboxProgress) && <div className={error ? 'notice-toast error-toast' : 'notice-toast'} role={error ? 'alert' : 'status'}><Info size={18} />
-      <span>{error || sandboxProgress}</span>
-      <IconButton label={t('关闭提示')} onClick={() => error ? setError(null) : setSandboxProgress(null)}><X size={16} /></IconButton>
+    {error && <div className="notice-toast error-toast" role="alert"><Info size={18} />
+      <span>{error}</span>
+      <IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton>
     </div>}
     {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} nativeTitlebar={nativeTitlebar} onClose={closeGuide} />}
     {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={closeGuide} />}

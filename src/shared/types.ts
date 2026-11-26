@@ -52,6 +52,8 @@ export type CallFileResult =
 // What the owner typed into a sub-agent's split, accepted for delivery (not yet read by the worker).
 export type AgentIntervention = { id: string; callId: string; text: string; at: number; route: 'dispatch' | 'parent'; status: 'queued' | 'delivered' | 'consumed' | 'rejected' | 'unknown'; reason?: string };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
+export type RolePermissionsNotice = { projectId: string; terminalId: string; message: string };
+
 export type CliState = { sessionId: string; revision: number; updatedAt: number; state: 'idle' | 'working' | 'waiting'; message?: string;
   // Esc without a Stop that the screen confirms idle: state stays 'working' so no action treats it as idle; only the status light shows it idle.
   screenIdle?: true;
@@ -120,7 +122,7 @@ export type Settings = {
     string
   >>;
   guideVersion: string;
-  codexSandboxPromptDismissed: boolean;
+  rolePermissionsNoticeSeen: boolean;
   shell: 'powershell' | 'cmd' | 'bash' | 'zsh';
   voiceModel: string;
   updateChannel: 'stable' | 'beta';
@@ -133,6 +135,7 @@ export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt
 export type SSHInfo = { hosts: string[]; configFile: string; configExists: boolean; sshPath: string; source: string };
 export type SSHAuthPrompt = { id: string; host: string; message: string; kind: 'secret' | 'confirm' };
 export type Workspace = { desktopGlass?: { supported: boolean; compatibility: boolean; active: boolean; restart: boolean; failed: boolean }; projects: Project[]; settings: Settings; warning: string | null; platform: string; version: string; guide: boolean; autoHideTitlebar: boolean;
+  rolePermissionsNotice?: RolePermissionsNotice | null;
   // macOS: the native title-bar buttons 决策 / 工作台 are attached, so the page draws no copies of them.
   nativeTitlebar: boolean;
   // macOS and Linux: the shell new local terminals use and whether zsh is installed.
@@ -164,7 +167,7 @@ export type PendingPrompt = { id: string; text: string; summary: string; state: 
 export type AgentAction = AgentActionBrief & { id: string; at: number; description: string; failed: boolean; server?: string; files?: { path: string; change: 'add' | 'update' | 'delete' | 'write' }[] };
 // One message or tool call of an agent's conversation, for the reading view.
 // queued: a message Claude Code holds in its queue until it takes it up, never shown as a message itself.
-// cancelled: a retired queue receipt, hidden but still used to cancel its renderer echo.
+// cancelled: a retired queue receipt. undeliveredAt: a resume lost this message and the reader offers it again.
 // receivedAt: a queued message's confirmed handoff, separate from the time it was sent.
 // clientMessageId: a child feed's main-confirmed owner control identity, never a text match.
 // Main-owned channel provenance for child messages. Missing planner identity stays unknown; text never identifies a sender.
@@ -173,7 +176,12 @@ export type ConversationSender = { kind: 'owner' } | { kind: 'planner'; agent: '
 // folder) or a line on that copy (copyNote: being made, or why it could not be). deferred: not read back yet; the reader
 // asks for it (an older picture of a resumed SSH conversation).
 export type GeneratedPicture = { path: string; prompt: string; copied?: string; copyNote?: string; deferred?: boolean };
-export type ConversationEntry = { clientMessageId?: string; sender?: ConversationSender; timeline?: { turn: { id: string; at: number; user?: string }; tools?: { id: string; at: number } }; id: string; at: number; receivedAt?: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; cancelled?: boolean; omitted?: boolean; images?: string[]; generated?: GeneratedPicture; tool?: AgentActionBrief & { failed: boolean } };
+export type ConversationEntry = {
+  clientMessageId?: string; sender?: ConversationSender; timeline?: { turn: { id: string; at: number; user?: string }; tools?: { id: string; at: number } };
+  id: string; at: number; receivedAt?: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string;
+  answer?: boolean; queued?: boolean; cancelled?: boolean; undeliveredAt?: number; undeliveredReplaced?: boolean; omitted?: boolean; images?: string[];
+  generated?: GeneratedPicture; tool?: AgentActionBrief & { failed: boolean };
+};
 export type ConversationPacket = { id: string; sessionId?: string; historyKey?: string; list?: ConversationEntry[]; changes?: ConversationEntry[] };
 export type ReadingHistoryScope = { key: string; agent: 'codex' | 'claude'; threadId: string };
 export type ConversationPage = { key: string; entries: ConversationEntry[]; beforeCursor: string | null };
@@ -559,7 +567,7 @@ type Bridge = {
   notifyDecision(projectId: string, title: string, kind: string): Promise<Result<boolean>>;
   onDecisionShow(callback: () => void): () => void;
   onError(callback: (message: string) => void): () => void;
-  onSandboxProgress(callback: (message: string | null) => void): () => void;
+  acknowledgeRolePermissionsNotice(terminalId: string): void;
   minimize(): void; maximize(): void; toggleFullScreen(): void; isFullScreen(): Promise<Result<boolean>>; onFullScreen(callback: (fullScreen: boolean) => void): () => void; terminalActions(id: string): Promise<Result<AgentAction[]>>; terminalConversation(id: string): Promise<Result<ConversationEntry[]>>; onTerminalConversation(callback: (packet: ConversationPacket) => void): () => void; close(): void;
   quit(): Promise<Result<boolean>>;
   onMenuCommand(callback: (command: MenuCommand) => void): () => void;

@@ -3,7 +3,7 @@ const process = require('node:process');
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn, execFile, execFileSync } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { randomUUID, createHmac, randomBytes } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { homedir, tmpdir, constants: { signals } } = require('node:os');
@@ -23,17 +23,16 @@ const { RunInbox, runId, validText, readBoard } = require(path.join(runtime, 'fe
 const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { plainReply, skillFrontMatter } = require(path.join(runtime, 'features/skills/session.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
-const { createCodexRuntime, workerEnvironment, elevatedSetupMessage, readiness } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
-const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/sandbox-refresh.cjs'));
+const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { workerOf, agentOfModel, defaultWorkerRules, isReadOnly, word, count } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
+const { workerOf, agentOfModel, defaultWorkerRules, isReadOnly, word, count, workerRefusal } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
-const { launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
+const { launchSeat, liveSeatMap, launchSeatMap, parseSeatMap } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const { commandPhrase } = require(path.join(runtime, 'command-phrase.cjs'));
-const { diagnosticLine } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
+const { diagnosticLine, deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -46,9 +45,8 @@ const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-
   'features/skills/agent-seat.cjs', 'features/agents/call-seat.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
-  'features/codex-app-server/sandbox-refresh.cjs',
   'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
-  'features/cli-adapters/workers.cjs', 'features/cli-adapters/manifests/worker.cjs',
+  'features/cli-adapters/workers.cjs', 'features/cli-adapters/worker-git.cjs', 'features/cli-adapters/manifests/worker.cjs',
   'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
 const runtimeFiles = () => {
   const files = Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
@@ -64,11 +62,9 @@ function plainReplyInstructions() {
 }
 
 const START_TIMEOUT = 30000;
-const localWindowsCodex = (agent, env, platform = process.platform) => workerOf(agent)?.localWindows?.(env, platform) === true;
 const RATE_INTERVAL = 5000;
 const PINNED_SEATS = Symbol('pinned dispatch seats');
 // How long a Codex worker's blocking request (a question, a form, an approval) waits for an answer before it is declined.
-const REQUEST_TIMEOUT = 600000;
 // How often a Codex worker's session file is read until its start is confirmed, and how long a worker's last output may
 // take to arrive after it exits before the helper decides from what it has.
 const POLL_INTERVAL = 250, EXIT_SETTLE = 500;
@@ -170,7 +166,7 @@ function validateSmallScope(readOnly, allow) {
   }
 }
 
-function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], roleFallback) {
+function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) {
   if (usesRoundtable(argv)) throw new Error(roundtablesRemoved);
   const [agent, ...flags] = argv;
   if (agent === 'wait') return waitOptions(flags);
@@ -203,14 +199,7 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
       options[names.get(flag)] = value;
     }
   }
-  if (roleFallback) {
-    const { configured, ...choice } = roleFallback, expected = seatExpectation(choice);
-    if (!expected || !seatExpectation({ model: configured, effort: 'low' }) || !validSeat(options.seat)
-      || !worker.leadSeat || agentOfModel(expected.model) !== agent || !workerOf(agentOfModel(configured)).needsSandbox || expected.fast) {
-      throw new Error('Invalid role fallback');
-    }
-    Object.assign(options, expected, { expectedSeat: expected, fastFromSeat: true, fallbackFrom: configured });
-  } else applySeatDefaults(options, env, seatSnapshot, seen.has('--fast'));
+  applySeatDefaults(options, env, seatSnapshot, seen.has('--fast'));
   for (const key of ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out']) if (!options[key]) throw new Error('Missing --' + key);
   if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
   options.role = roles.get(options.role);
@@ -346,9 +335,53 @@ function scopeText({ state, count, files, unavailable }) {
   }
 }
 
+function gitState(cwd) {
+  const read = args => {
+    try {
+      return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+    }
+    catch { return null; }
+  };
+  const branch = read(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const commit = read(['rev-parse', '--verify', 'HEAD']);
+  const refs = read(['for-each-ref', '--sort=refname', '--format=%(refname)%00%(objectname)%00%(symref)', 'refs/heads', 'refs/tags', 'refs/remotes']);
+  return {
+    head: branch || commit ? { branch, commit } : null,
+    refs: refs === null ? null : new Map(refs.split(/\r?\n/).filter(Boolean).map(line => {
+      const [name, oid, target] = line.split('\0');
+      return [name, target || oid];
+    })),
+  };
+}
+
+function compareGit(start, end) {
+  const before = start.head, after = end.head, refs = [];
+  const headChanged = before?.branch !== after?.branch || before?.commit !== after?.commit;
+  const refsUnavailable = (!start.refs || !end.refs) && Boolean(start.refs || end.refs || before || after);
+  let refCount = 0;
+  if (start.refs && end.refs) {
+    for (const name of new Set([...start.refs.keys(), ...end.refs.keys()])) {
+      const before = start.refs.get(name) ?? null, after = end.refs.get(name) ?? null;
+      if (before === after) continue;
+      refCount++;
+      if (refs.length < 50) refs.push({ name, before, after });
+    }
+  }
+  return headChanged || refCount || refsUnavailable ? { before, after, ...(refCount && { refCount, refs }), ...(refsUnavailable && { refsUnavailable }) } : null;
+}
+
+function gitChangeText({ before, after, refs = [], refCount = 0, refsUnavailable }) {
+  const describe = state => state ? `${state.branch || '(detached HEAD)'} @ ${state.commit?.slice(0, 12) || '(no commit)'}` : '(unavailable)';
+  const head = before?.branch !== after?.branch || before?.commit !== after?.commit
+    ? ` · Git HEAD changed during run (author unknown): ${describe(before)} → ${describe(after)}` : '';
+  const names = refs.slice(0, 5).map(ref => ref.name).join(', ');
+  return head + (refCount ? ` · Git refs changed during run (author unknown): ${names}${refCount > 5 ? ` and ${refCount - 5} more` : ''}` : '')
+    + (refsUnavailable ? ' · Git ref comparison unavailable' : '');
+}
+
 function renderDispatchEnd(event) {
   const { id, agent, exitCode, reason, rate, scope, refused, needsDecision, result, routing, fallback,
-    warnings = [], skillProposals, skillChangesLeftLive, interventions, stops, treeStopFailure } = event;
+    warnings = [], skillProposals, skillChangesLeftLive, interventions, stops, treeStopFailure, gitChange } = event;
   if (!agent) {
     const label = result.source === 'lab' ? (reason === 'killed' ? 'stopped' : reason) : 'error';
     const failure = warnings.find(value => value.code === 'lab_dispatch_failed');
@@ -364,6 +397,7 @@ function renderDispatchEnd(event) {
   const restoredText = restored ? ` · restored ${restored.count} out-of-scope paths${restored.quarantine ? ' · quarantined scope changes: ' + restored.quarantine : ''}` : '';
   const bookkeeping = warning('team_bookkeeping_failed');
   return `ended ${id} ${routeText(event)} · ${speed} · exit ${exitCode} reason ${reason}${scopeText(scope)}`
+    + (gitChange ? gitChangeText(gitChange) : '')
     + (refused.count ? ` · refused ${refused.count}${refused.first ? ': ' + refused.first.action : ''}` : '') + restore + restoredText
     + (bookkeeping ? ' · WARNING: team bookkeeping failed: ' + bookkeeping : '')
     + (skillProposals ? ` · ${skillProposals} skill proposals restored and awaiting the lead` : '')
@@ -684,22 +718,6 @@ const helperClaudeLocator = createLocator();
 // to its program the way main's locator resolves it, else codex-runtime's own search; null when there is none.
 const locateCodex = (env, locator = helperLocator) => locator.locate({ env,
   prefer: Object.entries(env).find(([key]) => key.toUpperCase() === 'AGENTRIX_CODEX_EXECUTABLE')?.[1] || undefined }).then(found => found.file);
-async function roleReadiness(cwd, env, locate = locateCodex, check = readiness) {
-  const file = await locate(env);
-  return file ? check(file, { cwd, env }) : null;
-}
-
-async function sshRoleReadiness(cwd, env, locate = locateCodex, execute = execFile) {
-  const file = await locate(env);
-  if (!file) return 'missing';
-  const proof = 'agentrix-sandbox-ready';
-  return new Promise(resolve => {
-    execute(file, ['sandbox', '--', '/bin/echo', proof], { cwd, env, timeout: 5000, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
-      // Bubblewrap can fail while the Codex sandbox command exits zero. Require the command's own output.
-      resolve(!error && stdout.trim() === proof && !/bwrap:.*(?:fail|denied|permitted)/i.test(stderr) ? 'ready' : 'unavailable');
-    });
-  });
-}
 // The Claude Code file a terminal would run, outside the shim folder; null when there is none.
 const locateClaude = async env => (await helperClaudeLocator.locate({ env })).terminal?.file || null;
 
@@ -867,7 +885,7 @@ function hasDecisionHeading(answer) {
 }
 
 async function startDetached(argv, { env = process.env, launch = spawn, store, timeout, source = 'dispatch', onTiming,
-  roleFallback, roleArtifacts, stdout, onEvent, jsonl, emit = dispatchOutput({ stdout, onEvent, jsonl }) } = {}) {
+  roleArtifacts, stdout, onEvent, jsonl, emit = dispatchOutput({ stdout, onEvent, jsonl }) } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
@@ -875,13 +893,13 @@ async function startDetached(argv, { env = process.env, launch = spawn, store, t
   const id = randomUUID();
   let options, file, descriptor;
   try {
-    options = argumentsOf(argv, env, seatSnapshot, roleFallback);
-    timeout ??= 60000 + (localWindowsCodex(options.agent, env) ? ROLE_LIMIT : 0);
+    options = argumentsOf(argv, env, seatSnapshot);
+    timeout ??= 60000;
     store ||= detachedRuns(options.cwd, true);
     file = store.file(id);
     const saved = argv.filter(arg => arg !== '--detach');
     saved[saved.indexOf('--cwd') + 1] = options.cwd;
-    store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now(), roleFallback, roleArtifacts });
+    store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now(), roleArtifacts });
     try { store.prune(); } catch { /* Old receipt cleanup never prevents a new launch. */ }
     descriptor = fs.openSync(file + '.log', 'ax', 0o600);
   } catch (error) {
@@ -994,7 +1012,7 @@ async function runDetached(file, deps = {}) {
     try { output(event); } catch { /* Planner output cannot interrupt signed events or worker cleanup. */ }
   };
   let ownerWaitSequence = 0, needsDecision = false;
-  const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt(receiptEvent('waiting', null)),
+  const detached = { id, admitted: () => receipt({ admitted: true }),
     ownerWaiting: (detail, menu = null) => {
       const ownerWait = menu ? `waiting on ${menu.kind} [${menu.id}]: ${menu.title}`
         + menu.options.map(({ number, label }) => ` · ${number}. ${label}`).join('')
@@ -1014,7 +1032,7 @@ async function runDetached(file, deps = {}) {
   let code = 1;
   try {
     code = await run(entry.argv, { ...deps, env, stdout: null, onEvent, source: entry.source, detached,
-      startTimeout: 60000, roleFallback: entry.roleFallback, roleArtifacts });
+      startTimeout: 60000, roleArtifacts });
     return code;
   } finally {
     const endedAt = Date.now();
@@ -1085,13 +1103,11 @@ async function waitDetached(options, { store = detachedRuns(options.cwd), observ
 }
 
 async function run(argv, deps = {}) {
-  const { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, onTiming, untilAny, signal, roleFallback, roleArtifacts } = deps;
+  const { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, onTiming, untilAny, signal, roleArtifacts } = deps;
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
-    const [, leadAgent, model, effort] = argv;
-    const leadSeat = model && seatExpectation({ model, effort });
-    return serve({ roles: createRoleTools({ env, engine: run, leadAgent, leadSeat, cleanup: true }) }).then(() => 0);
+    return serve({ roles: createRoleTools({ env, engine: run, cleanup: true }) }).then(() => 0);
   }
   if (argv[0] === 'mcp-role') {
     const [, runId, folder] = argv;
@@ -1115,7 +1131,7 @@ async function run(argv, deps = {}) {
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
       if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { emit, onTiming, untilAny, signal });
-      return await startDetached(argv, { env, emit, launch, source, onTiming, roleFallback, roleArtifacts });
+      return await startDetached(argv, { env, emit, launch, source, onTiming, roleArtifacts });
     } catch (error) { return fail(error.message); }
   }
   return runWorker(argv, deps, emit);
@@ -1123,7 +1139,7 @@ async function run(argv, deps = {}) {
 
 async function runWorker(argv, { env = process.env, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, pipeWakeTimeout = PIPE_WAKE_TIMEOUT_MS, detached = null, roleFallback, roleArtifacts, launchTreeStop, labMeter }, emit) {
+  pipeWakeTimeout = PIPE_WAKE_TIMEOUT_MS, detached = null, roleArtifacts, launchTreeStop, labMeter }, emit) {
   const id = detached?.id || randomUUID();
   const signal = (type, fields) => emit(dispatchEvent(type, id, fields));
   const notice = (code, detail) => signal('notice', { code, ...(detail !== undefined && { detail }) });
@@ -1156,7 +1172,9 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   let controlFailure = 'bootstrap/missing_environment', controlLeadMode = null, transportFallback = false, lastControlFailure, lastControlNotice;
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreReport;
-  const controlReceipts = new Map(), requestTimers = new Map();
+  let beforeGit;
+  const roleReadOnly = () => options.readOnly || ['审查', '调查'].includes(options.role);
+  const controlReceipts = new Map(), pendingRequests = new Set();
   const refused = [], refusedItems = new Set();
   function recordRefusal(refusal, itemId) {
     if (refused.length >= REFUSAL_LIMIT || !validRefusal(refusal)) return;
@@ -1236,8 +1254,6 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }
   };
   let drained = new Promise(resolve => { drain = resolve; });
-  const fallback = () => options.fallbackFrom && { from: options.fallbackFrom, to: output.model || options.model,
-    reason: env.AGENTRIX_REMOTE_ROLE_TOOLS === '1' ? 'remote_sandbox_unavailable' : 'local_sandbox_unavailable' };
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: options.role, title: options.title,
     ...billing(),
@@ -1261,13 +1277,14 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   const ended = ({ exitCode, reason, rate = null, scope = scopeReport(false), bookkeeping, restore,
     resultSource = 'final-text', needsDecision = null, routing = null, treeStopFailure }) => {
     const warnings = [restore, bookkeeping, ...Array.from(skillGuard?.notes ?? [], detail => ({ code: 'skill_proposal', detail }))].filter(Boolean);
-    const routeFallback = fallback();
     const result = { source: resultSource, out: options.out };
+    const gitChange = beforeGit && compareGit(beforeGit, gitState(options.cwd));
     signal('ended', { ...reported(), exitCode, reason, rate, scope, needsDecision, routing, result,
       refused: { count: refused.length, ...(refused.length && { first: refused[0] }) }, skillProposals, skillChangesLeftLive, interventions, stops,
-      ...(treeStopFailure && { treeStopFailure }), ...(warnings.length && { warnings }), ...(routeFallback && { fallback: routeFallback }) });
+      ...(gitChange && { gitChange }), ...(treeStopFailure && { treeStopFailure }),
+      ...(warnings.length && { warnings }) });
   };
-  const routeVerdict = () => workerOf(agentOfModel(options.model)).routingVerdict(output, declared(), options.fallbackFrom);
+  const routeVerdict = () => workerOf(agentOfModel(options.model)).routingVerdict(output, declared());
   const roleRouting = () => worker.pinEffort && output.model !== null
     ? { ...output.routing(), verdict: routeVerdict() } : null;
   // A start is confirmed only by the worker's own records: its session, and Codex's turn context in that session's file.
@@ -1282,13 +1299,12 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
     const decision = routeVerdict(), mismatch = decision === 'mismatch';
-    const routeFallback = fallback();
-    const routing = { verdict: decision, unverified, fallback: Boolean(routeFallback), ...(mismatch && { declared: requested }) };
+    const routing = { verdict: decision, unverified, fallback: false, ...(mismatch && { declared: requested }) };
     if (!started) {
       started = true;
       detached?.confirmed?.(workerStartedAt, Date.now(), roleRouting());
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
-      signal('started', { ...reported(), routing, pid: child.pid, session: output.sessionId, ...(routeFallback && { fallback: routeFallback }) });
+      signal('started', { ...reported(), routing, pid: child.pid, session: output.sessionId });
       for (const fact of inputFacts.values()) send(fact);
       if (heldLimits !== undefined) { reportAccount(heldLimits); heldLimits = undefined; }
     }
@@ -1437,8 +1453,9 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   };
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
-    options = argumentsOf(argv, env, env[PINNED_SEATS], roleFallback);
+    options = argumentsOf(argv, env, env[PINNED_SEATS]);
     worker = workerOf(options.agent); usesAppServer = worker.command(options) === 'native';
+    if (usesAppServer) options.readOnly = roleReadOnly();
     output = workerOutput();
     rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
     if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
@@ -1506,6 +1523,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }
     if (killed) throw new Error('Dispatch interrupted before launch');
     const scoped = options.allow.length > 0;
+    beforeGit = gitState(options.cwd);
     const repo = scoped || options.readOnly ? repoFiles(options.cwd) : undefined;
     // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
     if (scoped || options.readOnly) before = snapshot(options.cwd, repo);
@@ -1575,6 +1593,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file) && !(outbox && file.startsWith(outbox + '/')))) ?? null;
       return { after, changed, outOfScope: changed && changed.filter(file => !options.readOnly && !matches(options.allow, file)) };
     };
+    if (labMeter) options.lab = true;
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
@@ -1624,21 +1643,40 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       roleFolder = (roleArtifacts ?? localArtifacts).folder;
       roleServer = artifacts.roleResultServer(__filename, id, roleFolder);
     }
-    function requestOpened({ itemId, payload: { requestId, kind, blocking, preview, questions } }) {
-      const text = detached ? '' : (preview || questions?.[0]?.question || '').slice(0, 160);
+    function answerWorkerApproval(requestId, kind, itemId) {
+      const runtime = activeRuntime;
+      let reason = 'approval_required';
+      try {
+        const intent = runtime.workerIntent(requestId);
+        if (intent) reason = workerRefusal(options, intent);
+        if (reason) {
+          const action = deniedAction({ toolName: kind === 'command' ? 'Command' : 'File-change',
+            command: intent?.summary, paths: intent?.paths }, workerEnv);
+          recordRefusal({ action, reason }, itemId);
+        }
+      } finally {
+        runtime.answer(requestId, { decision: reason ? 'deny' : 'allow' });
+      }
+    }
+
+    function requestOpened({ itemId, payload: { requestId, kind, preview, questions } }) {
+      const approval = kind === 'command' || kind === 'file-change';
+      const text = detached ? '' : approval ? (kind === 'command' && preview ? commandPhrase(preview).phrase : '')
+        : (preview || questions?.[0]?.question || '').slice(0, 160);
       signal('request', { requestId, resolution: { state: 'opened', kind, preview: text } });
-      if (!blocking) { requestTimers.set(requestId, null); return; }
-      const action = kind === 'command' && preview ? 'command approval: ' + commandPhrase(preview).phrase : kind + ' request';
-      recordRefusal({ action, reason: 'approval_required' }, itemId);
-      const decline = () => {
-        if (!requestTimers.has(requestId)) return;
-        signal('request', { requestId, resolution: { state: 'declining', timeout: detached ? null : requestTimeout / 1000 } });
-        // Cancelling a command or file approval interrupts its turn. Declining lets it continue.
-        try { if (['command', 'file-change'].includes(kind)) activeRuntime?.answer(requestId, { decision: 'deny' }); else activeRuntime?.cancel(requestId); }
+      if (!approval) recordRefusal({ action: kind + ' request', reason: 'approval_required' }, itemId);
+      pendingRequests.add(requestId);
+      queueMicrotask(() => {
+        if (!pendingRequests.has(requestId)) return;
+        try {
+          if (approval) answerWorkerApproval(requestId, kind, itemId);
+          else {
+            signal('request', { requestId, resolution: { state: 'declining', timeout: null } });
+            activeRuntime?.cancel(requestId);
+          }
+        }
         catch (error) { signal('request', { requestId, resolution: { state: 'decline-failed', message: error.message } }); }
-      };
-      requestTimers.set(requestId, detached ? null : setTimeout(decline, requestTimeout));
-      if (detached) queueMicrotask(decline);
+      });
     }
 
     function observePermission(event) {
@@ -1699,8 +1737,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         signal('transport', { path: 'claude-terminal', reason: oneLine(event.payload.reason || 'terminal lead') });
       } else if (event.type === 'transcript.record' && nativeBilling === 'subscription') {
         if (meterRecord(event.payload)) output.record(event.payload);
-      } else if (event.type === 'request.resolved' && requestTimers.has(event.payload.requestId)) {
-        clearTimeout(requestTimers.get(event.payload.requestId)); requestTimers.delete(event.payload.requestId);
+      } else if (event.type === 'request.resolved' && pendingRequests.delete(event.payload.requestId)) {
         signal('request', { requestId: event.payload.requestId, resolution: { state: 'reported', message: event.payload.resolution } });
       }
       if (event.providerSessionId && output.confirmed && !usesAppServer) confirm();
@@ -1712,7 +1749,9 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         checkBoard();
         // Skill proposals keep their original snapshot/ownership policy; N1 covers ordinary files only.
         restoreSkills(after?.status.map(entry => entry.file));
-        restoreScope(outOfScope);
+        // A read-only worker has no approved writes. Tree snapshots and the board
+        // cannot tell shell writes apart from owner or peer edits, even in a linked worktree.
+        if (!options.readOnly) restoreScope(outOfScope);
       };
       // Drain board notifications before taking the lock for the final exclusive check.
       await new Promise(resolve => setImmediate(resolve));
@@ -1788,14 +1827,13 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       }
       if (controlClient || usesAppServer) {
         if (killed) throw new Error('Dispatch interrupted before launch');
-        const readOnly = options.readOnly || ['审查', '调查'].includes(options.role);
+        const readOnly = roleReadOnly();
         const spec = { owner: 'dispatch', projectId: bootstrap?.projectId || id, terminalId: bootstrap?.projectId || id, runtimeSessionId: id, runId: id,
           cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
           readOnly, allow: options.allow, env: workerEnv, roleServer,
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (usesAppServer) {
-          let sandboxWaitReported = false;
           codexAccountKey = controlClient?.accountKey || null;
           // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none (a test injecting only `launch` names its `locate`).
           const codex = resolveExecutable === executable ? await locate(env) : null;
@@ -1809,29 +1847,22 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
               if (!started) workerStartedAt = Date.now();
               return trackWorker(launch(command.file, command.args, spawnOptions));
             },
-          }).create({ ...spec, policy: worker.policy(readOnly), onSandboxWait: message => {
-            sandboxWaitReported = true;
-            signal('waiting', { kind: 'sandbox', message });
-            log.write(message + '\n');
-          } }, acceptNative);
+          }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
-            if (localWindowsCodex(options.agent, workerEnv)
-              && ['sandbox_mismatch', 'elevated_sandbox_not_ready', 'sandbox_cwd_unverified', 'sandbox_refresh_pending', 'unsupported_codex_version']
-                .includes(error.code)) throw new Error(error.message);
-            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'sandbox_cwd', 'thread_start', 'thread_resume']
+            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'thread_start', 'thread_resume']
               .includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
               : Number.isInteger(error.code) ? `rpc_${error.code}`
               : ['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected',
-                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'sandbox_mismatch', 'invalid_thread', 'thread_in_use', 'unsupported_codex_capabilities', 'unsupported_codex_version'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
-            throw new Error(`Codex app-server startup failed (${stage}/${category})${category === 'sandbox_mismatch' ? error.requestedSandbox === 'read-only'
-              ? '：Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'
-              : '：请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。' : ''}`);
+                'frame_limit', 'write_failed', 'invalid_response', 'invalid_json', 'invalid_frame', 'invalid_payload', 'truncated_frame', 'sandbox_mismatch',
+                'approval_policy_mismatch', 'invalid_thread', 'thread_in_use', 'unsupported_codex_capabilities',
+                'unsupported_codex_version'].includes(error.code || error.message) ? error.code || error.message : 'runtime_failed';
+            const detail = ['sandbox_mismatch', 'approval_policy_mismatch'].includes(category) ? `：${error.message}` : '';
+            throw new Error(`Codex app-server startup failed (${stage}/${category})${detail}`);
           }
-          if (sandboxWaitReported) void detached?.sandboxReady?.();
           child = { pid: activeRuntime.pid, exitCode: null };
           // The read publishes limits.updated, which reports; an account without plan windows (an API key) reports without them.
           void activeRuntime.readLimits().catch(() => reportAccount(null));
@@ -1994,7 +2025,6 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     boardWatch?.close();
     clearTimeout(startTimer);
     clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
-    for (const timer of requestTimers.values()) clearTimeout(timer);
     await inboxRead; await treeStop;
     await rejectDeferredControls().catch(() => notice('deferred_control_unavailable'));
     await receiptTail; clearTimeout(forceTimer);
@@ -2015,7 +2045,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
 module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, dispatchCompanions,
   dispatchEvent, detachedEnd, renderDispatchLine, renderDispatchStart,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
-  localWindowsCodex, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole };
+  answerDetachedRole };
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(error => {
     console.error('[dispatch] ' + oneLine(error.message));

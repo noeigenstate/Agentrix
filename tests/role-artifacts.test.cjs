@@ -12,7 +12,6 @@ const { createRoleArtifacts, stampRoleArtifacts, trackRoleProcess, sweepRoleArti
 const { createRoleTools, serve } = require('../integration/role-tools.cjs');
 const { startDetached } = require('../integration/dispatch.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
-const { workerOf } = require('../electron/features/cli-adapters/workers.cjs');
 const { started, ended } = require('./helpers/dispatch-events.cjs');
 
 async function fixture(t) {
@@ -74,14 +73,13 @@ test('Codex puts the result MCP in the read-only worker thread configuration', a
       ...options, env: { ...options.env, SYNTHETIC_CODEX_LOG: log },
     }),
   }).create({ owner: 'dispatch', projectId: 'project', terminalId: runId, runtimeSessionId: runId, runId,
-    cwd: root, env: { CODEX_HOME: directory }, readOnly: true, policy: workerOf('codex').policy(true), roleServer }, () => {});
+    cwd: root, env: { CODEX_HOME: directory }, readOnly: true, roleServer }, () => {});
   try {
     await runtime.start();
     const rows = (await fs.readFile(log, 'utf8')).trimEnd().split('\n').map(JSON.parse);
     const config = rows.find(row => row.method === 'thread/start').params;
-    assert.equal(config.sandbox, 'read-only');
-    assert.equal(config.approvalPolicy, 'never');
-    // With approvals off Codex refuses unapproved MCP calls, so finish_role alone is pre-approved.
+    assert.equal(config.sandbox, 'danger-full-access');
+    assert.equal(config.approvalPolicy, 'untrusted');
     assert.deepEqual(config.config.mcp_servers, { agentrix_role: { ...roleServer, tools: { finish_role: { approval_mode: 'approve' } } } });
   } finally { await runtime.close(); }
 });

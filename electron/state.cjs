@@ -125,7 +125,7 @@ function cleanSettings(input = {}) {
     shell: ['cmd', 'bash', 'zsh'].includes(input.shell) ? input.shell : 'powershell',
     // The app version whose usage guide was last shown; a newer version shows it again.
     guideVersion: typeof input.guideVersion === 'string' && /^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(input.guideVersion) ? input.guideVersion : '',
-    codexSandboxPromptDismissed: input.codexSandboxPromptDismissed === true,
+    rolePermissionsNoticeSeen: input.rolePermissionsNoticeSeen === true,
     // Spoken completion phrase; empty uses the built-in phrases. {项目} or {project} is the project name.
     ...Object.fromEntries(['notifications', 'sound', 'closeToTray', 'explorerCollapsed', 'hideTreeNoise', 'restoreSessions', 'autoSave', 'activityPane'].map(key => [key, typeof input[key] === 'boolean' ? input[key] : defaults[key]])),
   };
@@ -167,7 +167,8 @@ class WorkspaceStore {
     this.history = [];
     this.sshHistory = [];
     this.claudeFastMode = null;
-    this.settings = { ...defaults, codexSandboxPromptDismissed: false };
+    this.rolePermissionsNoticeTerminal = null;
+    this.settings = { ...defaults, rolePermissionsNoticeSeen: false };
     this.warnings = [];
     this.readOnly = false;
     this.report = report;
@@ -217,6 +218,7 @@ class WorkspaceStore {
     const terminalIds = new Set(projects.map(project => project.id));
     for (const project of projects) project.terminals = project.terminals.filter(item => { if (terminalIds.has(item.id)) return false; terminalIds.add(item.id); return true; });
     Object.assign(this, { projects, settings, claudeFastMode, history, sshHistory });
+    this.rolePermissionsNoticeTerminal = typeof value.rolePermissionsNoticeTerminal === 'string' ? value.rolePermissionsNoticeTerminal : null;
   }
 
   // Terminal events report the outdated-CLI warning through this existing field.
@@ -409,7 +411,32 @@ class WorkspaceStore {
     if (project) this.remember(project);
     this.projects = this.projects.filter(p => p.id !== id); this.save();
   }
-  updateSettings(patch) { this.settings = cleanSettings({ ...this.settings, ...patch }); this.save(); }
+  updateSettings(patch) {
+    this.settings = cleanSettings({ ...this.settings, ...patch, rolePermissionsNoticeSeen: this.settings.rolePermissionsNoticeSeen });
+    this.save();
+  }
+  get pendingRolePermissionsNotice() {
+    const terminalId = this.rolePermissionsNoticeTerminal;
+    const found = !this.settings.rolePermissionsNoticeSeen && terminalId && this.findTerminal(terminalId);
+    if (!found || found.record === found.project && found.project.primaryTerminalClosed && found.project.terminals?.length) return null;
+    return { projectId: found.project.id, terminalId };
+  }
+  queueRolePermissionsNotice(terminalId) {
+    if (this.settings.rolePermissionsNoticeSeen || this.pendingRolePermissionsNotice) return;
+    const previous = this.rolePermissionsNoticeTerminal;
+    this.rolePermissionsNoticeTerminal = terminalId;
+    try { this.save(); }
+    catch (error) { this.rolePermissionsNoticeTerminal = previous; throw error; }
+  }
+  acknowledgeRolePermissionsNotice(terminalId) {
+    const pending = this.pendingRolePermissionsNotice;
+    if (!pending || pending.terminalId !== terminalId) return;
+    const settings = this.settings;
+    this.settings = { ...settings, rolePermissionsNoticeSeen: true };
+    try { this.save(); }
+    catch (error) { this.settings = settings; throw error; }
+    this.rolePermissionsNoticeTerminal = null;
+  }
   recordClaudeFastMode(echo) {
     const next = cleanClaudeFastMode(echo), previous = this.claudeFastMode;
     // Keep the timestamp of an ON echo so replaying an older refusal cannot restore it.
@@ -421,7 +448,8 @@ class WorkspaceStore {
   save() {
     if (this.readOnly) return;
     const { projects, settings, history, sshHistory, claudeFastMode } = this;
-    const data = { version: WORKSPACE_VERSION, projects, settings, history, sshHistory, ...(claudeFastMode && { claudeFastMode }) };
+    const data = { version: WORKSPACE_VERSION, projects, settings, history, sshHistory, ...(claudeFastMode && { claudeFastMode }),
+      ...(this.pendingRolePermissionsNotice && { rolePermissionsNoticeTerminal: this.rolePermissionsNoticeTerminal }) };
     writeFileAtomic(this.filename, JSON.stringify(data, null, 2), undefined, { flush: true });
     this.restoreDirty = false;
     clearTimeout(this.restoreRetry);

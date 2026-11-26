@@ -136,6 +136,7 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
     return match[1].split('*').reduce((product, factor) => product * Number(factor), 1);
   };
   const carried = runtimeFiles(), count = Object.keys(carried).length;
+  assert.ok(!('features/codex-app-server/sandbox-refresh.cjs' in carried), 'SSH does not carry the retired role sandbox probe');
   const bytes = Object.values(carried).reduce((sum, text) => sum + Buffer.byteLength(text), 0);
   assert.deepEqual(dispatchCompanions, ['role-tools.cjs', 'role-artifacts.cjs']);
   assert.ok(dispatchCompanions.every(file => !(file in carried)));

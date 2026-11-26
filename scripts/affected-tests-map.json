@@ -448,7 +448,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "ed2a9dc1a97fa4667c42dc5b06d53f43dfa3e88d56a067a2a0bbd274a6044711",
+      "digest": "5b342f90193286584aa0a578c6ad725d55ca19c728c2386761bdf866390782ed",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -464,14 +464,15 @@
         "electron/features/skills/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
         "electron/features/codex-app-server/index.cjs",
-        "electron/features/codex-app-server/sandbox-refresh.cjs",
         "electron/features/agents/dispatch-control.cjs",
         "electron/features/codex-runtime/locator.cjs",
         "electron/features/claude-runtime/locator.cjs",
         "electron/features/agents/dispatch-events.cjs",
+        "electron/features/agents/start-failure.cjs",
         "integration/dispatch-outbox.cjs",
         "integration/shims/intercept.cjs",
-        "electron/features/cli-adapters/workers.cjs"
+        "electron/features/cli-adapters/workers.cjs",
+        "electron/features/cli-adapters/worker-git.cjs"
       ],
       "reason": "Loads the same carried electron modules, outbox and intercept implementation beside the source or packaged helper. The static result companion is used only by an on-disk helper."
     },

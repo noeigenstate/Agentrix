@@ -6,7 +6,7 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 
-test('N5: a read-only worker resumes writable for dispatch execution; owner and read-only sessions retain their policies', async t => {
+test('N5: both worker assignments resume with full access and untrusted; owners retain their configured policy', async t => {
   const lifetime = resources(t), root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-resume-policy-'));
   const policyFile = path.join(root, 'policy.json');
   const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: (_file, _args, options) =>
@@ -18,15 +18,13 @@ test('N5: a read-only worker resumes writable for dispatch execution; owner and 
     lifetime.defer('close runtime', () => session.close());
     await session.resume(); return session;
   }
-  const reader = await open({ owner: 'dispatch', readOnly: true });
-  assert.equal(reader.threadResponse.sandbox.type, 'readOnly'); await reader.close();
-  const execution = await open({ owner: 'dispatch' });
-  assert.equal(execution.threadResponse.sandbox.type, 'workspaceWrite');
-  await execution.send({ clientMessageId: 'write', text: 'Synthetic write permission check' });
-  assert.equal(fs.readFileSync(path.join(root, 'synthetic-write-proof.txt'), 'utf8'), 'workspace-write');
-  await execution.close();
-  const readonly = await open({ owner: 'dispatch', readOnly: true });
-  assert.equal(readonly.threadResponse.sandbox.type, 'readOnly'); await readonly.close();
+  for (const readOnly of [true, false]) {
+    const worker = await open({ owner: 'dispatch', readOnly });
+    assert.equal(worker.threadResponse.sandbox.type, 'dangerFullAccess');
+    assert.equal(worker.threadResponse.approvalPolicy, 'untrusted');
+    await worker.close();
+  }
+  fs.writeFileSync(policyFile, JSON.stringify({ sandbox: 'read-only' }));
   const owner = await open({ owner: 'gui', permissions: 'config' });
   assert.equal(owner.threadResponse.sandbox.type, 'readOnly', 'an owner resume under "config" does not override its stored read-only policy');
   await owner.close();

@@ -22,7 +22,7 @@ const CONFIGURED = { sandbox: { type: 'readOnly', networkAccess: false }, approv
 // announces but never answers, `reject` a method it refuses with that JSON-RPC code. As 0.167 does, it announces every thread it starts.
 function codexServer({
   apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox,
-  settle, reviewer, initialReviewer = 'user', noise = [], silentProbe = false, announceProbe = true,
+  settle, reviewer, initialReviewer = 'user', appliedApprovalPolicy, noise = [], silentProbe = false, announceProbe = true,
   reject = {}, readiness = 'ready', version = '0.167.0', onWrite = () => {}, threadId = 'owner-thread', commandCwd = cwd => cwd,
 } = {}) {
   const child = new EventEmitter(), wire = [], waits = [];
@@ -51,7 +51,7 @@ function codexServer({
           if (request.method === 'thread/start' && (!p.ephemeral || announceProbe)) notify('thread/started', { thread });
           if (p.ephemeral && silentProbe) return;
           result = { thread, cwd: p.cwd, model: 'gpt-6.1-sol', reasoningEffort: 'high', serviceTier: null,
-            approvalPolicy: p.approvalPolicy || CONFIGURED.approvalPolicy, ...(initialReviewer === null ? {} : { approvalsReviewer: initialReviewer }), sandbox: apply(p),
+            approvalPolicy: appliedApprovalPolicy ?? p.approvalPolicy ?? CONFIGURED.approvalPolicy, ...(initialReviewer === null ? {} : { approvalsReviewer: initialReviewer }), sandbox: apply(p),
             activePermissionProfile: configured ? CONFIGURED.activePermissionProfile : null };
         } else if (request.method === 'thread/unsubscribe') result = { status: 'unsubscribed' };
         else if (request.method === 'thread/turns/list') result = { data: [], nextCursor: null, backwardsCursor: null };
@@ -139,13 +139,14 @@ for (const kind of ['local', 'ssh']) {
 }
 
 test('dispatched and read-only sessions keep their own sandbox and approvals whatever the permissions say', async t => {
-  // The dispatch helper's own policy (integration/dispatch.cjs) is the production worker spec.
-  const helper = { owner: 'dispatch', policy: { approvalPolicy: 'never' } };
+  // Even a conflicting caller policy cannot override the worker defaults.
+  const helper = { owner: 'dispatch', policy: { approvalPolicy: 'never', sandbox: 'read-only' } };
+  const workerPolicy = { sandbox: 'danger-full-access', approvalPolicy: 'untrusted', approvalsReviewer: 'user' };
   for (const [spec, expected] of [
-    [{ ...helper, permissions: 'full' }, { sandbox: 'workspace-write', approvalPolicy: 'never', approvalsReviewer: 'user' }],
-    [{ ...helper, readOnly: true, permissions: 'ask' }, { sandbox: 'read-only', approvalPolicy: 'never', approvalsReviewer: 'user' }],
-    [{ owner: 'dispatch', permissions: 'full' }, { sandbox: 'workspace-write', approvalPolicy: undefined, approvalsReviewer: 'user' }],
-    [{ owner: 'dispatch', readOnly: true, permissions: 'full' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
+    [{ ...helper, permissions: 'full' }, workerPolicy],
+    [{ ...helper, readOnly: true, permissions: 'ask' }, workerPolicy],
+    [{ owner: 'dispatch', permissions: 'full' }, workerPolicy],
+    [{ owner: 'dispatch', readOnly: true, permissions: 'full' }, workerPolicy],
     [{ owner: 'gui', readOnly: true, permissions: 'full' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
     [{ owner: 'gui', readOnly: true, permissions: 'ask' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
   ]) {
@@ -159,84 +160,31 @@ test('dispatched and read-only sessions keep their own sandbox and approvals wha
   }
 });
 
-test('local Windows dispatch requires elevated readiness and requests the scoped backend on start and resume', async t => {
+test('local and SSH dispatch start and resume without a sandbox setup or cwd probe', async t => {
   for (const platform of ['win32', 'linux']) for (const kind of ['local', 'ssh']) {
-    const elevated = platform === 'win32' && kind === 'local';
     for (const readOnly of [false, true]) for (const resume of [false, true]) {
-      const spec = { owner: 'dispatch', policy: { approvalPolicy: 'never' }, readOnly, providerSessionId: resume ? 'owner-thread' : null };
-      const { session, server, launches } = runtime(t, { kind, platform, spec });
+      const spec = { owner: 'dispatch', readOnly, providerSessionId: resume ? 'owner-thread' : null };
+      const server = codexServer({ readiness: 'notConfigured', reject: { 'windowsSandbox/readiness': -32601, 'command/exec': -32601 } });
+      const { session, launches } = runtime(t, { kind, platform, spec, server });
       await session[resume ? 'resume' : 'start']();
-      const method = resume ? 'thread/resume' : 'thread/start';
-      const [request] = server.threadRequests(method);
-      const readiness = server.wire.findIndex(row => row.method === 'windowsSandbox/readiness');
-      assert.deepEqual(policyOf(request.params), { sandbox: readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'never', approvalsReviewer: 'user' });
-      assert.deepEqual(request.params.config, elevated ? { 'windows.sandbox': 'elevated', 'features.prefer_mxc': false } : {});
-      assert.equal(readiness >= 0, elevated);
-      if (elevated) {
-        assert.ok(readiness < server.wire.indexOf(request));
-        assert.deepEqual(server.wire[readiness].params, {});
-        assert.deepEqual(launches[0].slice(3), ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false']);
-      }
+      const [request] = server.threadRequests(resume ? 'thread/resume' : 'thread/start');
+      assert.deepEqual(policyOf(request.params), { sandbox: 'danger-full-access', approvalPolicy: 'untrusted', approvalsReviewer: 'user' });
+      assert.deepEqual(request.params.config, {});
+      assert.equal(server.wire.some(row => ['windowsSandbox/readiness', 'command/exec'].includes(row.method)), false);
+      if (kind === 'local') assert.deepEqual(launches[0], ['app-server', '--listen', 'stdio://']);
       await session.close();
     }
   }
 });
 
-test('local Windows dispatch stops before opening a thread when elevated setup is missing or stale', async t => {
-  for (const readiness of ['notConfigured', 'updateRequired']) for (const readOnly of [false, true]) {
-    const server = codexServer({ readiness });
-    const env = { USERDOMAIN: 'DOMAIN', USERNAME: 'test-user', CODEX_HOME: "C:\\Codex User's Home" };
-    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly, env } });
-    await assert.rejects(session.start(), {
-      code: 'elevated_sandbox_not_ready',
-      message: /Agentrix 启动.*「设置」.*管理员 PowerShell.*codex sandbox setup --elevated --user 'DOMAIN\\test-user' --codex-home 'C:\\Codex User''s Home'/,
-    });
-    assert.equal(server.threadRequests('thread/start').length, 0);
-    assert.equal(session.snapshot().state, 'failed');
-  }
+test('dispatch refuses to send the brief if Codex reports approvals are disabled', async t => {
+  const server = codexServer({ appliedApprovalPolicy: 'never' });
+  const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch' } });
+  await assert.rejects(session.start(), { code: 'approval_policy_mismatch', stage: 'thread_start' });
+  assert.equal(server.wire.some(row => row.method === 'turn/start' && row.params.threadId), false);
 });
 
-test('local Windows dispatch asks the user to update Codex when the readiness method is unavailable', async t => {
-  for (const [version, stage] of [['0.167.0', 'sandbox_readiness'], ['0.165.0', 'initialize']]) {
-    const server = codexServer({ version, reject: { 'windowsSandbox/readiness': -32601 } });
-    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch' } });
-    await assert.rejects(session.start(), { code: 'unsupported_codex_version', stage, message: /Codex 版本过旧.*请更新 Codex/ });
-    assert.equal(server.wire.some(row => row.method === 'windowsSandbox/readiness'), stage === 'sandbox_readiness');
-    assert.equal(server.threadRequests('thread/start').length, 0);
-    assert.equal(session.snapshot().state, 'failed');
-  }
-});
-
-test('every local elevated Windows role verifies the sandbox cwd before sending its brief', async t => {
-  for (const readOnly of [true, false]) for (const pending of [true, false]) {
-    const stages = [];
-    // The sandbox can report the original 8.3 spelling and a different drive-letter case.
-    const server = codexServer({ commandCwd: () => root.replace(/^[A-Z](?=:)/, drive => drive.toLowerCase()) });
-    const { session, root } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly, onSandboxWait: line => stages.push(line) } });
-    if (pending) {
-      fs.mkdirSync(path.join(root, '.sandbox'));
-      fs.writeFileSync(path.join(root, '.sandbox', 'setup_marker.json'), '{}');
-    }
-    await session.start();
-    assert.equal(stages.length, Number(pending));
-    assert.equal((await session.send({ clientMessageId: 'brief', text: 'Role brief' })).status, 'delivered');
-    const probe = server.wire.findIndex(row => row.method === 'command/exec');
-    assert.ok(probe > server.wire.findIndex(row => row.method === 'thread/start'));
-    assert.ok(probe < server.wire.findIndex(row => row.method === 'turn/start' && row.params.threadId));
-    assert.equal(fs.realpathSync.native(server.wire[probe].params.cwd), fs.realpathSync.native(root));
-    assert.deepEqual(server.wire[probe].params.sandboxPolicy, { type: readOnly ? 'readOnly' : 'workspaceWrite', networkAccess: false });
-  }
-});
-
-test('dispatch launched inside SSH on Windows does not probe elevated readiness', async t => {
-  const server = codexServer({ apply: () => ({ type: 'workspaceWrite' }) });
-  const env = { SSH_CONNECTION: 'ssh-fixture' };
-  const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly: true, env } });
-  await assert.rejects(session.start(), { code: 'sandbox_mismatch', requestedSandbox: 'read-only' });
-  assert.equal(server.wire.some(row => row.method === 'windowsSandbox/readiness'), false);
-});
-
-test('the dispatch helper keeps the sandbox mismatch category and read-only hint over SSH', async t => {
+test('the dispatch helper keeps the sandbox mismatch category and full-access hint on local and SSH launches', async t => {
   const { run } = require('../integration/dispatch.cjs');
   const cwd = directory(t), brief = path.join(cwd, 'brief.txt');
   fs.writeFileSync(brief, 'Synthetic review task');
@@ -250,8 +198,8 @@ test('the dispatch helper keeps the sandbox mismatch category and read-only hint
       env, stdout: { write: value => { output += value; } }, resolveExecutable: () => ({ file: 'fake-only', args: [] }), launch: () => child,
     });
     assert.equal(result, 1, output);
-    assert.match(output, /Codex 未应用只读沙箱/);
-    assert.equal(output.includes('(thread_start/sandbox_mismatch)'), remote || process.platform !== 'win32', output);
+    assert.match(output, /Codex 未应用完全访问权限/);
+    assert.ok(output.includes('(thread_start/sandbox_mismatch)'), output);
   }
 });
 
@@ -259,7 +207,7 @@ test('local Windows dispatch still rejects sandbox mismatches without retrying',
   for (const readOnly of [false, true]) {
     const server = codexServer({ apply: () => ({ type: readOnly ? 'workspaceWrite' : 'readOnly' }) });
     const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly } });
-    await assert.rejects(session.start(), { code: 'sandbox_mismatch', requestedSandbox: readOnly ? 'read-only' : 'workspace-write' });
+    await assert.rejects(session.start(), { code: 'sandbox_mismatch', requestedSandbox: 'danger-full-access' });
     assert.equal(server.threadRequests('thread/start').length, 1);
   }
 });

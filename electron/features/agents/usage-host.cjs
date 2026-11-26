@@ -10,10 +10,7 @@ function createCodexServices(host) {
   const codexLocator = createCodexLocator({ scan: env.AGENTRIX_DATA_DIR ? null
     : async walk => scanDrives({ ...walk, drives: await fixedDrives(env), skipPaths: [env.TEMP, env.TMP, os.tmpdir()] }),
     store: { read: () => readNativeJson(codexHitFile(), null), write: value => writeNativeJson(codexHitFile(), value) },
-    changed: () => {
-      host.agents.changed();
-      if (codexLocator.peek()?.file) void host.offerCodexSandboxSetup?.();
-    } });
+    changed: () => host.agents.changed() });
   const codexExecutable = () => codexLocator.locate().then(found => found.file);
   const codexAccounts = new CodexAccountUsage({ read: options => adapterOf('codex').usage.accountReader({ ...options, resolveExecutable: codexExecutable }),
     resetClient: { rpcFactory: createResetRpc, resolveExecutable: codexExecutable }, resetStorage: {
