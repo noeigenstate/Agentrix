@@ -34,7 +34,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
     submissions: new SubmissionTracker(), promptQueue: new PromptQueue(), completionWork: new CompletionWork(), approval: { invalidate() {} } };
   const context = { createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage, sessions: new Map([['t', host]]), store: { findTerminal: () => ({ project, record: { restore: {} } }) },
     nativeSpecs: new Map(), randomUUID: require('node:crypto').randomUUID, wholeThread: value => !!value, launchPlans: new Map(), quitting: false,
-    fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, skills: { endSession() {} }, syncDashboardLive() {}, report(error) { throw error; },
+    fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, routing: { endSession() {} }, syncDashboardLive() {}, report(error) { throw error; },
     InputGate, isTerminalResponse, nativeSessions: null, scheduleState() {}, broadcast() {}, setTimeout, applyActivity() {}, findProject: () => project,
     PromptQueue, CompletionWork, ActionLog, ConversationLog, dashboard: { run() {} }, t: value => value,
     AgentCalls, sameDirectory: require('../electron/session-files.cjs').sameDirectory, path, os: { homedir: () => directory }, claudeConfigDir: () => directory, send() {} };

@@ -22,10 +22,9 @@ function runPowerShell(script, env) {
   });
 }
 
-function runPowerShellHook(kind, input, { noteFile, pipeName = 'agentrix-hook-test-' + randomUUID() } = {}) {
+function runPowerShellHook(kind, input, { pipeName = 'agentrix-hook-test-' + randomUUID() } = {}) {
   const args = ['-File', path.resolve(__dirname, '../../integration/claude-hook.ps1'),
     '-PipeName', pipeName, '-ProjectId', 'fixture', '-SessionKey', 'fixture-key', '-Kind', kind];
-  if (noteFile) args.push('-NoteFile', noteFile);
   const env = { ...process.env };
   delete env.AGENTRIX_READING_NOTE_FILE;
   delete env.AGENTRIX_HOOK_TRACE;

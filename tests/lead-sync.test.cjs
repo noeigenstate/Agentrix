@@ -312,7 +312,7 @@ test('lead sync reports what waits for the current turn, clears a reverted targe
   let repaint, reload, seats, attempt;
   let rows = ['✻ Thinking…'];
   const previous = global.window;
-  global.window = { agentrix: { skillSeats: () => seats, onSkills: load => { reload = load; }, answerTerminal: (_id, key) => keys.push(key) } };
+  global.window = { agentrix: { routingSeats: () => seats, onRouting: load => { reload = load; }, answerTerminal: (_id, key) => keys.push(key) } };
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
     './i18n': { t: text => text },
     './terminal-screen': { readScreen: () => ({ sessionId: 'pty', rows }), canPasteScreen: () => true,
@@ -389,7 +389,7 @@ test('lead sync registers only submitted conductor commands under the live conve
   const keys = [];
   let seats = native, reload;
   const previous = global.window;
-  global.window = { agentrix: { skillSeats: () => seats, onSkills: load => { reload = load; }, answerTerminal: (_id, key) => keys.push(key) } };
+  global.window = { agentrix: { routingSeats: () => seats, onRouting: load => { reload = load; }, answerTerminal: (_id, key) => keys.push(key) } };
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
     './i18n': { t: text => text },
     './terminal-screen': { readScreen: () => ({ sessionId: terminal.sessionId, rows: [] }), canPasteScreen: () => true, subscribeScreen: () => () => {} },
@@ -428,7 +428,7 @@ test('an unverified live version reports why and sends no routing keys until a v
   let rows = ['✻ Thinking…'];
   const before = global.window;
   global.window = { agentrix: {
-    skillSeats: async () => ({ conductor: true, leads: { claude: { model: 'opus', effort: 'high', ultracode: true, fast: true } } }),
+    routingSeats: async () => ({ conductor: true, leads: { claude: { model: 'opus', effort: 'high', ultracode: true, fast: true } } }),
     answerTerminal: (_id, key) => keys.push(key), leadFastSettings: async () => assert.fail('fast settings were accessed'),
   } };
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
@@ -461,8 +461,8 @@ test('lead sync returns to old targets and retries a failure only after its inpu
   const scope = leadRoutingScope(terminal), attempts = [];
   let effort = 'medium', reload, frame, fail = false;
   const previous = global.window;
-  global.window = { agentrix: { skillSeats: async () => ({ conductor: true, leads: { claude: { model: 'claude-fable-5-2', effort } } }),
-    onSkills: load => { reload = load; }, answerTerminal() {} } };
+  global.window = { agentrix: { routingSeats: async () => ({ conductor: true, leads: { claude: { model: 'claude-fable-5-2', effort } } }),
+    onRouting: load => { reload = load; }, answerTerminal() {} } };
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
     './i18n': { t: text => text },
     './terminal-screen': { readScreen: () => ({ sessionId: terminal.sessionId, rows: [] }), canPasteScreen: () => true,
@@ -521,7 +521,7 @@ test('a fast refusal is the same message in the routing notice and the terminal 
     agentSettings: { model: 'Fable 5.2', effort: 'high', fast: false, ultracode: null } };
   const calls = [], reason = 'Fast mode requires usage credits · /usage-credits to turn them on';
   const previous = global.window;
-  global.window = { agentrix: { skillSeats: async () => ({ conductor: true, leads: { claude: { model: 'Fable 5.2', effort: 'high', fast: true } } }),
+  global.window = { agentrix: { routingSeats: async () => ({ conductor: true, leads: { claude: { model: 'Fable 5.2', effort: 'high', fast: true } } }),
     answerTerminal() {}, leadFastSettings: async (_id, request) => { calls.push(request); return { ok: true, value: request.token ? null : 'token' }; } } };
   const translate = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key]);
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
@@ -548,7 +548,7 @@ test('SSH conductor applies Ultracode alongside effort before preparing and conf
   registerLeadFastSettings({ handle: (_channel, fn) => { handle = fn; }, findProject: () => ({ kind: 'ssh' }),
     getSession: () => ({ ...terminal, terminal: remote }) });
   const previous = global.window;
-  global.window = { agentrix: { skillSeats: () => seats, onSkills: load => { reload = load; }, answerTerminal() {},
+  global.window = { agentrix: { routingSeats: () => seats, onRouting: load => { reload = load; }, answerTerminal() {},
     leadFastSettings: async (...args) => ({ ok: true, value: await handle(...args) }) } };
   const harness = hookHarness('src/features/terminal/lead-sync.ts', {
     './i18n': { t: text => text },

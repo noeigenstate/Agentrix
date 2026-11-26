@@ -1,5 +1,4 @@
-const { skillName } = require('./files.cjs');
-const { frontMatter } = require('./front-matter.cjs');
+const { frontMatter } = require('../../shared/front-matter.cjs');
 const { validRoleId } = require('./role-rules.mjs');
 
 const KEYS = ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary'];
@@ -80,10 +79,10 @@ function checkLibraryRegion(visible, library, fail) {
   }
 }
 
-function builtinMetadata(text, folder) {
-  const fail = reason => { throw new Error(`Invalid built-in skill ${folder}: ${reason}`); };
+function guideMetadata(text, name) {
+  const fail = reason => { throw new Error(`Invalid routing guide ${name}: ${reason}`); };
   let front;
-  try { front = frontMatter(text); if (front) skillName(front.fields.name); } catch (error) { fail(error.message); }
+  try { front = frontMatter(text); } catch (error) { fail(error.message); }
   if (!front) fail('expected front matter followed by a body');
   const lines = front.raw.split(/\r?\n/), fields = {};
   const keys = [...KEYS, ...ROLE_KEYS.filter(key => Object.hasOwn(front.fields, key))];
@@ -99,7 +98,9 @@ function builtinMetadata(text, folder) {
     if (quoted && !needsQuotes(value)) fail(`unnecessary quotes around ${key}`);
     fields[key] = value;
   }
-  if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(fields.name) || fields.name !== folder) fail('name must be kebab-case and match its folder');
+  if (fields.name.length > 120 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(fields.name) || fields.name !== name) {
+    fail('name must be kebab-case and match its filename');
+  }
   if (!/^[\p{Script=Han}]{2,8}$/u.test(fields.title)) fail('title must be 2-8 Chinese characters');
   if (!chinese(fields.summary) || [...fields.summary].length > 90 || sentences(fields.summary) > 2) fail('summary must be Chinese, at most two sentences and 90 characters');
   if (fields.description.length > 2000 || chinese(fields.description) || !/^Use (when|before|on|at|whenever)\b\s+\S/.test(fields.description)) fail('description must be English, start with a Use trigger and be at most 2000 characters');
@@ -125,4 +126,4 @@ function builtinMetadata(text, folder) {
   return fields;
 }
 
-module.exports = { builtinMetadata, TRIGGERS, outsideFences, region };
+module.exports = { guideMetadata, outsideFences, region };

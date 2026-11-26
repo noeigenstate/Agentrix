@@ -33,7 +33,7 @@ async function startNativeWithWarnings({ store, start, recover, onFailure, repor
 
 function quitSteps(host) {
   const { app, report, disposeDispatchInbox, dashboardWindow, labWindow,
-    attentionTimer, voiceManager, fileOperations, skills, nativeSessions, claudeRuntime, updateManager, projectAccounts,
+    attentionTimer, voiceManager, fileOperations, routing, nativeSessions, claudeRuntime, updateManager, projectAccounts,
     codexAccounts, claudeAccounts, disposeClaudeAccounts, usageRolloverTimer, stateTimer, sessions, disposeTerminal,
     workerTerminals, sshAuth, eventServer, hookServer, dispatchControl, tray, cleanupAskpass, runtimeDir, fs, path, dashboard } = host;
   const drains = [];
@@ -49,7 +49,7 @@ function quitSteps(host) {
   clearTimeout(attentionTimer);
   run(() => voiceManager?.close());
   run(() => fileOperations?.cancel());
-  run(() => skills?.close());
+  run(() => routing?.close());
   host.quitting = true;
   run(() => nativeSessions?.close());
   run(() => claudeRuntime?.close());

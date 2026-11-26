@@ -36,8 +36,8 @@
     "id": "electron/app/process-lifecycle.cjs:f54e03d3957e699f19b2e5f4"
   },
   {
-    "text": "run(() => skills?.close())",
-    "id": "electron/app/process-lifecycle.cjs:527243d8593017ac7a3fc56c"
+    "text": "run(() => routing?.close())",
+    "id": "electron/app/process-lifecycle.cjs:846e5b661ccffda50db883fd"
   },
   {
     "text": "run(() => nativeSessions?.close())",
@@ -116,6 +116,14 @@
     "id": "electron/app/process-lifecycle.cjs:38857967db727c07c46fabdd"
   },
   {
+    "text": "routing.launch(project, remote, s.skillSessionId, { agent: s.agent, started })",
+    "id": "electron/app/session-presentation.cjs:8fcd94cc5c9aba2434561542"
+  },
+  {
+    "text": "routing.launch(project, false, s.sessionId, { agent: 'claude' })",
+    "id": "electron/app/session-presentation.cjs:009e10063782efd714a5b3d6"
+  },
+  {
     "text": "session.gate.input(plan.command)",
     "id": "electron/app/terminal-lifecycle.cjs:514c91a5cd929ecb641a75d3"
   },
@@ -132,6 +140,10 @@
     "id": "electron/app/terminal-lifecycle.cjs:9bfef8aa623497e7ed76da79"
   },
   {
+    "text": "deps.routing.launch(project, false, sessionId, { agent: 'claude' })",
+    "id": "electron/app/terminal-lifecycle.cjs:0ee1018fefe1836eeef5369a"
+  },
+  {
     "text": "deps.dashboard.run(project, call, event)",
     "id": "electron/app/terminal-lifecycle.cjs:e797b76607d9991bb1ca1330"
   },
@@ -142,6 +154,10 @@
   {
     "text": "terminal.write(data)",
     "id": "electron/app/terminal-lifecycle.cjs:05d4a2a0572a6c65bc4cf5df"
+  },
+  {
+    "text": "deps.routing.launch(project, true, sessionId)",
+    "id": "electron/app/terminal-lifecycle.cjs:286c4013377ebb1baa880417"
   },
   {
     "text": "deps.pty.spawn(shell.file, ['-l', '-i'], terminalOptions)",
@@ -214,6 +230,10 @@
   {
     "text": "run(file, args, options, (error, stdout) => resolve(error ? { reason: error.killed ? 'timeout' : 'failed' } : { stdout }))",
     "id": "electron/features/cli-adapters/path-install.cjs:a9f7346b8445b4a586161496"
+  },
+  {
+    "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
+    "id": "electron/features/cli-adapters/worker-git.cjs:2b9c6f710d0d32d63f38f180"
   },
   {
     "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\n        { windowsHide: true, timeout: 2000 }, error => {\n          if (error) {\n            onTreeStopFailure(new Error(`taskkill ${typeof error.code === 'number' ? `exited with code ${error.code}` : error.code || 'failed'}`));\n            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');\n          }\n          treeStopped = true; settle();\n        })",
@@ -356,8 +376,24 @@
     "id": "electron/features/lab-aa/container.cjs:26ab6bd89a8b508b03ea74de"
   },
   {
+    "text": "routing?.launch?.(project, true, sessionId, { agent, started: true })",
+    "id": "electron/features/native-session/host-inputs.cjs:8aa8771b40f8389cba5639de"
+  },
+  {
+    "text": "routing?.launch?.(project, false, sessionId, { agent, started: true })",
+    "id": "electron/features/native-session/host-inputs.cjs:a362c7d40e3ec5fcfe1c672e"
+  },
+  {
     "text": "deps.dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },\n        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,\n          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 })",
     "id": "electron/features/native-session/host.cjs:c7e13917011d4ea031c4ad7b"
+  },
+  {
+    "text": "deps.routing.launch(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true })",
+    "id": "electron/features/native-session/host.cjs:1ef82708757a08bec9fcbdd5"
+  },
+  {
+    "text": "deps.routing.launch(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true })",
+    "id": "electron/features/native-session/host.cjs:c09fbb3090c9feaf71a9a36b"
   },
   {
     "text": "switches.input(id, spec.runtimeSessionId)",
@@ -369,15 +405,11 @@
   },
   {
     "text": "spawn(file, ['app-server', '--listen', 'stdio://'], { cwd, env: workerEnvironment(env), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })",
-    "id": "electron/features/skills/model-probe.cjs:d05fa2d59b715b015869535a"
+    "id": "electron/features/routing/model-probe.cjs:d05fa2d59b715b015869535a"
   },
   {
-    "text": "execFileSync('git', ['rev-parse', '--git-common-dir'],\n      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
-    "id": "electron/features/skills/worker-proposals.cjs:79438176dda822c97079af8e"
-  },
-  {
-    "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
-    "id": "electron/features/skills/worker-proposals.cjs:2b9c6f710d0d32d63f38f180"
+    "text": "this.launch(project, remote, sessionId, { agent, started: true })",
+    "id": "electron/features/routing/store.cjs:9b2e2ff006104d783315168c"
   },
   {
     "text": "execFileSync(helper, ['--short-path', helper], { encoding: 'utf8', windowsHide: true, timeout: 5000 })",

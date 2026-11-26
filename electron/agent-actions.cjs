@@ -3,7 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { TranscriptTail } = require('./transcript-tail.cjs');
 const { messageText, ownMessage, promptText } = require('./prompt-queue.cjs');
-const { frontMatter } = require('./features/skills/front-matter.cjs');
+const { frontMatter } = require('./shared/front-matter.cjs');
 
 // What an agent is doing, step by step: each tool it calls becomes one action the window can show
 // ("editing src/App.tsx", "running npm test", "skill code-review", "MCP github · create_issue").

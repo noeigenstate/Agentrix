@@ -1,17 +1,13 @@
 import contextlib
-import concurrent.futures
-import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import socket
-import stat
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from unittest import mock
 import urllib.error
@@ -194,8 +190,7 @@ class RemoteClaudeTest(unittest.TestCase):
     def hook(self, source="startup", session="session-one", **env_changes):
         client = mock.MagicMock(); client.__enter__.return_value = client
         env = {"HOME": str(self.home), "USERPROFILE": str(self.home), "AGENTRIX_TOKEN": "fixture-envelope", "AGENTRIX_SOCKET": "fixture.sock",
-               "AGENTRIX_READING_NOTE_FILE": str(self.home / "note.txt"), "AGENTRIX_SKILL_KEY_FILE": str(self.home / "key.txt"),
-               "AGENTRIX_SKILL_STATE_DIR": str(self.home / "delivery"), **env_changes}
+               **env_changes}
         output = io.StringIO()
         payload = {"session_id": session, "source": source, "transcript_path": str(self.config / "projects" / "session.jsonl")}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sys, "argv", ["notify.py", "claude-hook", "session"]), \
@@ -204,105 +199,17 @@ class RemoteClaudeTest(unittest.TestCase):
             exec(remote.NOTIFY_SOURCE, {})
         return (json.loads(output.getvalue()) if output.getvalue() else None), json.loads(client.sendall.call_args[0][0])
 
-    def test_session_start_delivers_once_per_cli_identity_and_fingerprint_but_after_every_compact_and_clear(self):
-        (self.home / "note.txt").write_text("You run inside Agentrix. Startup instructions. Agentrix skill delivery: remote. System skills: read the enabled manifest.", encoding="utf-8")
-        for key in ("a" * 64, "b" * 64):
-            manifest = self.home / "references" / key / "instructions.md"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("System skills: read the enabled manifest.", encoding="utf-8")
-        (self.home / "key.txt").write_text("a" * 64, encoding="utf-8")
-        os.utime(self.home / "key.txt", (1700000000, 1700000000))
-        first, event = self.hook()
-        self.assertEqual(first["hookSpecificOutput"], {"hookEventName": "SessionStart", "additionalContext": "Agentrix skill instructions:\nSystem skills: read the enabled manifest."})
-        self.assertEqual(event["state"], "session")
-        for source in ("startup", "resume"): self.assertIsNone(self.hook(source)[0])
-        for source in ("compact", "compact", "clear", "clear"): self.assertIsNotNone(self.hook(source)[0])
-        self.assertIsNotNone(self.hook(session="session-two")[0])
-        (self.home / "key.txt").write_text("b" * 64, encoding="utf-8")
-        os.utime(self.home / "key.txt", (1700000001, 1700000001))
-        self.assertIsNotNone(self.hook("resume")[0])
-        self.assertIsNone(self.hook("resume")[0])
-        self.assertIsNone(self.hook("unknown")[0])
-        self.assertIsNone(self.hook(session="../../escape")[0])
-        self.assertEqual(len([file for file in (self.home / "delivery").rglob("*") if file.is_file()]), 3)
-
-    def test_session_start_reports_a_missing_manifest_and_uses_the_private_event_token(self):
+    def test_session_start_forwards_events_and_uses_the_private_token_without_context_output(self):
         token_file = self.home / "event-token"
         token_file.write_text("fixture-from-file", encoding="utf-8")
-        key = "a" * 64
-        (self.home / "key.txt").write_text(key, encoding="utf-8")
-        failed, event = self.hook(AGENTRIX_EVENT_TOKEN_FILE=str(token_file))
-        self.assertIn("无法读取会话说明", failed["systemMessage"])
-        self.assertEqual(event["token"], "fixture-from-file")
-        manifest = self.home / "references" / key / "instructions.md"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text("Recovered instructions.", encoding="utf-8")
-        resumed, _ = self.hook("resume", AGENTRIX_EVENT_TOKEN_FILE=str(token_file))
-        self.assertEqual(resumed["hookSpecificOutput"]["additionalContext"], "Agentrix skill instructions:\nRecovered instructions.")
-
-    def test_shared_receipt_lifecycle_fixture_matches_python_and_every_remaining_receipt(self):
-        fixture = json.loads((MODULE_PATH.parents[1] / "tests/fixtures/skill-receipts/lifecycle.json").read_text(encoding="utf-8"))
-        for key in fixture["manifests"].values():
-            manifest = self.home / "references" / key / "instructions.md"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("Shared instructions.", encoding="utf-8")
-        for revision, step in enumerate(fixture["steps"]):
-            (self.home / "key.txt").write_text(fixture["manifests"][step["key"]], encoding="utf-8")
-            os.utime(self.home / "key.txt", (1700000000 + revision, 1700000000 + revision))
-            result, _ = self.hook(step["source"], step["session"])
-            self.assertEqual(result is not None, step["deliver"], step)
-            if result: self.assertEqual(result["hookSpecificOutput"]["additionalContext"], "Agentrix skill instructions:\nShared instructions.")
-            expected = []
-            for value in step["receipts"]:
-                session, key = value.split("/")
-                expected.append("claude/" + hashlib.sha256(session.encode()).hexdigest()[:32] + "/" + fixture["manifests"][key][:32])
-            folder = self.home / "delivery"
-            actual = sorted(file.relative_to(folder).as_posix() for file in folder.rglob("*") if file.is_file())
-            self.assertEqual(actual, sorted(expected), step)
-
-    def test_session_start_repairs_the_legacy_provider_directory_before_delivering(self):
-        manifest = self.home / "references" / ("a" * 64) / "instructions.md"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text("Only the skills manifest.", encoding="utf-8")
-        (self.home / "key.txt").write_text("a" * 64, encoding="utf-8")
-        state = self.home / "delivery"
-        state.mkdir(mode=0o700)
-        provider = state / "claude"
-        provider.mkdir(mode=0o755)
-        with mock.patch.object(remote.os, "chmod", wraps=os.chmod) as chmod:
-            result, event = self.hook()
-        self.assertEqual(result["hookSpecificOutput"]["additionalContext"], "Agentrix skill instructions:\nOnly the skills manifest.")
-        self.assertEqual(event["state"], "session")
-        # Windows cannot enforce POSIX modes; still verify the repair reaches the filesystem boundary.
-        chmod.assert_any_call(str(provider), 0o700)
-        if os.name == "posix":
-            for folder in (state, provider, next(provider.iterdir())):
-                self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700)
-        self.assertIsNone(self.hook("resume")[0], "repair must retain the CLI session's receipt")
-
-    def test_spawn_pruning_removes_expired_unleased_reference_keys_and_receipts(self):
-        state = self.home / "pruned-state"
-        current, stale = "c" * 64, "d" * 64
-        for key in (current, stale):
-            folder = state / "references" / key / "builtin/test"
-            folder.mkdir(parents=True)
-            remote.write_skill_reference(str(folder / "SKILL.md"), "Rules.")
-        now = time.time()
-        old = now - 31 * 86400
-        for key in (current, stale): os.utime(state / "references" / key, (old, old))
-        recent = state / "delivered/claude" / ("a" * 32) / ("b" * 32)
-        expired = state / "delivered/claude" / ("a" * 32) / ("c" * 32)
-        legacy = state / "delivered" / ("e" * 64)
-        for filename, age in ((recent, 29), (expired, 31), (legacy, 31)):
-            filename.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            filename.write_text("", encoding="utf-8")
-            os.utime(filename, (now - age * 86400, now - age * 86400))
-        remote.prune_skill_state(str(state), current, now=now)
-        self.assertFalse((state / "references" / stale).exists())
-        self.assertEqual((state / "references" / current / "builtin/test/SKILL.md").read_text(encoding="utf-8"), "Rules.")
-        self.assertTrue(recent.exists())
-        self.assertFalse(expired.exists()); self.assertFalse(legacy.exists())
-        (state / "references" / current / "builtin/test/SKILL.md").chmod(0o600)
+        for source in ("startup", "resume", "compact", "clear"):
+            with self.subTest(source=source):
+                output, event = self.hook(source, AGENTRIX_EVENT_TOKEN_FILE=str(token_file))
+                self.assertIsNone(output)
+                self.assertEqual(event["state"], "session")
+                self.assertEqual(event["sessionId"], "session-one")
+                self.assertEqual(event["token"], "fixture-from-file")
+                self.assertTrue(event["transcriptPath"].endswith("session.jsonl"))
 
     def test_hooks_register_only_remote_paths_and_override_presence_never_credential_values(self):
         _, event = self.hook(ANTHROPIC_AUTH_TOKEN="fake-secret-token", CLAUDE_CONFIG_DIR=str(self.config))
@@ -311,46 +218,30 @@ class RemoteClaudeTest(unittest.TestCase):
         self.assertNotIn("fake-secret-token", json.dumps(event))
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", json.dumps(event))
 
-    def test_auto_skill_reference_paths_survive_a_closed_terminal_and_are_reused_on_resume(self):
-        bundle = {"key": "c" * 64, "files": [{"id": "builtin:test", "name": "test", "scope": "builtin", "text": "---\nname: test\ndescription: Test.\n---\nRules."}],
-                  "instructions": "Read {AGENTRIX_SKILLS}/builtin/test/SKILL.md."}
-        state_dir = str(self.home / "worker-state")
-        paths = []
-        for _ in range(2):
-            worker = remote.Worker(lambda _: None)
-            worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-            worker.skill_state_dir, worker.skills_bundle = state_dir, bundle
-            try:
-                note = worker.install_skills(bundle["instructions"])
-                paths.append(worker.skill_paths["builtin:test"])
-                self.assertIn(paths[-1], note)
-            finally: worker.stop()
-            self.assertFalse(Path(worker.temp).exists())
-            self.assertEqual(Path(paths[-1]).read_text(encoding="utf-8"), bundle["files"][0]["text"])
-        self.assertEqual(paths[0], paths[1])
-        Path(paths[0]).chmod(0o600)
+    def test_resume_retains_old_guide_path_after_the_terminal_closes_and_the_guide_changes(self):
+        state = str(self.home / "worker-state")
+        first = remote.Worker(lambda _: None)
+        self.addCleanup(first.stop)
+        first.temp = tempfile.mkdtemp(prefix="agentrix-")
+        first.guide_state_dir = state
+        guide = {"key": "c" * 64, "text": "Original routing rules."}
+        note = "Read {AGENTRIX_ROUTING}"
+        old_note = first.startup_note(note, native=True, guide=guide)
+        old_path = Path(old_note[len("Read "):])
+        first.stop()
+        self.assertFalse(Path(first.temp).exists())
+        self.assertEqual(old_path.read_text(encoding="utf-8"), guide["text"])
 
-    def test_parallel_channels_install_the_same_read_only_skill_references_atomically(self):
-        state_dir = str(self.home / "concurrent-worker-state")
-        bundle = {"key": "d" * 64, "files": [{"id": "builtin:test", "name": "test", "scope": "builtin", "text": "Shared rules.\n" * 300}],
-                  "instructions": "Read {AGENTRIX_SKILLS}/builtin/test/SKILL.md."}
-        barrier = threading.Barrier(6)
-        def install():
-            worker = remote.Worker(lambda _: None)
-            worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-            worker.skill_state_dir, worker.skills_bundle = state_dir, bundle
-            try:
-                barrier.wait(timeout=5)
-                worker.install_skills(bundle["instructions"])
-                return worker.skill_paths["builtin:test"]
-            finally: worker.stop()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-            results = [future.result(timeout=10) for future in [pool.submit(install) for _ in range(6)]]
-        self.assertEqual(len(set(results)), 1)
-        self.assertEqual(Path(results[0]).read_text(encoding="utf-8"), bundle["files"][0]["text"])
-        self.assertFalse(list(Path(state_dir).rglob(".skill-*")))
-        for filename in Path(state_dir).rglob("*"):
-            if filename.is_file(): filename.chmod(0o600)
+        resumed = remote.Worker(lambda _: None)
+        self.addCleanup(resumed.stop)
+        resumed.guide_state_dir = state
+        self.assertEqual(resumed.startup_note(note, native=True, guide=guide), old_note)
+        changed = {"key": "d" * 64, "text": "Updated routing rules."}
+        new_path = Path(resumed.startup_note(note, native=True, guide=changed)[len("Read "):])
+        remote.prune_guide_state(state)
+        self.assertNotEqual(new_path, old_path)
+        self.assertEqual(new_path.read_text(encoding="utf-8"), changed["text"])
+        self.assertEqual(old_path.read_text(encoding="utf-8"), guide["text"])
 
     def test_authenticated_hooks_bind_the_actual_remote_claude_home_and_strip_routes_before_ssh(self):
         _, event = self.hook(CLAUDE_CONFIG_DIR=str(self.config), ANTHROPIC_AUTH_TOKEN="fake-secret-token")

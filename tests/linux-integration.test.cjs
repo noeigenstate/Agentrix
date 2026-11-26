@@ -148,7 +148,7 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   const locale = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
   // No hook server here: the wrapper passes the command hooks, which this test runs the way Claude Code would.
   const channelHooks = terminalHooks({ terminalId: 'project', sessionKey: 'key', eventServer: server, env: {}, cwd: project,
-    shell: { posix: true, node: process.execPath, helper, noteFile }, platform: process.platform, home, read: () => '{}' });
+    shell: { posix: true, node: process.execPath, helper }, platform: process.platform, home, read: () => '{}' });
   const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale, loginFiles,
     hooks: channelHooks });
   const terminal = pty.spawn(loginFiles ? '/bin/bash' : findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });

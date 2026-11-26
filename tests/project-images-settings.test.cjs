@@ -80,7 +80,8 @@ function settingsDialogFixture(t, props = {}) {
     './AgentRuntimeSettings': { AgentRuntimeSettings: empty },
     '../voice/VoiceButton': { VoiceModelSetting: empty }, '../shortcuts/ShortcutSettings': { ShortcutSettings: empty },
     '../agents/AgentsSettings': { AgentsSettings: empty }, './TerminalFontSettings': { TerminalFontSettings: empty },
-    './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ThemeSetting': { ThemeSetting: empty }, './ProjectImagesSettings': { ProjectImagesSettings: List }, './SkillsSettings': { SkillsSettings: empty }, './AboutSettings': { AboutSettings: empty },
+    './UserAvatarSetting': { UserAvatarSetting: Avatar }, './ThemeSetting': { ThemeSetting: empty },
+    './ProjectImagesSettings': { ProjectImagesSettings: List }, './AboutSettings': { AboutSettings: empty },
   };
   mod.require = name => name === 'react' ? hooks : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => empty })
     : name === '../../shared/i18n' ? { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_match, key) => values[key]), currentLanguage: () => 'zh' }
@@ -101,7 +102,8 @@ function settingsDialogFixture(t, props = {}) {
 
 test('project thumbnails enter from one appearance row and keep the original sidebar categories', t => {
   const h = settingsDialogFixture(t), tree = nodes(h.render());
-  assert.deepEqual(tree.filter(node => node.props['data-settings-tab']).map(node => node.props['data-settings-tab']), ['appearance', 'notifications', 'terminal', 'agents', 'runtime', 'skills', 'shortcuts', 'about']);
+  const tabs = tree.filter(node => node.props['data-settings-tab']).map(node => node.props['data-settings-tab']);
+  assert.deepEqual(tabs, ['appearance', 'notifications', 'terminal', 'agents', 'runtime', 'shortcuts', 'about']);
   const appearance = h.section('appearance'), children = React.Children.toArray(appearance.props.children);
   const avatar = children.findIndex(node => node.type === h.Avatar), entry = children.findIndex(node => node.props['data-project-images-setting'] === true);
   assert.equal(entry, avatar + 1); assert.equal(children[entry].props.className, 'setting-row');
@@ -167,21 +169,4 @@ test('interface zoom shows the current-percent hint only for automatic zoom and 
     assert.equal(select.options[0].label, '自动');
   }
   assert.equal(settingsDialogFixture(t).find(node => node.props.label === '界面缩放').props.options[0].label, '自动（当前 100%）');
-});
-
-
-test('the skills page has a full-screen button that toggles the enlarged dialog and resets on leaving', t => {
-  const h = settingsDialogFixture(t, { initialSection: 'skills' }), en = require('../electron/locales/en.json');
-  const enlarge = () => h.find(node => node.props.className === 'icon-button settings-enlarge'), dialog = () => h.find(node => node.type === 'dialog');
-  assert.equal(enlarge().props['aria-label'], '放大'); assert.equal(enlarge().props.title, '放大');
-  assert.doesNotMatch(dialog().props.className, /is-enlarged/);
-  enlarge().props.onClick();
-  assert.match(dialog().props.className, /is-enlarged/); assert.equal(enlarge().props['aria-label'], '放大'); assert.equal(enlarge().props['aria-pressed'], true); assert.equal(enlarge().props.title, '恢复大小');
-  enlarge().props.onClick();
-  assert.doesNotMatch(dialog().props.className, /is-enlarged/);
-  enlarge().props.onClick(); h.tab('about').props.onClick();
-  assert.equal(enlarge(), undefined); assert.doesNotMatch(dialog().props.className, /is-enlarged/);
-  h.tab('skills').props.onClick(); assert.equal(enlarge().props['aria-label'], '放大'); assert.doesNotMatch(dialog().props.className, /is-enlarged/);
-  assert.equal(en['放大'], 'Enlarge'); assert.equal(en['恢复大小'], 'Restore size');
-  const appearance = settingsDialogFixture(t); assert.equal(appearance.find(node => node.props.className === 'icon-button settings-enlarge'), undefined);
 });

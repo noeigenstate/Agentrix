@@ -31,7 +31,7 @@ function compileFile(filename, language, hooks, overrides = {}) {
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
     if (name === '../../shared/routing-command.ts') return compileFile(path.join(__dirname, '../src/shared/routing-command.ts'), language);
-    if (name === './skill-seats.ts' || name === './skill-seats') return require('../src/features/agents/skill-seats.ts');
+    if (name === './routing-seats.ts' || name === './routing-seats') return require('../src/features/agents/routing-seats.ts');
     if (name === './RoutingKeyCard') return loadAgentsFile('RoutingKeyCard.tsx', language);
     if (name === './SeatsHost') return loadAgentsFile('SeatsHost.tsx', language);
     if (name === '../../shared/call-model-name') return compileFile(path.join(__dirname, '../src/shared/call-model-name.ts'), language);

@@ -531,7 +531,7 @@ for (const kind of ['local', 'ssh']) test(`${kind}: main hands a new Codex sessi
       store: { settings: { codexPermissions: stored }, findTerminal: () => ({ record: { restore: null } }) }, nativeSpecs: new Map(),
       runtimeDir: path.resolve('runtime'), eventServer: { name: 'pipe', address: '/socket' }, process: { platform: process.platform, env: {} },
       writeBootstrap() {}, createTerminalEnvironment: () => ({}), withoutAppImage: value => value, startupNote: () => 'context', READING_NOTE: 'reading',
-      handoffFile: () => 'handoff', skills: { delivery() {} }, integrationDir: 'integration', controlAddress: 'control' });
+      handoffFile: () => 'handoff', routing: { launch() {} }, integrationDir: 'integration', controlAddress: 'control' });
     defineMain(context, 'nativeEnvironment', 'nativeSpec');
     // Settings hold one of the three (state.cjs cleans the rest to full); the spec carries it as stored.
     assert.equal(context.nativeSpec('t', 'codex', false).permissions, stored);

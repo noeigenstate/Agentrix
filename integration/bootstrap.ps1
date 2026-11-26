@@ -65,9 +65,6 @@ function global:Get-AgentrixHookProxy {
 }
 
 function global:Get-AgentrixReadingNote {
-    if ($env:AGENTRIX_BOOTSTRAP) {
-        try { return [IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.launch-note', [Text.Encoding]::UTF8) } catch { }
-    }
     if ($env:AGENTRIX_READING_NOTE_FILE) {
         try { return [IO.File]::ReadAllText($env:AGENTRIX_READING_NOTE_FILE, [Text.Encoding]::UTF8) } catch { }
     }

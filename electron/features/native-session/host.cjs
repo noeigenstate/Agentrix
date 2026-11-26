@@ -1,6 +1,8 @@
+const { remoteGuide } = require('../routing/store.cjs');
+
 // A role the conductor started has ended: a native conductor hears it as its next message, so it can report without polling.
 function roleEnded(deps, s, project, event) {
-  if (!s?.nativeStructured || !s.nativeRuntimeSessionId || !deps.skills?.seatsInfo(project.id)?.conductor) return;
+  if (!s?.nativeStructured || !s.nativeRuntimeSessionId || !deps.routing?.seatsInfo(project.id)?.conductor) return;
   const text = `[Agentrix] Role run ${event.id} has ended (${event.reason}${event.exitCode == null ? '' : `, exit ${event.exitCode}`}). Read it with role_result and report to the owner.`;
   deps.nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: deps.randomUUID(), text }).catch(deps.report);
 }
@@ -8,7 +10,7 @@ function roleEnded(deps, s, project, event) {
 // The owner switched a running session's mode. A native session hears it as its next message; Claude Code in a terminal
 // with the owner's next prompt (hook-response.cjs), and a switch back before that prompt leaves nothing to tell.
 function tellMode(deps, s, project) {
-  const text = deps.skills.modeNote(project, s.sessionId, s.agent);
+  const text = deps.routing.modeNote(project, s.skillSessionId || s.nativeSpec?.skillSessionId || s.sessionId, s.agent);
   const delivery = (deps.adapterOf(s.agent) ?? deps.adapterOf('codex')).notes.message(text, { native: s.nativeStructured });
   if (!s.nativeStructured) { s.modeNote = delivery.hook && !s.modeNote ? text : null; return; }
   if (s.nativeRuntimeSessionId) deps.nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: deps.randomUUID(), text: delivery.send }).catch(deps.report);
@@ -18,8 +20,8 @@ function tellRemoteRouting(deps, s, project, remote, modeChanged) {
   if (!s.cliActive) return;
   if (s.nativeStructured) { if (modeChanged) tellMode(deps, s, project); return; }
   if (!deps.adapterOf(s.agent)?.notes.message(null).hook) return;
-  const change = deps.skills.routingChange(project.id, s.sessionId, s.toldSeats);
-  const mode = modeChanged ? deps.skills.modeNote(project, s.sessionId, s.agent) : null;
+  const change = deps.routing.routingChange(project.id, s.skillSessionId || s.sessionId, s.toldSeats);
+  const mode = modeChanged ? deps.routing.modeNote(project, s.skillSessionId || s.nativeSpec?.skillSessionId || s.sessionId, s.agent) : null;
   if (!mode && !change) return;
   if (change) s.toldSeats = change.table;
   // The remote prompt hook hands over the mode and routing together with the owner's next prompt.
@@ -79,13 +81,13 @@ async function initializeNativeSessions(deps) {
     };
     runtime.start = value => attach(start, value); runtime.resume = value => attach(resume, value);
     runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); await close(); };
-    return !deps.skills ? runtime : deps.skills.trackModelRuntime(runtime,
+    return !deps.routing ? runtime : deps.routing.trackModelRuntime(runtime,
       { family: 'codex', local: spec.kind !== 'ssh', runtimes: deps.seatModelRuntimes.codex });
   } };
   const createClaude = deps.claudeRuntime.create.bind(deps.claudeRuntime);
   deps.claudeRuntime.create = (...args) => {
     const runtime = createClaude(...args);
-    return !deps.skills ? runtime : deps.skills.trackModelRuntime(runtime,
+    return !deps.routing ? runtime : deps.routing.trackModelRuntime(runtime,
       { family: 'claude', local: args[0]?.kind !== 'ssh', runtimes: deps.seatModelRuntimes.claude });
   };
   wireNativeSessions(deps, directory, codex, codexFactory);
@@ -161,14 +163,14 @@ function registerUnavailableNative(deps, handle) {
 
 async function launchRemote(deps, spec, { signal, readOnly = false }) {
   const project = deps.findProject(spec.terminalId);
-  const delivery = readOnly ? null : deps.skills.delivery(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true });
-  const routing = readOnly ? null : deps.skills.seatsInfo(project.id);
+  const launch = readOnly ? null : deps.routing.launch(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true });
+  const routing = readOnly ? null : deps.routing.seatsInfo(project.id);
   const remote = new deps.RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir: deps.integrationDir, auth: deps.sshAuth,
     allowBackgroundTasks: deps.store.settings?.claudeBackgroundTasks,
-    claudeLead: readOnly ? null : { conductor: routing?.conductor === true, seatsMap: deps.skills.dispatchSeats(project.id) ?? {}, launchSeatsMap: delivery?.agentSeats ?? {} },
+    claudeLead: readOnly ? null : { conductor: routing?.conductor === true, seatsMap: deps.routing.dispatchSeats(project.id) ?? {}, launchSeatsMap: launch?.agentSeats ?? {} },
     sessionKey: spec.sessionKey, onEvent: deps.onEvent, codingPath: spec.cwd, askpassPath: deps.prepareAskpass(), native: true,
-    skills: delivery?.bundle, readingNote: readOnly ? '' : deps.startupNote(deps.READING_NOTE, '{AGENTRIX_HANDOFF}',
-      deps.path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
+    guide: remoteGuide(launch?.guide), readingNote: readOnly ? '' : deps.startupNote(deps.READING_NOTE, '{AGENTRIX_HANDOFF}',
+      deps.path.posix.join(project.path, 'skills'), launch, '{AGENTRIX_DISPATCH}') });
   const cancel = () => remote.close();
   if (routing) remote.appliedRouting = { effective: routing.effective, roles: routing.roles, conductor: routing.conductor === true };
   signal.addEventListener('abort', cancel, { once: true });
@@ -189,23 +191,23 @@ function nativeRouterOptions(deps, directory, codex, codexFactory) {
     prepareConversation: spec => {
       const project = deps.findProject(spec.terminalId), previous = spec.skillSessionId || spec.sessionId, skillSessionId = deps.randomUUID();
       const { nativePolicy } = deps.adapterOf(spec.agent);
-      const lead = deps.skills.leadOptions(project.id, spec.agent);
-      const delivery = deps.skills.delivery(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
+      const lead = deps.routing.leadOptions(project.id, spec.agent);
+      const launch = deps.routing.launch(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
       Object.assign(spec, { skillSessionId, model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
-        seatsMap: delivery?.agentSeats,
-        env: { ...spec.env, AGENTRIX_SEATS: project.kind === 'ssh' ? JSON.stringify(delivery?.agentSeats ?? null) : deps.writeSeatMap(delivery?.agentSeats) } });
+        seatsMap: launch?.agentSeats,
+        env: { ...spec.env, AGENTRIX_SEATS: project.kind === 'ssh' ? JSON.stringify(launch?.agentSeats ?? null) : deps.writeSeatMap(launch?.agentSeats) } });
       nativePolicy.observeSubagents?.(spec, nativeSubagent.bind(null, deps));
       if (project.kind !== 'ssh') spec.context = deps.startupNote(deps.READING_NOTE, deps.handoffFile(spec.terminalId), deps.path.join(project.path, 'skills'),
-        delivery);
+        launch);
       return committed => {
         if (committed && spec.bootstrapFile) {
-          try { deps.updateDispatchLaunchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { deps.report(error); }
-          try { deps.updateDispatchSeats(spec.bootstrapFile, deps.skills.dispatchSeats?.(spec.projectId) ?? delivery?.agentSeats ?? {}); } catch (error) { deps.report(error); }
+          try { deps.updateDispatchLaunchSeats(spec.bootstrapFile, launch?.agentSeats); } catch (error) { deps.report(error); }
+          try { deps.updateDispatchSeats(spec.bootstrapFile, deps.routing.dispatchSeats?.(spec.projectId) ?? launch?.agentSeats ?? {}); } catch (error) { deps.report(error); }
           if (nativePolicy.bootstrapLead) {
             try { deps.updateBootstrapLead(spec.bootstrapFile, lead); } catch (error) { deps.report(error); }
           }
         }
-        deps.skills.endSession(project.id, committed ? previous : skillSessionId);
+        deps.routing.endSession(project.id, committed ? previous : skillSessionId);
       };
     },
     readHistory: async (id, { signal } = {}) => {

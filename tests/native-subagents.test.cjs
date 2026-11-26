@@ -50,7 +50,7 @@ function nativeHost(f, calls) {
     findProject: () => project, disposeTerminal() {}, runtimeDir: f.directory, eventServer: {}, controlAddress: 'offline',
     writeBootstrap() {}, nativeEnvironment: () => ({ CLAUDE_CONFIG_DIR: f.home, PATH: '' }),
     startupNote: () => '', handoffFile: () => '', READING_NOTE: '', integrationDir: f.directory,
-    skills: { delivery: () => ({}) }, callsOf: current => { assert.equal(current, s); return calls; },
+    routing: { launch: () => ({}) }, callsOf: current => { assert.equal(current, s); return calls; },
     scheduleState: () => { scheduled++; }, process });
   context.nativeSubagent = createNativeHost(context).nativeSubagent;
   const spec = defineMain(context, 'nativeSpec').nativeSpec('terminal', 'claude', false);

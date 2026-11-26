@@ -14,7 +14,7 @@ export function openSeats(target: SeatsRequest) {
 
 export async function readRoutingCommand({ projectId, terminalId }: SeatsTarget) {
   try {
-    const info = await window.agentrix?.skillSeats?.(projectId, terminalId);
+    const info = await window.agentrix?.routingSeats?.(projectId, terminalId);
     if (info) return { info, notice: '模型由模型路由决定' };
   } catch { /* The routing status could not be read. */ }
   return { notice: '无法读取模型路由状态' };

@@ -21,7 +21,7 @@ function fixture(t, extraDeps = {}) {
   let onExit;
   s.terminal = { kill() { calls.push('kill'); assert.ok(fs.existsSync(s.bootstrapFile)); }, onData() {}, onExit(fn) { onExit = fn; } };
   const lifecycle = createTerminalLifecycle({ fs, path, sessions, nativeSessions: null, nativeSpecs: new Map(), readingHistory: { close() {} }, AgentCalls, disposeDispatchInbox: terminal => calls.push(['inbox', terminal]), endSkillSession() {}, stopUsageAccount() {}, syncDashboardLive() {},
-    skills: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
+    routing: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
     restorePlans: new Map(), startupErrors: new Map(), quitting: false, bindDispatchInbox() {}, captureBranch() {},
     report(error) { throw error; }, t: () => '', ...extraDeps });
   return { runtimeDir, files, sessionId, otherId, id, s, sessions, calls, lifecycle, exit() { lifecycle.bindTerminalEvents(s, { id: s.projectId }, {}); onExit({ exitCode: 0 }); } };
@@ -58,9 +58,9 @@ test('B3 a stubborn Windows file does not block later deletions or the terminal 
   const reported = [], ended = [];
   const f = fixture(t, { report: error => reported.push(error.code),
     retryFileOperation: operation => retryFileOperation(operation, { platform: 'win32' }) });
-  const files = f.files(f.sessionId), locked = f.s.bootstrapFile + '.launch-note', transient = path.join(f.runtimeDir, files[4]), rm = fs.rmSync;
+  const files = f.files(f.sessionId), locked = f.s.bootstrapFile + '.mode', transient = path.join(f.runtimeDir, files[4]), rm = fs.rmSync;
   fs.writeFileSync(locked, 'locked sidecar');
-  fs.writeFileSync(f.s.bootstrapFile + '.mode', 'later sidecar');
+  fs.writeFileSync(f.s.bootstrapFile + '.lead', 'later sidecar');
   let lockedAttempts = 0, transientAttempts = 0;
   t.mock.method(fs, 'rmSync', (file, ...args) => {
     const busy = file === locked ? ++lockedAttempts : file === transient && ++transientAttempts < 2;
@@ -75,7 +75,7 @@ test('B3 a stubborn Windows file does not block later deletions or the terminal 
   assert.equal(lockedAttempts, 5);
   assert.equal(transientAttempts, 2);
   assert.equal(fs.existsSync(locked), true);
-  for (const name of [...files, files[0] + '.mode']) assert.equal(fs.existsSync(path.join(f.runtimeDir, name)), false);
+  for (const name of [...files, files[0] + '.lead']) assert.equal(fs.existsSync(path.join(f.runtimeDir, name)), false);
 });
 
 test('C2 and E2 failed terminal spawn removes startup files and clears a deleted saved cwd', t => {
@@ -90,13 +90,13 @@ test('C2 and E2 failed terminal spawn removes startup files and clears a deleted
   const lifecycle = createTerminalLifecycle({ sessions, findProject: () => project, fs, path, process: { platform: 'win32', env: {} },
     store, restorePlans, randomUUID, runtimeDir, integrationDir: root, createTerminalEnvironment: () => ({}), withoutAppImage: env => env,
     terminalHooks: () => null, accountEnvironment: () => ({}), claudeLocator: { peek: () => null }, codexLocator: { peek: () => null },
-    writeBootstrap: ({ file }) => fs.writeFileSync(file, 'boot'), skills: { delivery: () => ({}) },
-    startupNoteFields: () => ({ full: 'note', launch: 'short' }), handoffFile: () => path.join(root, 'handoff'),
+    writeBootstrap: ({ file }) => fs.writeFileSync(file, 'boot'), routing: { launch: () => ({}) },
+    startupNote: () => 'note', handoffFile: () => path.join(root, 'handoff'),
     writeFileAtomic: (file, text) => fs.writeFileSync(file, text), writeHandoff: async () => {}, memoryDir: () => root,
     pty: { spawn(_file, _args, options) { starts.push(options.cwd, fs.readdirSync(runtimeDir).length); throw spawnError; } },
     retryFileOperation, report: assert.fail });
   assert.throws(() => lifecycle.startTerminal(project.id), error => error === spawnError);
-  assert.deepEqual(starts, [project.path, 3]);
+  assert.deepEqual(starts, [project.path, 2]);
   assert.deepEqual(fs.readdirSync(runtimeDir), []);
   assert.equal(sessions.size, 0);
   assert.equal(new WorkspaceStore(workspace).findTerminal(project.id).record.restore.cwd, null);

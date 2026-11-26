@@ -4,15 +4,14 @@
 // Usage: agent-event.cjs codex-notify <socket> <projectId> <sessionKey> <payload>
 //        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> <kind>   (the hook's JSON on stdin)
 //        agent-event.cjs shell-event v=1 type=<type> sequence=<sequence> socket=<socket> projectId=<id> sessionKey=<key> ...
-// SessionStart prints instructions. The seat-routing hook can rewrite or deny a tool call before reporting the seat.
+// SessionStart reports the conversation path. The seat-routing hook can rewrite or deny a tool call before reporting the seat.
 const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
-const { sessionContext } = require(path.join(runtime, 'features/skills/session.cjs'));
-const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/skills/agent-seat.cjs'));
+const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/routing/agent-seat.cjs'));
 const { deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const { readEnvelope, WIRE_FIELDS } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
@@ -216,18 +215,6 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
     if (output) await writeOutput(output);
     if (observed) await send(socket, { v: 1, type: 'claude-seat-input', projectId, sessionKey, ...observed });
     return;
-  }
-  if (action === 'claude-hook' && argument === 'session') {
-    let outputStarted = false;
-    try {
-      const noteFile = rest[0] || process.env.AGENTRIX_READING_NOTE_FILE;
-      if (noteFile) await sessionContext(JSON.parse(input), fs.readFileSync(noteFile, 'utf8'), context => {
-        outputStarted = true;
-        return writeOutput(context);
-      });
-    } catch {
-      if (!outputStarted) await writeOutput({ systemMessage: 'Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。' });
-    }
   }
   const event = action === 'codex-notify' ? codexEvent(argument, projectId, sessionKey)
     : action === 'claude-hook' ? claudeEvent(input, projectId, sessionKey, argument)

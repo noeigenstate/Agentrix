@@ -3,7 +3,7 @@ const path = require('node:path');
 const { exact, text, assert } = require('./validate.cjs');
 const { choosePath } = require('./routing.cjs');
 const { createEventStream } = require('./events.cjs');
-const { validModel, EFFORT } = require('../skills/seat-rules.mjs');
+const { validModel, EFFORT } = require('../routing/seat-rules.mjs');
 const { READ_ONLY_MODE } = require('../claude-runtime/decide.cjs');
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // terminals: main's worker terminals (worker-terminals/BOUNDARY.md); a local terminal lead's worker runs in one of them.

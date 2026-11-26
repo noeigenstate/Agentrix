@@ -28,4 +28,4 @@ Deleting a picture requires the version observed in the PTY and only uses the re
 ## Not ours
 
 - Reading xterm buffers, maintaining PTY identity or sending terminal keys ? Terminal view
-- Persisting the seat configuration and applying native routing ? Skills and the native runtimes
+- Persisting the seat configuration and applying native routing — Model routing backend and the native runtimes.

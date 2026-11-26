@@ -382,7 +382,7 @@ test('read-only workers use the same shell policy and deny edits', t => {
   assert.equal(policy('Bash', { command: 'git push' }).reasonCode, 'git_forbidden');
   assert.equal(policy('PowerShell', { command: 'Write-Output test' }).behavior, 'deny');
   assert.equal(policy('Write', { file_path: path.join(dir, 'file') }).behavior, 'deny');
-  assert.equal(createPolicy({ owner: 'dispatch', cwd: dir, allow: ['**'] })('Edit', { file_path: path.join(dir, 'SKILL.md') }).reasonCode, 'skill_not_authorized');
+  assert.equal(policy('Edit', { file_path: path.join(dir, 'SKILL.md') }).reasonCode, 'read_only');
 });
 
 test('an SDK worker with a result server admits only finish_role among MCP tools', async t => {
@@ -566,7 +566,11 @@ test('worker search patterns and home-relative file paths cannot escape the work
   const root = directory(t), policy = createPolicy({ owner: 'dispatch', cwd: root, allow: ['**'] });
   assert.equal(policy('Glob', { pattern: '../outside/**' }).behavior, 'deny');
   assert.equal(policy('Read', { file_path: '~/.claude/settings.json' }).behavior, 'deny');
-  assert.equal(policy('Edit', { file_path: path.join(root, 'skill.md') }).reasonCode, 'skill_not_authorized');
+});
+test('writable worker skill files follow the allowed patterns for project files', t => {
+  const root = directory(t), policy = createPolicy({ owner: 'dispatch', cwd: root, allow: ['skills/**'] });
+  assert.equal(policy('Edit', { file_path: path.join(root, 'skills', 'sample', 'SKILL.md') }).behavior, 'allow');
+  assert.equal(policy('Edit', { file_path: path.join(root, 'SKILL.md') }).reasonCode, 'outside_scope');
 });
 test('SDK replay messages remain history without receipts or turn completion', async t => {
   const { session, fake, events } = setup(t, { auto: false }); await session.start();

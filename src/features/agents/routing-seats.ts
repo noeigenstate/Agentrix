@@ -4,9 +4,9 @@ import type {
   SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
 } from '../../shared/types';
 import { aliasTarget } from '../../shared/routing-command.ts';
-import { adapterOfModel, agentOfModel, allowsUltracode, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
+import { adapterOfModel, agentOfModel, allowsUltracode, rankByName, unsupportedEffort, validModel } from '../../../electron/features/routing/seat-rules.mjs';
 
-import { roleLocks } from '../../../electron/features/skills/role-rules.mjs';
+import { roleLocks } from '../../../electron/features/routing/role-rules.mjs';
 
 export { agentOfModel, allowsUltracode };
 
@@ -224,11 +224,11 @@ export function fallbackFor(info: SeatsInfo, slot: SlotId, working: SeatMap): Se
   return fallback && isAvailable(info.catalog, fallback.model) ? fallback : null;
 }
 
-type SeatsApi = Pick<Window['agentrix'], 'setSkillRouting'>;
+type SeatsApi = Pick<Window['agentrix'], 'saveRouting'>;
 
 export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string | null, config: RoutingConfig, base: string | null) {
   try {
-    const result = await api.setSkillRouting(scope, scope === 'project' ? projectId : null, config, scope === 'project' ? base : null);
+    const result = await api.saveRouting(scope, scope === 'project' ? projectId : null, config, scope === 'project' ? base : null);
     return result.ok ? { ok: true as const } : { ok: false as const, message: result.message, error: result };
   } catch (error) {
     return { ok: false as const, message: error instanceof Error ? error.message : String(error) };

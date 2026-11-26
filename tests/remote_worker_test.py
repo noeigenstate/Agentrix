@@ -113,9 +113,8 @@ class RemoteFilesTest(unittest.TestCase):
 
     def test_native_context_preserves_quotes_and_multiline_without_a_terminal(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        with mock.patch.object(self.worker, "install_skills", side_effect=lambda note: note), mock.patch.object(self.worker, "handoff_path", return_value="/tmp/offline.md"):
-            self.assertEqual(self.worker.startup_note('Quoted "context"\nnext', native=True), 'Quoted "context"\nnext')
-            self.assertEqual(self.worker.startup_note('Quoted "context"\nnext'), '')
+        self.assertEqual(self.worker.startup_note('Quoted "context"\nnext', native=True), 'Quoted "context"\nnext')
+        self.assertEqual(self.worker.startup_note('Quoted "context"\nnext'), '')
 
     def test_remote_close_can_reap_a_codex_that_stopped_reading_stdin(self):
         self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
@@ -224,7 +223,7 @@ class RemoteFilesTest(unittest.TestCase):
             self.assertTrue(prompted.wait(2))
             self.assertFalse(acked.is_set())
             self.assertEqual(events, [("agent-started", 1), ("shell-prompt", 2)])
-        finally: worker.skill_note_ready.set()
+        finally: worker.launch_note_ready.set()
         self.assertTrue(acked.wait(2))
         launch.sendall.assert_called_once_with(b"\n")
 
@@ -309,7 +308,7 @@ class RemoteFilesTest(unittest.TestCase):
     def test_dispatch_cache_prunes_expired_versions_after_the_last_active_lease(self):
         state = str(Path(self.temp.name, "dispatch-cache"))
         first, lease = remote.install_dispatch_files(state, {"dispatch.cjs": "// first"})
-        old = time.time() - remote.SKILL_RETENTION_SECONDS - 10
+        old = time.time() - remote.REFERENCE_RETENTION_SECONDS - 10
         os.utime(os.path.dirname(first), (old, old))
         remote.install_dispatch_files(state, {"dispatch.cjs": "// second"})
         self.assertTrue(Path(first).is_file())
@@ -367,26 +366,22 @@ class RemoteFilesTest(unittest.TestCase):
 
     def test_each_agent_launch_gets_a_fresh_note_and_stale_launches_cannot_replace_it(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
-        text = "---\nname: code-standard\ndescription: Code rules.\n---\nFollow the rules."
-        bundle = {"files": [{"id": "builtin:code-standard", "name": "code-standard", "scope": "builtin", "text": text}],
-                  "instructions": "First run: {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md"}
-        self.worker.skill_note_sequence = 1
-        paths = self.worker.update_skill_note(1, bundle["instructions"], bundle)
-        note_file = Path(self.worker.temp) / "skill-note.txt"
-        self.assertIn("First run:", note_file.read_text(encoding="utf-8"))
-        self.assertIn(paths["builtin:code-standard"], note_file.read_text(encoding="utf-8"))
-        self.assertTrue(self.worker.skill_note_ready.is_set())
-        self.worker.skill_note_sequence = 2
-        self.worker.skill_note_ready.clear()
+        guide = {"key": "a" * 64, "text": "Routing rules."}
+        self.worker.launch_note_sequence = 1
+        self.assertIsNone(self.worker.update_launch_note(1, "First run: {AGENTRIX_ROUTING}", guide))
+        note_file = Path(self.worker.temp) / "launch-note.txt"
+        first = note_file.read_text(encoding="utf-8")
+        self.assertEqual(first, "First run: " + (Path(self.worker.guide_state_dir) / guide["key"] / "model-routing.md").as_posix())
+        self.assertTrue(self.worker.launch_note_ready.is_set())
+        self.worker.launch_note_sequence = 2
+        self.worker.launch_note_ready.clear()
         with self.assertRaisesRegex(ValueError, "launch changed"):
-            self.worker.update_skill_note(1, "stale note", bundle)
-        self.assertFalse(self.worker.skill_note_ready.is_set())
-        bundle = dict(bundle, instructions="Auto: {AGENTRIX_SKILLS}/builtin/code-standard/SKILL.md")
-        self.worker.update_skill_note(2, bundle["instructions"], bundle)
-        self.assertIn("Auto:", note_file.read_text(encoding="utf-8"))
-        self.assertNotIn("First run", note_file.read_text(encoding="utf-8"))
-        for filename in self.worker.skill_paths.values(): os.chmod(filename, 0o600)
+            self.worker.update_launch_note(1, "stale note", None)
+        self.assertFalse(self.worker.launch_note_ready.is_set())
+        self.assertEqual(note_file.read_text(encoding="utf-8"), first)
+        self.worker.update_launch_note(2, "Native mode.", None)
+        self.assertEqual(note_file.read_text(encoding="utf-8"), "Native mode.")
+        self.assertTrue(Path(first[len("First run: "):]).is_file())
 
     def test_launch_notification_waits_for_acknowledgment_without_printing(self):
         sockets = mock.MagicMock()
@@ -419,50 +414,42 @@ class RemoteFilesTest(unittest.TestCase):
         self.addCleanup(lambda: process.poll() is None and process.kill())
         event = events.get(timeout=5)["event"]
         self.assertIsNone(process.poll(), "launch waits until the host writes its note")
-        self.worker.update_skill_note(event["sequence"], "Fresh launch note.", {"files": [], "instructions": "Auto skills."})
+        self.worker.update_launch_note(event["sequence"], "Fresh launch note.", None)
         stdout, stderr = process.communicate(timeout=5)
         self.assertEqual((process.returncode, stdout, stderr), (0, b"", b""))
-        self.assertEqual((Path(self.worker.temp) / "skill-note.txt").read_text(encoding="utf-8"), "Fresh launch note.")
+        self.assertEqual((Path(self.worker.temp) / "launch-note.txt").read_text(encoding="utf-8"), "Fresh launch note.")
         self.worker.stop(); thread.join(timeout=2)
 
-    def test_skills_are_copied_to_private_remote_paths_and_manifest_expands(self):
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        text = "---\nname: model-routing\ndescription: Route models.\n---\nRead me.\n"
-        self.worker.skills_bundle = {"files": [{"id": "builtin:model-routing", "name": "model-routing", "scope": "builtin", "text": text},
-                                               {"id": "user:global", "name": "global", "scope": "global", "text": text}],
-                                    "instructions": "Before any task, read and follow {AGENTRIX_SKILLS}/builtin/model-routing/SKILL.md. {AGENTRIX_AGENTS}"}
-        with mock.patch.object(remote.shutil, "which", side_effect=lambda name: "/bin/claude" if name == "claude" else None):
-            note = self.worker.install_skills(self.worker.skills_bundle["instructions"])
-        filename = self.worker.skill_paths["builtin:model-routing"]
-        self.assertEqual(Path(filename).read_text(encoding="utf-8"), text)
-        self.assertEqual([file.name for file in Path(filename).parent.iterdir()], ["SKILL.md"])
-        for file in self.worker.skill_paths.values():
-            if os.name == "posix": self.assertEqual(os.stat(file).st_mode & 0o777, 0o400)
-            os.chmod(file, 0o600)
-        self.assertIn(filename, note)
-        self.assertIn("Claude Code installed; Codex missing", note)
-        self.assertNotIn("{AGENTRIX_", note)
-        self.assertEqual((Path(self.worker.temp) / "skills/instructions.md").read_text(encoding="utf-8"), note)
+    def test_remote_guide_install_writes_only_one_private_read_only_document(self):
+        guide = {"key": "a" * 64, "text": "分工说明\n"}
+        filename = Path(self.worker.install_guide(guide))
+        self.assertEqual(filename.read_text(encoding="utf-8"), guide["text"])
+        self.assertEqual([file.name for file in filename.parent.iterdir() if not file.name.startswith(".lease-")], ["model-routing.md"])
+        if os.name == "posix":
+            self.assertEqual(filename.stat().st_mode & 0o777, 0o400)
+            self.assertEqual(filename.parent.stat().st_mode & 0o777, 0o700)
+        with self.assertRaisesRegex(ValueError, "different text"):
+            self.worker.install_guide(dict(guide, text="Changed rules."))
+        self.assertEqual(filename.read_text(encoding="utf-8"), guide["text"])
 
-    def test_remote_skill_names_cannot_escape_session_folder(self):
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        self.worker.skills_bundle = {"files": [{"id": "bad", "name": "../escape", "scope": "global", "text": "bad"}]}
-        with self.assertRaises(ValueError): self.worker.install_skills("note")
-
-    def test_remote_skills_reject_attachments_and_invalid_bundles(self):
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        for bundle in ([], {"files": "invalid"}, {"files": [None]}, {"files": [{"id": "user:test", "name": "test", "scope": "global", "text": "text", "assets": [{"path": "large"}]}]}):
-            self.worker.skills_bundle = bundle
-            with self.assertRaises(ValueError): self.worker.install_skills("note")
+    def test_remote_guides_reject_unsafe_keys_invalid_shapes_and_oversize_text(self):
+        guide = {"key": "a" * 64, "text": "Rules."}
+        invalid = ([], {"key": guide["key"]}, dict(guide, key="../escape"), dict(guide, text=[]),
+                   dict(guide, text=" "), dict(guide, text="中" * remote.ROUTING_GUIDE_BYTES), dict(guide, files=[]))
+        for value in invalid:
+            with self.assertRaises(ValueError): self.worker.install_guide(value)
+        with self.assertRaisesRegex(ValueError, "guide is missing"):
+            self.worker.startup_note("Read {AGENTRIX_ROUTING}")
+        self.assertFalse(Path(self.worker.guide_state_dir).exists())
 
     def test_startup_note_truncates_after_expanding_every_placeholder(self):
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        note = "{AGENTRIX_SKILLS} " * 220 + "{AGENTRIX_HANDOFF} " * 80 + "{AGENTRIX_AGENTS}"
-        folder = os.path.join(self.worker.temp, "skills").replace(os.sep, "/")
+        note = "{AGENTRIX_ROUTING} " * 220 + "{AGENTRIX_HANDOFF} " * 80
+        guide = {"key": "a" * 64, "text": "Routing rules."}
+        filename = self.worker.install_guide(guide)
         handoff = "/synthetic/" + "handoff" * 30 + ".md"
-        with mock.patch.object(self.worker, "handoff_path", return_value=handoff), mock.patch.object(remote.shutil, "which", return_value=None):
-            result = self.worker.startup_note(note)
-        expanded = note.replace("{AGENTRIX_SKILLS}", folder).replace("{AGENTRIX_HANDOFF}", handoff).replace("{AGENTRIX_AGENTS}", "Installed agents: Claude Code missing; Codex missing.")
+        with mock.patch.object(self.worker, "handoff_path", return_value=handoff):
+            result = self.worker.startup_note(note, guide=guide)
+        expanded = note.replace("{AGENTRIX_ROUTING}", filename).replace("{AGENTRIX_HANDOFF}", handoff)
         self.assertLess(len(note), 8000)
         self.assertGreater(len(expanded), 8000)
         self.assertEqual(result, expanded[:8000])
@@ -473,6 +460,7 @@ class RemoteFilesTest(unittest.TestCase):
         self.root = Path(self.temp.name) / "project"
         self.root.mkdir()
         self.worker = remote.Worker(lambda _: None)
+        self.worker.guide_state_dir = str(Path(self.temp.name) / "guides")
         self.worker.initialize({"path": str(self.root), "token": "test", "projectId": "test"})
 
     def tearDown(self):
@@ -1464,16 +1452,23 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
                 time.sleep(0.02)
             self.fail("no such message in %r" % written)
         # The shell itself needs a Linux PTY; the channels around it are the same everywhere.
-        with mock.patch.object(remote.Worker, "spawn_terminal", lambda *_: None):
+        def spawn(worker, _cols, _rows, note):
+            worker.guide_state_dir = str(Path(self.temp.name) / "channel-guides")
+            worker.agent_context = worker.startup_note(note, guide=worker.guide)
+
+        with mock.patch.object(remote.Worker, "spawn_terminal", spawn):
             server = threading.Thread(target=remote.serve, args=(lambda _size: lines.get(), written.append, channels), daemon=True)
             server.start()
-            bundle = {"key": "a" * 64, "files": [], "instructions": "Read-only references."}
-            send({"op": "open", "channel": 1, "path": str(self.root), "token": "one", "projectId": "p", "skillsKey": bundle["key"], "skills": bundle})
-            send({"op": "open", "channel": 2, "path": str(other), "token": "two", "projectId": "p", "skillsKey": bundle["key"], "skills": None})
+            guide = {"key": "a" * 64, "text": "Read-only reference."}
+            send({"op": "open", "channel": 1, "path": str(self.root), "token": "one", "projectId": "p", "guide": guide, "readingNote": "{AGENTRIX_ROUTING}"})
+            send({"op": "open", "channel": 2, "path": str(other), "token": "two", "projectId": "p", "guide": None})
             send({"op": "open", "channel": 3, "path": str(Path(self.temp.name) / "missing"), "token": "three", "projectId": "p"})
-            self.assertEqual(wait(lambda m: m["type"] == "ready" and m["channel"] == 1)["info"]["root"], os.path.realpath(self.root))
-            self.assertEqual(wait(lambda m: m["type"] == "ready" and m["channel"] == 2)["info"]["root"], os.path.realpath(other))
-            self.assertIs(channels[1].worker.skills_bundle, channels[2].worker.skills_bundle)
+            first_info = wait(lambda m: m["type"] == "ready" and m["channel"] == 1)["info"]
+            second_info = wait(lambda m: m["type"] == "ready" and m["channel"] == 2)["info"]
+            self.assertEqual(first_info["root"], os.path.realpath(self.root))
+            self.assertEqual(Path(first_info["context"]).read_text(encoding="utf-8"), guide["text"])
+            self.assertEqual(second_info["root"], os.path.realpath(other))
+            self.assertEqual(second_info["context"], "")
             self.assertIn("不存在", wait(lambda m: m["type"] == "error" and m.get("channel") == 3)["error"])
             send({"op": "directory", "channel": 2, "id": 7, "path": ""})
             listing = wait(lambda m: m["type"] == "response" and m["id"] == 7)
@@ -1487,13 +1482,13 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
             self.assertFalse([m for m in written if m.get("id") == 8])
             # A partial oversized open is drained, and malformed opens affect only their named channel.
             second = channels[2].worker
-            lines.put(b'{"channel":4,"op":"open","skills":"' + b"x" * remote.MAX_MESSAGE)
+            lines.put(b'{"channel":4,"op":"open","guide":"' + b"x" * remote.MAX_MESSAGE)
             lines.put(b'more data"}\n')
             self.assertIn("过大", wait(lambda m: m["type"] == "error" and m.get("channel") == 4)["error"])
             lines.put(b'{"channel":5,"op":"open",broken}\n')
             wait(lambda m: m["type"] == "error" and m.get("channel") == 5)
-            send({"op": "open", "channel": 6, "path": str(self.root), "token": "missing-bundle", "projectId": "p", "skillsKey": "b" * 64})
-            self.assertIn("missing", wait(lambda m: m["type"] == "error" and m.get("channel") == 6)["error"])
+            send({"op": "open", "channel": 6, "path": str(self.root), "token": "invalid-guide", "projectId": "p", "guide": {"key": "b" * 64}})
+            self.assertIn("Invalid remote routing guide", wait(lambda m: m["type"] == "error" and m.get("channel") == 6)["error"])
             lines.put(b'{"channel":[],"op":"open"}\n')
             lines.put(b'[]\n')
             lines.put(b"not a message\n")
@@ -1596,7 +1591,7 @@ class RemoteClaudeFastSettingsTest(unittest.TestCase):
     def test_fast_settings_home_follows_the_authenticated_launch_until_exit(self):
         worker, folder = self.worker, self.file.parent
         worker.token, worker.project_id = "fixture-key", "fixture-project"
-        worker.skill_note_ready = mock.Mock()
+        worker.launch_note_ready = mock.Mock()
         route = {"home": str(folder), "configDir": str(folder / "custom"), "secureDir": None, "overridden": False}
         events = [("agent-started", route), ("agent-activity", dict(route, configDir=None)), ("agent-exited", route)]
         clients = []
@@ -1610,7 +1605,7 @@ class RemoteClaudeFastSettingsTest(unittest.TestCase):
         def emit(message):
             self.assertNotIn("accountRoute", message["event"])
             homes.append(worker.claude_fast_home)
-            if message["event"]["type"] == "agent-started": worker.skill_note_ready.set()
+            if message["event"]["type"] == "agent-started": worker.launch_note_ready.set()
         worker.emit = emit
         for client, _ in clients:
             worker.handle_event_connection(client, mock.Mock())
@@ -1664,11 +1659,11 @@ claude 'native conversation'
             self.assertIn("MISSING=1", result.stdout.splitlines())
             self.assertIn("无法加载远端角色工具", result.stderr)
 
-    def test_manual_codex_request_is_acknowledged_without_waiting_for_a_terminal_skill_note(self):
+    def test_manual_codex_request_is_acknowledged_without_waiting_for_a_terminal_launch_note(self):
         worker = object.__new__(remote.Worker)
         worker.stopping = False; worker.token = "key"; worker.project_id = "p"
         worker.sequence = 0; worker.sequence_lock = threading.Lock()
-        worker.skill_note_ready = mock.Mock()
+        worker.launch_note_ready = mock.Mock()
         event = {"type": "codex-started", "agent": "codex", "token": "key", "cwd": "/remote/sub", "args": ["resume", "--last"]}
         client = mock.MagicMock(); client.__enter__.return_value = client
         client.recv.return_value = (json.dumps(event) + "\n").encode()
@@ -1677,7 +1672,7 @@ claude 'native conversation'
             events.append(value); worker.stopping = True
         worker.emit = emit
         worker.handle_event_connection(client, mock.Mock())
-        worker.skill_note_ready.wait.assert_not_called()
+        worker.launch_note_ready.wait.assert_not_called()
         client.sendall.assert_called_once_with(b"\n")
         self.assertEqual(events[0]["event"]["type"], "agent-started")
         self.assertEqual(events[0]["event"]["args"], ["resume", "--last"])

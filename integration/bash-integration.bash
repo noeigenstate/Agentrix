@@ -251,12 +251,7 @@ __pg_hook_agent() {
   fi
   [[ ${ultracode-} == ultracode && $seat_valid == 1 ]] && settings=$(__pg_ultracode_settings "$settings")
   __pg_send agent-started 0 "$agent" "$(__pg_command "$@")"
-  local current_note
-  if [[ -n ${AGENTRIX_BOOTSTRAP-} && -r $AGENTRIX_BOOTSTRAP.launch-note ]]; then
-    current_note=$(cat -- "$AGENTRIX_BOOTSTRAP.launch-note")
-  else
-    current_note=$(__pg_reading_note)
-  fi
+  local current_note=$(__pg_reading_note)
   # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
   local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file=
   if [[ -n $settings ]]; then
@@ -275,7 +270,7 @@ __pg_hook_agent() {
       AGENTRIX_LAUNCH_NOTE="$current_note" AGENTRIX_LAUNCH_SETTINGS="$settings_file" AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 \
       "$__pg_node" "$__pg_intercept" --launch "$agent" words "$target" "$@" 2>/dev/null && printf '\000'); then
     command env ${planner_unset[@]+"${planner_unset[@]}"} ${__pg_alias_env[@]+"${__pg_alias_env[@]}"} ${planner_env[@]+"${planner_env[@]}"} \
-      AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+      AGENTRIX_SEATS="$seat_map" \
       "${program[@]}" ${launch_args[@]+"${launch_args[@]}"} "$@"
     code=$?
   else

@@ -170,23 +170,15 @@ contextBridge.exposeInMainWorld('agentrix', {
   clipboardImage: id => ipcRenderer.invoke('agent:clipboardImage', id),
   fileCard: (id, file) => ipcRenderer.invoke('project:card', id, file),
   agentLaunch: (id, agent, mode) => ipcRenderer.invoke('agent:launch', id, agent, mode),
-  listSkills: () => ipcRenderer.invoke('skills:list'),
-  skillSeats: (projectId, terminalId) => ipcRenderer.invoke('skills:seats', projectId, terminalId).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
-  skillSeatsRefresh: (projectId, terminalId, reason = 'manual') => ipcRenderer.invoke('skills:seats-refresh', projectId, terminalId, reason).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
-  setSkillRouting: (scope, projectId, config, base) =>
-    ipcRenderer.invoke('skills:setRouting', scope, projectId, config, base)
+  routingSeats: (projectId, terminalId) => ipcRenderer.invoke('routing:seats', projectId, terminalId).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
+  refreshRouting: (projectId, terminalId, reason = 'manual') => ipcRenderer.invoke('routing:refresh', projectId, terminalId, reason).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
+  saveRouting: (scope, projectId, config, base) =>
+    ipcRenderer.invoke('routing:save', scope, projectId, config, base)
       .then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
-  resolveSkillRouting: (projectId, action, digest) =>
-    ipcRenderer.invoke('skills:resolveRouting', projectId, action, digest)
+  resolveRouting: (projectId, action, digest) =>
+    ipcRenderer.invoke('routing:resolve', projectId, action, digest)
       .then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
-  readSkill: id => ipcRenderer.invoke('skills:read', id),
-  saveSkill: (id, draft) => ipcRenderer.invoke('skills:save', id, draft),
-  deleteSkill: id => ipcRenderer.invoke('skills:delete', id),
-  setSkillOptions: (id, options) => ipcRenderer.invoke('skills:options', id, options),
-  revertSkill: (id, version) => ipcRenderer.invoke('skills:revert', id, version),
-  resolveSkillChange: (id, accept) => ipcRenderer.invoke('skills:resolve', id, accept),
-  importSkill: (scope, projectId) => ipcRenderer.invoke('skills:import', scope, projectId),
-  onSkills: callback => listen('skills:changed', callback),
+  onRouting: callback => listen('routing:changed', () => callback()),
   onTerminalConversation: callback => listen('terminal:conversation', callback),
   close: () => ipcRenderer.send('window:close'),
   quit: () => ipcRenderer.invoke('app:quit'),

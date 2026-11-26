@@ -30,21 +30,22 @@ from contextlib import contextmanager
 PAGE_BYTES = 256 * 1024
 MAX_READ = 256 * 1024
 MAX_MESSAGE = 2 * 1024 * 1024
-# The open message carries the dispatch helper, its runtime modules and the skills bundle (at most 512 KiB, see
-# MAX_SSH_BUNDLE_BYTES in electron/features/skills/store.cjs); together they stay within three quarters of MAX_MESSAGE,
-# leaving the rest for JSON escaping and the envelope. tests/boundary-dispatch.test.cjs reads these names.
+# The open message carries the dispatch helper, its runtime modules and the rendered routing guide.
+# Leave room for JSON escaping and the envelope. tests/boundary-dispatch.test.cjs reads these names.
 DISPATCH_HELPER_BYTES = 256 * 1024
 DISPATCH_MODULE_COUNT = 64
 EVENT_CONNECTION_LIMIT = 32
 DISPATCH_MODULE_BYTES = 768 * 1024
+ROUTING_GUIDE_BYTES = 512 * 1024
 DISPATCH_COMPANIONS = frozenset(("role-tools.cjs", "role-artifacts.cjs"))
 DISPATCH_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", re.I)
 DISPATCH_SEQ = re.compile(r"([1-9][0-9]{0,15})\.json")
 DISPATCH_FRAME_BYTES = 16384
 PREFIX = "PGW1 "
-SKILL_STATE_LOCK = threading.Lock()
-SKILL_LEASE_SECONDS = 10 * 60
-SKILL_RETENTION_SECONDS = 30 * 24 * 60 * 60
+REFERENCE_STATE_LOCK = threading.Lock()
+REFERENCE_LEASE_SECONDS = 10 * 60
+REFERENCE_RETENTION_SECONDS = 30 * 24 * 60 * 60
+LAUNCH_NOTE_FILE = "launch-note.txt"
 FAST_SETTINGS_LOCK = threading.Lock()
 FAST_SETTINGS_PENDING = {}
 FAST_SETTINGS_ERROR = "Could not read or restore the Claude Code fast mode default."
@@ -76,40 +77,30 @@ def read_account_json(filename):
     if not isinstance(value, dict): raise ValueError("account-shape")
     return value
 
-def write_skill_reference(filename, text):
-    """The same fingerprint may be installed by several channels or SSH processes at once."""
-    data = text.encode("utf-8")
-    if os.path.islink(filename): raise ValueError("Unsafe remote skill reference.")
+def write_guide_reference(filename, data):
+    """Keep a path already named in a conversation bound to the same guide text."""
     try:
-        with open(filename, "rb") as source:
-            if source.read(len(data) + 1) == data:
-                os.chmod(filename, 0o400)
-                return
+        info = os.lstat(filename)
     except FileNotFoundError: pass
-    descriptor, temporary = tempfile.mkstemp(prefix=".skill-", dir=os.path.dirname(filename))
+    else:
+        if not stat.S_ISREG(info.st_mode): raise ValueError("Unsafe remote routing guide.")
+        with open(filename, "rb") as source:
+            if source.read(len(data) + 1) != data: raise ValueError("Remote routing guide key already has different text.")
+        os.chmod(filename, 0o400)
+        return
+    descriptor, temporary = tempfile.mkstemp(prefix=".guide-", dir=os.path.dirname(filename))
     try:
         with os.fdopen(descriptor, "wb") as target: target.write(data)
-        try: os.replace(temporary, filename)
-        except PermissionError:
-            # Windows cannot replace a read-only file. A competing identical install is already complete.
-            with open(filename, "rb") as source: same = source.read(len(data) + 1) == data
-            if not same:
-                os.chmod(filename, 0o600)
-                os.replace(temporary, filename)
+        os.replace(temporary, filename)
         os.chmod(filename, 0o400)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
 
 @contextmanager
-def skill_state_lock(state_dir):
+def reference_state_lock(state_dir):
     """Serialize lease acquisition with pruning, including separate SSH connections on the Linux host."""
-    if not state_dir:
-        yield
-        return
-    with SKILL_STATE_LOCK:
-        os.makedirs(state_dir, mode=0o700, exist_ok=True)
-        info = os.lstat(state_dir)
-        if not stat.S_ISDIR(info.st_mode) or hasattr(os, "getuid") and info.st_uid != os.getuid(): raise ValueError("Unsafe remote skill state.")
+    with REFERENCE_STATE_LOCK:
+        private_directory(state_dir)
         descriptor = os.open(os.path.join(state_dir, ".lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
             if os.name == "posix":
@@ -118,40 +109,27 @@ def skill_state_lock(state_dir):
             yield
         finally: os.close(descriptor)
 
-def prune_skill_state(state_dir, current_key, now=None):
-    """Only expired, unleased references can be removed; receipts also retain their 30-day lifetime."""
+def has_active_lease(folder, now):
+    with os.scandir(folder) as leases:
+        return any(item.name.startswith(".lease-") and item.is_file(follow_symlinks=False)
+                   and item.stat(follow_symlinks=False).st_mtime >= now - REFERENCE_LEASE_SECONDS for item in leases)
+
+def prune_guide_state(state_dir, now=None):
+    """Only expired, unleased guides can be removed."""
     now = time.time() if now is None else now
-    cutoff = now - SKILL_RETENTION_SECONDS
-    def entries(folder):
-        try:
-            info = os.lstat(folder)
-            if not stat.S_ISDIR(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()): return []
-            return list(os.scandir(folder))
-        except OSError: return []
     def remove_readonly(function, filename, error):
-        if not os.path.exists(filename): return
         if not isinstance(error[1], PermissionError): raise error[1]
         os.chmod(filename, 0o700 if os.path.isdir(filename) else 0o600)
         function(filename)
-    def receipts(folder, depth):
-        for entry in entries(folder):
+    with reference_state_lock(state_dir), os.scandir(state_dir) as entries:
+        for entry in entries:
+            if not re.fullmatch(r"[a-f0-9]{64}", entry.name) or not entry.is_dir(follow_symlinks=False): continue
             try:
-                if entry.is_file(follow_symlinks=False) and re.fullmatch(r"[a-f0-9]{32}(?:[a-f0-9]{32})?", entry.name):
-                    if entry.stat(follow_symlinks=False).st_mtime < cutoff: os.unlink(entry.path)
-                elif depth and entry.is_dir(follow_symlinks=False) and (entry.name == "claude" or re.fullmatch(r"[a-f0-9]{32}(?:[a-f0-9]{32})?", entry.name)):
-                    receipts(entry.path, depth - 1)
-                    if not os.listdir(entry.path): os.rmdir(entry.path)
-            except OSError: pass
-    with skill_state_lock(state_dir):
-        for entry in entries(os.path.join(state_dir, "references")):
-            if not re.fullmatch(r"[a-f0-9]{64}", entry.name) or entry.name == current_key or not entry.is_dir(follow_symlinks=False): continue
-            try:
-                if entry.stat(follow_symlinks=False).st_mtime >= cutoff: continue
-                if any(lease.name.startswith(".lease-") and lease.is_file(follow_symlinks=False)
-                       and lease.stat(follow_symlinks=False).st_mtime >= now - SKILL_LEASE_SECONDS for lease in entries(entry.path)): continue
+                info = entry.stat(follow_symlinks=False)
+                if info.st_mtime >= now - REFERENCE_RETENTION_SECONDS or (hasattr(os, "getuid") and info.st_uid != os.getuid()): continue
+                if has_active_lease(entry.path, now): continue
                 shutil.rmtree(entry.path, onerror=remove_readonly)
             except OSError: pass
-        receipts(os.path.join(state_dir, "delivered"), 2)
 
 def official_claude_route(route, cwd):
     if not isinstance(route, dict) or route.get("overridden") is not False: return False
@@ -315,11 +293,6 @@ def write_key_value(values, format=None, versions=(1,)):
 def read_terminal_wire(value):
     return read_wire_envelope(value, format="agentrix.terminal-wire")
 
-def terminal_launch_note(text, layout):
-    note = layout["note"]
-    prefix, marker, _ = text.partition(note["marker"])
-    return prefix + note["suffix"] if marker else text
-
 def write_shell_fields(format, **fields):
     return write_key_value(dict({"format": format, "version": "1"}, **fields), format)
 '''
@@ -329,49 +302,6 @@ def encode_seat_map(seats):
     return json.dumps({"format": "agentrix.seat-map", "version": 1, "seats": seats}, separators=(",", ":"))
 
 NOTIFY_SOURCE = 'CLAUDE_ROUTE_ENV = ' + repr(tuple(sorted(CLAUDE_ROUTE_ENV))) + '\n' + WIRE_SOURCE + r'''import hashlib,json,os,re,socket,stat,sys,time
-def deliver_skills(hook, identity):
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", identity): return
-    source=hook.get("source")
-    if source not in ("startup","resume","compact","clear"): return
-    state_dir=os.environ.get("AGENTRIX_SKILL_STATE_DIR")
-    key_file=os.environ.get("AGENTRIX_SKILL_KEY_FILE")
-    if not state_dir or not key_file: return
-    with open(key_file,encoding="utf-8") as source_file: key=source_file.read(65)
-    if not key: return
-    if not re.fullmatch(r"[a-f0-9]{64}",key): raise ValueError("Invalid skill manifest key")
-    manifest=os.path.join(os.path.dirname(state_dir),"references",key,"instructions.md")
-    with open(manifest,encoding="utf-8") as source_file: instructions=source_file.read(2*1024*1024+1)
-    if not instructions.strip() or len(instructions)>2*1024*1024: raise ValueError("Invalid skill manifest")
-    provider=os.path.join(state_dir,"claude")
-    folder=os.path.join(provider,hashlib.sha256(identity.encode()).hexdigest()[:32])
-    for directory in (state_dir,provider,folder):
-        os.makedirs(directory,mode=0o700,exist_ok=True)
-        info=os.lstat(directory)
-        if not stat.S_ISDIR(info.st_mode) or (hasattr(os,"getuid") and info.st_uid!=os.getuid()): return
-        # Older recursive mkdir calls gave this intermediate directory the default umask's permissions.
-        if directory==provider: os.chmod(directory,0o700)
-        elif hasattr(os,"getuid") and info.st_mode&0o077: return
-    lock=None
-    try:
-        if os.name=="posix":
-            import fcntl
-            lock=os.open(folder,os.O_RDONLY)
-            fcntl.flock(lock,fcntl.LOCK_EX)
-        write_skill_context(folder,key,source,instructions)
-    finally:
-        if lock is not None: os.close(lock)
-def write_skill_context(folder,key,source,instructions):
-    filename=os.path.join(folder,key[:32])
-    force=source in ("compact","clear")
-    if not force and os.path.lexists(filename): return
-    print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}),flush=True)
-    try:
-        if force:
-            for name in os.listdir(folder):
-                if re.fullmatch(r"[a-f0-9]{32}",name): os.unlink(os.path.join(folder,name))
-        descriptor=os.open(filename,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-        os.close(descriptor)
-    except OSError: pass
 def seat_map(raw):
     try:
         size = len(raw.encode("utf-8"))
@@ -418,7 +348,7 @@ def launch_route(words, layout, args):
 
 def launch_words(layout):
     fields = {key: os.environ.get("AGENTRIX_LAUNCH_" + key.upper()) for key in layout["flags"]}
-    note = terminal_launch_note(fields["note"] or "", layout)
+    note = fields["note"] or ""
     error = os.environ.get("AGENTRIX_LAUNCH_ROLE_ERROR")
     if error and error not in note: note = error + (" " + note if note else "")
     if note: fields["note"] = note
@@ -533,10 +463,6 @@ try:
                      transcriptPath=str(hook.get("transcript_path") or ""),eventId=identity+":"+kind+":"+str(time.time_ns() if hasattr(time,"time_ns") else int(time.time()*1000000000)),
                      message=str(hook.get("message") or "")[:300] if kind=="notify" else None,
                      prompt=str(hook["prompt"])[:2000] if kind=="start" and hook.get("prompt") else None)
-        if kind=="session":
-            try: deliver_skills(hook,identity)
-            except (OSError,ValueError):
-                print(json.dumps({"systemMessage":"Agentrix 无法读取会话说明。请检查会话文件和技能清单，再恢复会话。"}),flush=True)
         if kind=="start":
             notes=[]
             for name in ("mode-note.txt","prompt-note.txt"):
@@ -766,7 +692,7 @@ PY
         __pg_launch_plan "$agent" words 2>/dev/null && printf '\000'); then
         PATH=$launch_path command env ${launch_unsets[@]+"${launch_unsets[@]}"} "${background[@]}" ${launch_env[@]+"${launch_env[@]}"} AGENTRIX_SKIP_LIVE_SEATS="$unusable" \
             AGENTRIX_SEATS="{\"format\":\"agentrix.seat-map\",\"version\":1,\"seats\":$seat_map}" \
-            AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" ${launch_args[@]+"${launch_args[@]}"} "$@"
+            "$executable" ${launch_args[@]+"${launch_args[@]}"} "$@"
         result=$?
     else
         __pg_launch_error 1 '无法读取启动参数，数据格式不受支持或生成失败' '请重开终端后重试'
@@ -1552,14 +1478,13 @@ def private_directory(folder):
     os.makedirs(folder, mode=0o700, exist_ok=True)
     info = os.lstat(folder)
     if not stat.S_ISDIR(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
-        raise ValueError("unsafe remote dispatch directory")
+        raise ValueError("Unsafe remote state directory.")
     os.chmod(folder, 0o700)
 
 def install_dispatch_files(state, files):
     digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode("utf-8")).hexdigest()
     folder = os.path.join(state, digest)
-    private_directory(state)
-    with skill_state_lock(state):
+    with reference_state_lock(state):
         if not os.path.lexists(folder):
             stage = tempfile.mkdtemp(prefix=".install-", dir=state)
             try:
@@ -1586,11 +1511,8 @@ def install_dispatch_files(state, files):
                 if not re.fullmatch(r"[a-f0-9]{64}|\.install-[a-z0-9_]{8}", entry.name) or not entry.is_dir(follow_symlinks=False): continue
                 try:
                     info = entry.stat(follow_symlinks=False)
-                    if info.st_mtime >= now - SKILL_RETENTION_SECONDS or (hasattr(os, "getuid") and info.st_uid != os.getuid()): continue
-                    with os.scandir(entry.path) as leases:
-                        active = any(item.name.startswith(".lease-") and item.is_file(follow_symlinks=False)
-                                     and item.stat(follow_symlinks=False).st_mtime >= now - SKILL_LEASE_SECONDS for item in leases)
-                    if not active: shutil.rmtree(entry.path)
+                    if info.st_mtime >= now - REFERENCE_RETENTION_SECONDS or (hasattr(os, "getuid") and info.st_uid != os.getuid()): continue
+                    if not has_active_lease(entry.path, now): shutil.rmtree(entry.path)
                 except OSError: pass
     return os.path.join(folder, "dispatch.cjs"), lease
 
@@ -1659,7 +1581,7 @@ class Worker:
         self.temp = None
         self.allow_background_tasks = False
         self.claude_lead = None
-        self.skills_bundle = None
+        self.guide = None
         self.dispatch_source = None
         self.dispatch_note = None
         self.dispatch_error = None
@@ -1668,12 +1590,11 @@ class Worker:
         self.dispatch_server = None
         self.dispatch_halt = threading.Event()
         self.dispatch_ack_lock = threading.Lock()
-        self.skill_paths = {}
-        self.skill_state_dir = None
-        self.skill_leases = {}
-        self.skill_lease_next = 0
-        self.skill_note_ready = threading.Event()
-        self.skill_note_sequence = None
+        self.guide_state_dir = None
+        self.guide_leases = {}
+        self.reference_lease_next = 0
+        self.launch_note_ready = threading.Event()
+        self.launch_note_sequence = None
         self.master = None
         self.child = None
         self.stopping = False
@@ -1818,7 +1739,7 @@ class Worker:
         if not os.path.isdir(self.coding_root): raise ValueError("上次工作的远程目录已不存在。")
         self.token = config["token"]
         self.project_id = config["projectId"]
-        self.skills_bundle = config.get("skills")
+        self.guide = config.get("guide")
         self.dispatch_source = config.get("dispatchHelper")
         self.dispatch_modules = config.get("dispatchModules", {})
         self.dispatch_companions = config.get("dispatchCompanions")
@@ -2219,73 +2140,63 @@ class Worker:
         os.replace(temporary, path)
         return path
 
-    def install_skills(self, reading_note):
-        """Private reference copies survive resume; project skills remain in the remote repository."""
-        with self.lock, skill_state_lock(self.skill_state_dir):
+    def install_guide(self, guide):
+        if not isinstance(guide, dict) or set(guide) != {"key", "text"}: raise ValueError("Invalid remote routing guide.")
+        key, text = guide["key"], guide["text"]
+        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote routing guide key.")
+        if not isinstance(text, str) or not text.strip(): raise ValueError("Invalid remote routing guide text.")
+        data = text.encode("utf-8")
+        if len(data) > ROUTING_GUIDE_BYTES: raise ValueError("Remote routing guide is too large.")
+        with self.lock:
             if self.stopping: raise ValueError("Remote terminal is closed.")
-            bundle = self.skills_bundle if self.skills_bundle is not None else {}
-            if not isinstance(bundle, dict) or not isinstance(bundle.get("files", []), list): raise ValueError("Invalid remote skills bundle.")
-            key = bundle.get("key") or hashlib.sha256(json.dumps(bundle, sort_keys=True).encode()).hexdigest()
-            if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote skills key.")
-            folder = os.path.join(self.skill_state_dir, "references", key) if self.skill_state_dir else os.path.join(self.temp, "skills")
-            os.makedirs(folder, mode=0o700, exist_ok=True)
-            info = os.lstat(folder)
-            if not stat.S_ISDIR(info.st_mode) or hasattr(os, "getuid") and (info.st_uid != os.getuid() or info.st_mode & 0o077): raise ValueError("Unsafe remote skill folder.")
-            if self.skill_state_dir:
-                if folder not in self.skill_leases or not os.path.isfile(self.skill_leases[folder]):
+            with reference_state_lock(self.guide_state_dir):
+                folder = os.path.join(self.guide_state_dir, key)
+                private_directory(folder)
+                filename = os.path.join(folder, "model-routing.md")
+                write_guide_reference(filename, data)
+                if folder not in self.guide_leases or not os.path.isfile(self.guide_leases[folder]):
                     descriptor, lease = tempfile.mkstemp(prefix=".lease-", dir=folder)
                     os.close(descriptor)
-                    self.skill_leases[folder] = lease
-                os.utime(self.skill_leases[folder], None)
-            agents = "Installed agents: Claude Code %s; Codex %s." % tuple("installed" if shutil.which(name) else "missing" for name in ("claude", "codex"))
-            def expand(text):
-                return text.replace("{AGENTRIX_SKILLS}", folder.replace(os.sep, "/")).replace("{AGENTRIX_AGENTS}", agents)
-            self.skill_paths = {}
-            for skill in bundle.get("files", []):
-                if not isinstance(skill, dict) or not isinstance(skill.get("id"), str) or skill.get("assets"): raise ValueError("Only remote SKILL.md text is supported.")
-                name, scope, text = skill.get("name"), skill.get("scope"), skill.get("text")
-                if not isinstance(name, str) or not re.fullmatch(r"[\w][\w.-]{0,119}", name) or name.endswith(".") or scope not in ("builtin", "global"):
-                    raise ValueError("Invalid remote skill.")
-                if not isinstance(text, str) or len(text.encode("utf-8")) > 512 * 1024: raise ValueError("Remote skill is too large.")
-                directory = os.path.join(folder, scope, name)
-                os.makedirs(directory, mode=0o700, exist_ok=True)
-                filename = os.path.join(directory, "SKILL.md")
-                write_skill_reference(filename, text)
-                self.skill_paths[skill["id"]] = filename.replace(os.sep, "/")
-            os.makedirs(os.path.join(folder, "global"), mode=0o700, exist_ok=True)
-            instructions = bundle.get("instructions", "")
-            if not isinstance(instructions, str) or len(instructions.encode("utf-8")) > 2 * 1024 * 1024: raise ValueError("Remote skill manifest is too large.")
-            write_skill_reference(os.path.join(folder, "instructions.md"), expand(instructions))
-            with open(os.path.join(self.temp, "skill-key.txt"), "w", encoding="utf-8") as output: output.write(key)
-            return expand(reading_note) if isinstance(reading_note, str) else ""
+                    self.guide_leases[folder] = lease
+                os.utime(self.guide_leases[folder], None)
+        return filename.replace(os.sep, "/")
 
-    def refresh_skill_leases(self):
+    def refresh_reference_leases(self):
         with self.lock:
             now = time.monotonic()
-            if self.stopping or now < self.skill_lease_next: return
-            with skill_state_lock(self.skill_state_dir):
-                for lease in self.skill_leases.values():
-                    try: os.utime(lease, None)
-                    except OSError: pass
+            if self.stopping or now < self.reference_lease_next: return
+            if self.guide_leases:
+                with reference_state_lock(self.guide_state_dir):
+                    for folder, lease in self.guide_leases.items():
+                        try:
+                            os.utime(lease, None)
+                            os.utime(folder, None)
+                        except OSError: pass
             if self.dispatch_lease:
                 try: os.utime(self.dispatch_lease, None)
                 except OSError: pass
-            self.skill_lease_next = now + 60
+            self.reference_lease_next = now + 60
 
-    def release_skill_leases(self):
+    def release_guide_leases(self):
         with self.lock:
-            if not self.skill_leases: return
-            with skill_state_lock(self.skill_state_dir):
-                for folder, lease in self.skill_leases.items():
+            if not self.guide_leases: return
+            with reference_state_lock(self.guide_state_dir):
+                for folder, lease in self.guide_leases.items():
                     try:
                         os.unlink(lease)
                         os.utime(folder, None)
                     except OSError: pass
-                self.skill_leases.clear()
+                self.guide_leases.clear()
 
-    def startup_note(self, reading_note, native=False):
+    def startup_note(self, reading_note, native=False, guide=None):
         # Expand every placeholder before applying the shell's existing limit; long notes must not kill a channel.
-        note = self.install_skills(reading_note).replace("{AGENTRIX_HANDOFF}", self.handoff_path())
+        note = reading_note if isinstance(reading_note, str) else ""
+        if guide is not None:
+            note = note.replace("{AGENTRIX_ROUTING}", self.install_guide(guide))
+        elif "{AGENTRIX_ROUTING}" in note:
+            raise ValueError("Remote routing guide is missing.")
+        if "{AGENTRIX_HANDOFF}" in note:
+            note = note.replace("{AGENTRIX_HANDOFF}", self.handoff_path())
         if "{AGENTRIX_DISPATCH_NOTE}" in note:
             note = note.replace("{AGENTRIX_DISPATCH_NOTE}", self.install_dispatch())
         return note[:8000] if native or not set('"\\\n\r') & set(note) else ""
@@ -2335,23 +2246,13 @@ class Worker:
         if self.dispatch_server:
             return dict(self.dispatch_server, args=self.dispatch_server["args"] + [agent])
 
-    def update_skill_note(self, sequence, note, bundle):
-        with self.sequence_lock:
-            if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
-            ready = self.skill_note_ready
-        try:
-            self.skills_bundle = bundle
-            self.write_launch_note(self.startup_note(note), self.terminal_manifest())
-            return self.skill_paths
-        finally: ready.set()
-
-    def write_launch_note(self, note, document):
-        # Both terminal launchers receive the same note. SessionStart reads its own skill manifest.
-        if document: note = terminal_launch_note(note, document["value"]["claude"])
-        filename = os.path.join(self.temp, "skill-note.txt")
-        with open(filename, "w", encoding="utf-8") as output: output.write(note)
-        os.chmod(filename, 0o600)
-        return note
+    def update_launch_note(self, sequence, note, guide):
+        with self.lock, self.sequence_lock:
+            if type(sequence) is not int or sequence != self.launch_note_sequence: raise ValueError("Agent launch changed.")
+            try:
+                if self.stopping: raise ValueError("Remote terminal is closed.")
+                self.write_routing_file(LAUNCH_NOTE_FILE, self.startup_note(note, guide=guide))
+            finally: self.launch_note_ready.set()
 
     def update_prompt_note(self, name, note):
         # What the running Claude Code is told with the owner's next prompt; an empty note withdraws it.
@@ -2382,14 +2283,13 @@ class Worker:
         encoded = encode_seat_map(seat_map if len(json.dumps(seat_map, separators=(",", ":")).encode("utf-8")) <= SEAT_MAP_LIMIT else None)
         self.launch_seats = encoded
         self.write_routing_file("dispatch.json.launch-seats", encoded)
-        self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
+        self.guide_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-routing")
         if reading_note or lead.get("conductor"): self.install_dispatch()
-        reading_note = self.startup_note(reading_note, native=native)
+        reading_note = self.startup_note(reading_note, native=native, guide=self.guide)
         if native and lead.get("conductor") and self.dispatch_error and self.dispatch_error not in reading_note:
             reading_note = (reading_note + " " + self.dispatch_error).strip()
-        with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
-        prune_skill_state(self.skill_state_dir, current_key)
-        launch_note = self.write_launch_note(reading_note, None if native else document)
+        if os.path.lexists(self.guide_state_dir): prune_guide_state(self.guide_state_dir)
+        self.write_routing_file(LAUNCH_NOTE_FILE, reading_note)
         notify_file = os.path.join(self.temp, "notify.py")
         rc_file = os.path.join(self.temp, "bashrc")
         if wire: self.write_routing_file("terminal-wire.json", json.dumps(wire))
@@ -2426,15 +2326,14 @@ class Worker:
                     env["AGENTRIX_ROLE_INTERCEPT"] = os.path.join(os.path.dirname(server["args"][0]), "electron", "shims", "intercept.cjs")
         elif self.dispatch_error and not native: env["AGENTRIX_ROLE_ERROR"] = self.dispatch_error
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
-        if launch_note: env["AGENTRIX_READING_NOTE"] = launch_note
-        env["AGENTRIX_READING_NOTE_FILE"] = os.path.join(self.temp, "skill-note.txt")
-        env["AGENTRIX_SKILL_KEY_FILE"] = os.path.join(self.temp, "skill-key.txt")
-        env["AGENTRIX_SKILL_STATE_DIR"] = os.path.join(self.skill_state_dir, "delivered")
+        if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
+        env["AGENTRIX_READING_NOTE_FILE"] = os.path.join(self.temp, LAUNCH_NOTE_FILE)
         for key in ("NO_COLOR", "NODE_DISABLE_COLORS"): env.pop(key, None)
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
         self.agent_env, self.agent_context = env, reading_note
         threading.Thread(target=self.events_loop, daemon=True).start()
-        if self.dispatch_server: threading.Thread(target=self.dispatch_replay_loop, daemon=True).start()
+        if self.dispatch_server or (native and self.guide_leases):
+            threading.Thread(target=self.dispatch_replay_loop, daemon=True).start()
         return env, rc_file
 
     def dispatch_outbox(self):
@@ -2472,8 +2371,8 @@ class Worker:
 
     def dispatch_replay_loop(self):
         while not self.dispatch_halt.wait(60):
-            self.refresh_skill_leases()
-            self.replay_dispatch()
+            self.refresh_reference_leases()
+            if self.dispatch_server: self.replay_dispatch()
 
     def write_background_choice(self):
         if self.temp:
@@ -2601,8 +2500,8 @@ class Worker:
                         event.update(projectId=self.project_id, sessionKey=self.token, sequence=self.sequence)
                         needs_note = event.get("type") == "agent-started" and event.get("agent") == "claude"
                         if needs_note:
-                            self.skill_note_sequence = self.sequence
-                            self.skill_note_ready = ready = threading.Event()
+                            self.launch_note_sequence = self.sequence
+                            self.launch_note_ready = ready = threading.Event()
                         self.emit({"type": "event", "event": event})
                     if event.get("type") == "agent-started":
                         if needs_note: ready.wait(4)
@@ -2615,7 +2514,7 @@ class Worker:
         import select
         try:
             while not self.stopping:
-                self.refresh_skill_leases()
+                self.refresh_reference_leases()
                 readable, _, _ = select.select([self.master], [], [], 0.5)
                 if not readable: continue
                 data = os.read(self.master, 32768)
@@ -2626,7 +2525,7 @@ class Worker:
             _, status = os.waitpid(self.child, 0)
             code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
             self.emit({"type": "exit", "code": code})
-        self.release_skill_leases()
+        self.release_guide_leases()
 
     def resize(self, cols, rows):
         if type(cols) is not int or type(rows) is not int or not 2 <= cols <= 500 or not 1 <= rows <= 250: raise ValueError("无效的终端尺寸。")
@@ -2660,7 +2559,7 @@ class Worker:
             try: os.killpg(self.child, signal.SIGHUP)
             except OSError: pass
         if hasattr(self, "listener"): self.listener.close()
-        self.release_skill_leases()
+        self.release_guide_leases()
         if self.dispatch_lease:
             try: os.unlink(self.dispatch_lease)
             except OSError: pass
@@ -2681,10 +2580,12 @@ class Channel:
         try:
             info = worker.initialize(config)
             # The shell starts before "ready", so the size and keys sent after it find the terminal there.
-            if config.get("native") is True: worker.agent_environment(config.get("readingNote", ""), native=True)
+            if config.get("native") is True:
+                with worker.lock:
+                    if worker.stopping: return
+                    worker.agent_environment(config.get("readingNote", ""), native=True)
             else: worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
             info.update(cwd=worker.coding_root, context=getattr(worker, "agent_context", ""))
-            info["skills"] = worker.skill_paths
             if (worker.claude_lead or {}).get("conductor"):
                 server = worker.role_server("codex" if config.get("native") is True else "claude")
                 if server: info["roleServer"] = server
@@ -2747,7 +2648,7 @@ class Channel:
                 if "mode" in message: worker.update_prompt_note("mode-note.txt", message["mode"])
                 if "note" in message: worker.update_prompt_note("prompt-note.txt", message["note"])
                 value = True
-            elif op == "skill-note": value =worker.update_skill_note(message.get("sequence"), message.get("note"), message.get("skills"))
+            elif op == "launch-note": value = worker.update_launch_note(message.get("sequence"), message.get("note"), message.get("guide"))
             elif op == "create": value = worker.create(message.get("path", ""), message["name"], message["kind"], message.get("unique", False))
             elif op == "rename": value = worker.rename(message["path"], message["name"])
             elif op == "remove": value = worker.remove(message["path"])
@@ -2769,7 +2670,6 @@ class Channel:
 
 def serve(read_line, write, channels):
     """Runs the channels the lines read open ("open"), feed and close ("shutdown") until the input ends."""
-    cached_key, cached_bundle = None, None
     accounts = RemoteClaudeAccounts()
     try:
         while True:
@@ -2790,15 +2690,6 @@ def serve(read_line, write, channels):
                     raise ValueError("Invalid remote channel.")
                 channel = channels.get(name)
                 if op == "open":
-                    key, bundle = message.get("skillsKey"), message.get("skills")
-                    if key is not None:
-                        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key): raise ValueError("Invalid remote skills key.")
-                        if bundle is None:
-                            if key != cached_key: raise ValueError("Remote skills bundle is missing.")
-                            message["skills"] = cached_bundle
-                        else:
-                            if not isinstance(bundle, dict) or bundle.get("key") != key: raise ValueError("Invalid remote skills bundle.")
-                            cached_key, cached_bundle = key, bundle
                     if channel is None:
                         channels[name] = channel = Channel(name, write, accounts)
                         # Its folder and Git are read in a thread of its own, so other terminals' keys go on meanwhile.

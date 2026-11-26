@@ -5,8 +5,8 @@ import { t } from '../../shared/i18n';
 import { routingRoleName } from '../../shared/routing-command.ts';
 import {
   checkTeamRules, nextRoleId, normalizeRoleText, ROLE_TEXT_LIMITS, validateCustomRole,
-} from '../../../electron/features/skills/role-rules.mjs';
-import { assignModel, rowFor } from './skill-seats';
+} from '../../../electron/features/routing/role-rules.mjs';
+import { assignModel, rowFor } from './routing-seats';
 import { escapeRoutingText, routingError } from './RoutingReview';
 
 export const roleName = (role: TeamRole) => role.source === 'custom' ? role.name : routingRoleName(role.name, t);

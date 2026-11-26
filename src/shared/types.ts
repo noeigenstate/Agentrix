@@ -213,38 +213,6 @@ export type GitCommitFiles = { files: { path: string; status: string; originalPa
 type TextPage = { index: number; count: number; byteStart: number; byteEnd: number; encoding: string };
 export type Distribution = 'development' | 'installed' | 'portable' | 'macos' | 'linux';
 export type AppUpdateState = { supported: boolean; currentVersion: string; distribution: Distribution; channel: 'stable' | 'beta'; agreementVersion: string; agreed: boolean; status: 'unavailable' | 'idle' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'; version: string | null; percent: number; error: string | null };
-// Skills (Settings › 技能). Built-in ones ship with the app and are read-only; the user's own live in Agentrix's data folder
-// (all projects) or in a project's skills/ folder (that project), and agents may refine them as work goes on.
-// id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits;
-// firstOpenRun also runs an auto skill before the first task of the first session Agentrix starts in a project.
-export type SkillInfo = {
-  id: string; name: string; description: string; source: 'builtin' | 'user'; scope: 'builtin' | 'global' | 'project';
-  // What the settings page shows: a built-in skill's `title` / `summary` front matter (Chinese, translated through en.json);
-  // a user skill's name and description. The SKILL.md body stays what agents read.
-  title: string; summary: string;
-  // When the skill takes effect, in words for the settings page: a built-in's `when` front matter (Chinese, through en.json),
-  // otherwise derived from the trigger. A built-in's default trigger comes from its `trigger` front matter.
-  when: string;
-  extends: string | null;
-  replaced: { project: string; name: string; from: string; backup: string; at: number }[];
-  projectId: string | null; projectName: string | null; path: string;
-  enabled: boolean; trigger: 'always' | 'auto'; firstOpenRun: boolean; autoOptimize: boolean; confirmChanges: boolean;
-  hiddenInSettings?: true;
-  optionsLocked?: true;
-  // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
-  // updatedIn and lastUsed.project are project NAMES (for display), never ids.
-  version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;
-  // A change an agent proposed while confirmChanges is on, waiting for the user.
-  pending: boolean;
-  // Built-in skills that need other agents: whether each is installed (null: not needed).
-  requires: { codex: boolean | null; claude: boolean | null } | null;
-  // Proof it takes effect: the last time an agent Agentrix runs read it.
-  lastUsed: { at: number; project: string; agent: 'claude' | 'codex' } | null;
-};
-export type SkillVersion = { version: number; at: number; by: 'agent' | 'user' | 'app'; project: string | null; text: string };
-export type SkillDetail = { text: string; versions: SkillVersion[]; pending: string | null };
-export type SkillDraft = { name: string; description: string; scope: 'global' | 'project'; projectId: string | null; text: string };
-export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'firstOpenRun' | 'autoOptimize' | 'confirmChanges'>>;
 // Worker seats follow accepted routing. The lead uses its launch seat.
 export type SeatId = string;
 export type Seat = {
@@ -299,7 +267,6 @@ export type RoutingSource = {
   review?: RoutingReview;
 };
 export type SeatsInfo = {
-  skill: string;
   conductor: boolean;
   claudeFastRefusal?: string;
   seats: SeatId[];
@@ -521,24 +488,13 @@ type Bridge = {
   fileCard(id: string, file: string): Promise<Result<FileCard>>;
   agentHistory(id: string): Promise<Result<{ claude: { id: string; at: number } | null; codex: { id: string; at: number } | null }>>;
   agentLaunch(id: string, agent: 'claude' | 'codex', mode: 'new' | 'continue'): Promise<Result<boolean>>;
-  listSkills(): Promise<Result<SkillInfo[]>>;
-  readSkill(id: string): Promise<Result<SkillDetail>>;
-  // Creates a user skill (id null) or saves a new version of one; built-in skills cannot be saved.
-  saveSkill(id: string | null, draft: SkillDraft): Promise<Result<SkillInfo>>;
-  deleteSkill(id: string): Promise<Result<boolean>>;
-  setSkillOptions(id: string, options: SkillOptions): Promise<Result<SkillInfo>>;
-  revertSkill(id: string, version: number): Promise<Result<SkillInfo>>;
-  // Takes or drops a change an agent proposed; also clears the 新 mark of an agent-created skill when it is kept.
-  resolveSkillChange(id: string, accept: boolean): Promise<Result<SkillInfo | null>>;
-  // Copies a folder holding a SKILL.md (chosen in a dialog) into the user's skills; null when cancelled.
-  importSkill(scope: 'global' | 'project', projectId: string | null): Promise<Result<SkillInfo | null>>;
-  onSkills(callback: (skills: SkillInfo[]) => void): () => void;
-  // The seats of the skill that declares them (null when none does); a null terminal id reads no running session's seats. A save is announced on onSkills.
-  skillSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
+  onRouting(callback: () => void): () => void;
+  // A null terminal id reads the configured seats without a running session.
+  routingSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
   // Reads the model lists again (throttled in main) and returns the seats with the fresh catalog.
-  skillSeatsRefresh(projectId?: string | null, terminalId?: string | null, reason?: 'dialog' | 'manual'): Promise<SeatsInfo | null>;
-  setSkillRouting(scope: 'template' | 'project', projectId: string | null, config: RoutingConfig, base: string | null): Promise<{ ok: true } | SeatsSaveError>;
-  resolveSkillRouting(projectId: string, action: RoutingAction, digest: string): Promise<{ ok: true } | SeatsSaveError>;
+  refreshRouting(projectId?: string | null, terminalId?: string | null, reason?: 'dialog' | 'manual'): Promise<SeatsInfo | null>;
+  saveRouting(scope: 'template' | 'project', projectId: string | null, config: RoutingConfig, base: string | null): Promise<{ ok: true } | SeatsSaveError>;
+  resolveRouting(projectId: string, action: RoutingAction, digest: string): Promise<{ ok: true } | SeatsSaveError>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
   callFile(terminalId: string, callId: string, kind: 'brief' | 'log'): Promise<CallFileResult>;

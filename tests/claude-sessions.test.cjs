@@ -120,7 +120,7 @@ function mainHarness(t, f) {
   const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, path, sessions, store,
     readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, TranscriptTail, AgentCalls: require('../electron/features/agents/agent-calls.cjs').AgentCalls, createInterventions: require('../electron/features/agents/interventions.cjs').createInterventions, monitorActivity: (read, changed, options) => monitorActivity(read, changed, { ...options, watch: null }), claudeConversation, claudeRecord,
     claudeConfigDir: () => f.home, findClaudeSession: (cwd, id) => findClaudeSession(cwd, id, f.home),
-    describeActions() {}, skills: null, findProject: () => project, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, startHookLaunch() {}, noteSettings() {}, readEvery: () => 1000,
+    describeActions() {}, routing: null, findProject: () => project, broadcast() {}, scheduleState() {}, acceptShellEvent: () => true, startHookLaunch() {}, noteSettings() {}, readEvery: () => 1000,
     startSkillSession() {}, endSkillSession() {},
     ...require('../electron/features/agents/agent-usage.cjs'), claudeAccount: async () => null, setInterval: (run, ms) => setInterval(run, ms).unref(), clearInterval, agentCommand: require('../electron/features/agents/agent-command.cjs').agentCommand,
     claudeAccounts: { account: null, setActive() {}, refresh() {} }, claudeAccountFiles: () => [],

@@ -112,7 +112,6 @@ function pathRefusal(root, file, edit, allow) {
   if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) return 'outside_worktree';
   if (!edit) return null;
   const normalized = relative.replaceAll('\\', '/');
-  if ([file, normalized].some(name => path.basename(name).toLowerCase() === 'skill.md') && !allow.includes(normalized)) return 'skill_not_authorized';
   return normalized && matches(allow, normalized) ? null : 'outside_scope';
 }
 
@@ -267,7 +266,7 @@ function workerRules(rules) {
     const scope = readOnly ? rules.readOnlyScope : allow.length ? 'Change only the paths under "Files you may change"; stay inside the task.'
       : 'Change only what the task needs.';
     const standard = files.length ? `read ${files.map(file => `\`${file}\``).join(' and ')} and follow them`
-      : 'follow the code-standard skill this session was given and the project\'s conventions';
+      : 'follow the project\'s code-standard skill if it has one, and the project\'s conventions';
     return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
       inline ? 'Follow the Code standards below in any code you write or review.' : `Code standard: ${standard} in any code you write or review.`,
       `Scope: ${scope}`,

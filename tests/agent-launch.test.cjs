@@ -76,10 +76,10 @@ test('bootstrap writes and refreshes versioned lead and mode sidecars alongside 
   assert.deepEqual(fs.readdirSync(root), []);
 });
 
-function nativeSeatStart(skills) {
+function nativeSeatStart(routing) {
   const { nativeSpec } = createHostInputs({ sessions: new Map(), nativeSpecs: new Map(), findProject: () => ({ id: 'p', path: '/isolated' }),
     store: { settings: {}, findTerminal: () => ({ record: { restore: { agent: 'codex', threadId: 'saved' } } }) },
-    skills: { ...skills, delivery: () => ({}) },
+    routing: { ...routing, launch: () => ({}) },
     randomUUID: () => 'isolated-session', runtimeDir: '/isolated/runtime', integrationDir: '/isolated/integration',
     writeBootstrap() {}, nativeEnvironment: () => ({}), startupNote: () => '', handoffFile: () => '', READING_NOTE: '',
     eventServer: {}, controlAddress: '', nativeSubagent() {},
@@ -99,11 +99,11 @@ test('native starts and resumes take the selected family lead and ignore obsolet
   assert.equal(pendingHistory.providerSessionId, null); assert.equal(pendingHistory.model, 'sonnet');
 });
 
-test('team defaults and the other-family lead are always present even after a disable request', t => {
-  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+test('team defaults and the other-family lead are available for each provider', t => {
+  const { RoutingStore } = require('../electron/features/routing/store.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-seat-lead-'));
   const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
-  const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
+  const store = new RoutingStore({ dataDir: path.join(root, 'profile'), guideFile: path.join(__dirname, '../resources/routing/model-routing.md'),
     getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const start = nativeSeatStart({ leadOptions: store.leadOptions.bind(store) });
@@ -115,7 +115,6 @@ test('team defaults and the other-family lead are always present even after a di
   assert.deepEqual(store.setRouting('project', 'p', { roles: { orchestrator: codex } }, null), { ok: true });
   assert.deepEqual(store.leadOptions('p', 'claude'), { model: 'opus', effort: 'high' });
   assert.deepEqual(store.leadOptions('p', 'codex'), codex);
-  assert.throws(() => store.setOptions('builtin:model-routing', { enabled: false }), /\u53ea\u8bfb/);
   assert.equal(start('claude').model, 'opus'); assert.equal(start('codex', true).effort, 'low');
 });
 
@@ -146,12 +145,12 @@ test('a Claude resume takes the lead seat even before folder history resolves it
 test('the seat catalog reuses models already read by the Codex model menu without making a request', async () => {
   let reads = 0;
   const rows = [{ value: 'gpt-menu-model', efforts: ['low', 'high'] }], cache = new Map();
-  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+  const { RoutingStore } = require('../electron/features/routing/store.cjs');
   const runtime = { models: async () => { reads++; return rows; }, close: async () => {} };
-  const skills = { trackModelRuntime: SkillsStore.prototype.trackModelRuntime,
+  const routing = { trackModelRuntime: RoutingStore.prototype.trackModelRuntime,
     observeModels: (family, values) => { assert.equal(family, 'codex'); for (const row of values) cache.set(row.value, row); } };
   let codex;
-  const deps = { skills, path, app: { getPath: () => '/fixture' }, seatModelRuntimes: { codex: new Set() }, generatedImages: {},
+  const deps = { routing, path, app: { getPath: () => '/fixture' }, seatModelRuntimes: { codex: new Set() }, generatedImages: {},
     adapterOf: family => ({ native: { load: () => family === 'codex' ? () => ({ create: () => runtime }) : () => ({ create() {} }) } }),
     loadDispatchControl: () => ({ createDispatchControl: () => ({ listen: async () => ({ address: 'fixture' }) }) }),
     loadTeamLocator: () => ({}), loadDispatchRegistration: () => ({}), createSdkLoader() {}, netRequest() {},
@@ -235,10 +234,10 @@ test('the launcher offers both agents and the two start modes, with no terminal 
 });
 
 test('a terminal lead takes its seat only in conductor mode; in native mode the plain CLI picks its own model', t => {
-  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+  const { RoutingStore } = require('../electron/features/routing/store.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-terminal-lead-'));
   const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
-  const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
+  const store = new RoutingStore({ dataDir: path.join(root, 'profile'), guideFile: path.join(__dirname, '../resources/routing/model-routing.md'),
     getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const orchestrator = { model: 'sonnet', effort: 'max' };

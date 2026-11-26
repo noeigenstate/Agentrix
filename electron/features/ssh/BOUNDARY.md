@@ -18,6 +18,8 @@ host; only validated usage windows reach the activity pane.
 
 ## Invariants
 - A connecting channel never holds a routing save. Its newest queued settings apply when ready, and a ready channel has a three-second request deadline — test: `tests/remote-worker.test.cjs` › "routing saves queue only the latest connecting-host update and bound ready-host requests"
+- The conductor launch note names one read-only guide that stays available on resume after the terminal closes — test: `tests/remote_claude_test.py` › "test_resume_retains_old_guide_path_after_the_terminal_closes_and_the_guide_changes"
+- Guide cleanup expires unused copies after 30 days and protects guides leased by active channels — test: `tests/remote_skill_leases_test.py` › "test_another_channels_live_lease_keeps_an_old_guide_during_pruning"
 - SSH Codex starts and resumes through its remote app-server byte channel; local executables and account readers are never used — test: `tests/ssh-codex.test.cjs` › "SSH Codex starts, sends, resumes and reads accounts solely through its remote byte channel"
 - Account replies contain only validated numeric windows and fixed status words; credentials, diagnostic strings and remote response bodies never reach the pane — the remote host owns its account — test: `tests/remote-claude-account.test.cjs` › "remote account boundary copies only validated numeric limits and fixed status words"
 - A closed or replaced terminal cannot publish a late account result, and polling uses read-only requests with the existing rate limit — background account reads must not affect a different session — test: `tests/remote-claude-account.test.cjs` › "remote polling is read-only, rate limited, aborted on disposal and rejects late or rebound results"
@@ -27,5 +29,6 @@ host; only validated usage windows reach the activity pane.
 ## Not ours
 - Multiplexing, framing and request cancellation — electron/remote-connection.cjs
 - Reading remote credentials and querying Anthropic — integration/remote-worker.py
+- Installing and leasing the routing guide, expanding its path in launch notes and forwarding SessionStart activity — integration/remote-worker.py
 - Parsing a screen and presenting its choice or waiting card — Activity pane parsers and Reading view
 - Session lifecycle, completion and dashboard quota recording — electron/main.cjs

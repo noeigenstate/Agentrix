@@ -9,7 +9,7 @@ const { terminalHooks } = require('../electron/features/terminal-events/hook-cha
 const { writeBootstrap, removeBootstrap, updateBootstrapLead, updateDispatchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 const { argumentsOf, commandOf, WorkerOutput } = require('../integration/dispatch.cjs');
 const { seatRouting } = require('../integration/agent-event.cjs');
-const { adapterOfModel, agentOfModel } = require('../electron/features/skills/seat-rules.mjs');
+const { adapterOfModel, agentOfModel } = require('../electron/features/routing/seat-rules.mjs');
 const { CLAUDE_EFFORT, familyOf } = require('../electron/features/agents/call-seat.cjs');
 
 const seats = {

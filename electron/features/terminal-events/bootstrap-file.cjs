@@ -3,7 +3,7 @@ const path = require('node:path');
 const { Buffer } = require('node:buffer');
 const { randomUUID } = require('node:crypto');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
-const { validModel, EFFORT, familyOf } = require('../skills/seat-rules.mjs');
+const { validModel, EFFORT, familyOf } = require('../routing/seat-rules.mjs');
 const { SEAT_BYTES, writeSeatMap } = require('../agents/call-seat.cjs');
 const { readEnvelope, writeKeyValue } = require('../agents/dispatch-events.cjs');
 
@@ -90,7 +90,7 @@ function readOptionalText(file) {
 
 // Removes a session's bootstrap file and the files written with it.
 function removeBootstrap(file) {
-  const suffixes = ['', '.background.json', '.lead', '.lead.env', '.seats', '.launch-seats', '.mode', '.mode.env', '.launch-note'];
+  const suffixes = ['', '.background.json', '.lead', '.lead.env', '.seats', '.launch-seats', '.mode', '.mode.env'];
   for (const suffix of suffixes) fs.rmSync(file + suffix, { force: true });
   fs.rmSync(claudeEnvFile(file), { force: true });
 }

@@ -25,7 +25,7 @@ test('every English entry keeps the placeholders of its Chinese key', () => {
   }
 });
 
-test('Skills settings use the plural label and the GPT sub-agent changelog key appears once', () => {
+test('Skill activity uses the plural label and the GPT sub-agent changelog key appears once', () => {
   assert.equal(translate('en', '技能'), 'Skills');
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../electron/locales/en.json'), 'utf8');
   const key = 'GPT 子代理显示 token/s，已停止的后台调用不再一直显示运行中，有命令失败时头像不再出现红圈。';

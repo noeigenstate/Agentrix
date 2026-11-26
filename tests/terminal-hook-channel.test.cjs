@@ -95,7 +95,7 @@ test('with a proxy and no loopback NO_PROXY entry the terminal keeps command hoo
   }
 
   // Main decides at terminal start from the environment and Claude Code's settings env, and says why.
-  const eventServer = { name: 'agentrix-pipe', address: '/tmp/agentrix.sock' }, shell = { posix: true, node: '/node', helper: '/agent-event.cjs', noteFile: '/note' };
+  const eventServer = { name: 'agentrix-pipe', address: '/tmp/agentrix.sock' }, shell = { posix: true, node: '/node', helper: '/agent-event.cjs' };
   const settings = files => file => { if (Object.hasOwn(files, file)) return JSON.stringify({ env: files[file] }); throw Object.assign(new Error('missing'), { code: 'ENOENT' }); };
   const decide = (env, platform, files = {}) => terminalHooks({ port: PORT, terminalId: 't', sessionKey: 'key', eventServer, env, cwd: '/project', shell, platform, home: '/home', read: settings(files) });
   const proxied = decide({ HTTP_PROXY: 'http://proxy:1', NO_PROXY: 'localhost' }, 'win32');
@@ -161,9 +161,9 @@ $bare = claude hello
 });
 
 for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zsh', zsh, 'zsh-integration.zsh']]) {
-  test(`the ${kind} Claude wrapper reads the note prepared for its own launch`, { skip: !shell || !fs.existsSync(shell), timeout: 25000 }, async t => {
+  test(`the ${kind} Claude wrapper reads the note prepared for its own launch`, { skip: !shell || !fs.existsSync(shell), timeout: 60000 }, async t => {
     const directory = folder(t), bin = path.join(directory, 'bin'), capture = path.join(directory, 'args.txt');
-    const bootstrap = path.join(directory, 'terminal.json'), note = `${bootstrap}.launch-note`;
+    const bootstrap = path.join(directory, 'terminal.json'), note = path.join(directory, 'startup-note.txt');
     fs.mkdirSync(bin);
     fs.writeFileSync(bootstrap, JSON.stringify({ format: 'agentrix.bootstrap', version: 1 }));
     fs.writeFileSync(note, 'Previous note');
@@ -178,11 +178,11 @@ for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zs
     const slash = file => file.replaceAll('\\', '/');
     const shellBin = slash(bin).replace(/^([A-Z]):/i, (_, drive) => `/${drive.toLowerCase()}`);
     const env = { ...dispatchEnvironment(), HOME: slash(directory), ZDOTDIR: slash(directory), AGENTRIX_USER_ZDOTDIR: slash(directory),
-      CAPTURE: slash(capture), TEST_BIN: shellBin, MSYS2_ARG_CONV_EXCL: '*', AGENTRIX_BOOTSTRAP: slash(bootstrap),
+      CAPTURE: slash(capture), TEST_BIN: shellBin, MSYS2_ARG_CONV_EXCL: '*', AGENTRIX_BOOTSTRAP: slash(bootstrap), AGENTRIX_READING_NOTE_FILE: slash(note),
       AGENTRIX_NODE: slash(process.execPath), AGENTRIX_EVENT_HELPER: slash(path.join(integration, 'agent-event.cjs')),
       AGENTRIX_SOCKET: server.address, AGENTRIX_PROJECT_ID: 'fixture', AGENTRIX_SESSION_KEY: 'test-key' };
     await exec(shell, ['-c', 'export PATH="$TEST_BIN:/usr/bin:/bin"; source "$1" zshrc; claude hello', '_', slash(path.join(integration, file))],
-      { cwd: directory, env, windowsHide: true, timeout: 20000 });
+      { cwd: directory, env, windowsHide: true, signal: t.signal });
     assert.deepEqual(starts, [['claude', 'fixture', 'test-key']]);
     assert.deepEqual(fs.readFileSync(capture, 'utf8').trimEnd().split(/\r?\n/), ['--append-system-prompt', 'Note for this launch', 'hello']);
   });
@@ -199,7 +199,7 @@ for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zs
     fs.writeFileSync(fake, `const fs = require('node:fs'), args = process.argv.slice(2); fs.writeFileSync(require('node:path').join(process.env.CAPTURE, String(fs.readdirSync(process.env.CAPTURE).length)), args.includes('--settings') ? fs.readFileSync(args[args.indexOf('--settings') + 1], 'utf8') : 'none:' + args.join(' '));`);
     fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(fake)} "$@"\n`, { mode: 0o755 });
     const hooks = terminalHooks({ port: PORT, terminalId: 'project', sessionKey: 'key', eventServer: server, env: {}, cwd: directory,
-      shell: { posix: true, node: process.execPath, helper: path.join(integration, 'agent-event.cjs'), noteFile: '' }, platform: process.platform, home, read: () => '{}' });
+      shell: { posix: true, node: process.execPath, helper: path.join(integration, 'agent-event.cjs') }, platform: process.platform, home, read: () => '{}' });
     const env = { HOME: home, ZDOTDIR: home, AGENTRIX_USER_ZDOTDIR: home, PATH: `${bin}:/usr/bin:/bin`, CAPTURE: capture, TMPDIR: directory,
       AGENTRIX_SOCKET: server.address, AGENTRIX_PROJECT_ID: 'project', AGENTRIX_SESSION_KEY: 'key', AGENTRIX_NODE: process.execPath, AGENTRIX_EVENT_HELPER: path.join(integration, 'agent-event.cjs'),
       AGENTRIX_HOOK_PORT: String(PORT), AGENTRIX_HOOK_CHANNEL: hooks.channel, AGENTRIX_HOOK_SETTINGS: hooks.settings.http, AGENTRIX_HOOK_FALLBACK: hooks.settings.fallback };

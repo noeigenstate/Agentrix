@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, validRoleId, validCustomRoleId, nextRoleId,
   roleKind, roleLocks, normalizeRoleText, validateCustomRole, checkTeamRules,
-} = require('../electron/features/skills/role-rules.mjs');
+} = require('../electron/features/routing/role-rules.mjs');
 
 test('custom IDs reserve x-, obey length and use the smallest free suffix', () => {
   assert.equal(validRoleId('developer'), true);

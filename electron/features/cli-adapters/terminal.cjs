@@ -5,8 +5,6 @@ const claudeWire = {
   remoteOrder: ['settings', 'note', 'model', 'effort', 'resume', 'roleTools'],
   flags: { settings: '--settings', note: '--append-system-prompt', model: '--model', effort: '--effort', resume: '--resume' },
   roleTools: { prefix: '--mcp-config=', table: 'mcpServers', name: 'agentrix', type: 'stdio' },
-  // The SSH worker uses this layout to prepare the startup note for both launchers.
-  note: { marker: ' Agentrix skill delivery: remote. ', suffix: ' Agentrix delivers skill instructions through its SessionStart hook.' },
   overrides: ['--model', '--effort'],
 };
 

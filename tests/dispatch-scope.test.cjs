@@ -156,26 +156,16 @@ for (const aliasPeer of [false, true]) test('N1: disjoint workers sharing a link
   assert.equal(fs.readFileSync(path.join(f.linked, 'b/new.txt'), 'utf8'), 'worker Y new');
 });
 
-test('skill proposal restoration remains active when N1 leaves a peer ordinary edit live', { timeout: 20000 }, async t => {
+test('overlapping workers keep in-scope skill edits and preserve peer changes', { timeout: 20000 }, async t => {
   const f = fixture(t), x = f.start('x', 'a/**', [['a/base.txt', 'peer edit'], ['a/new.txt', 'peer new file']]);
   await until(() => x.stdout().includes('[dispatch] started'));
-  const y = f.start('skill-worker', 'skills/**', [['skills/sample/SKILL.md', 'Unapproved worker proposal.']]);
+  const y = f.start('skill-worker', 'skills/**', [['skills/sample/SKILL.md', 'In-scope worker edit.']]);
   await until(() => y.stdout().includes('[dispatch] started'));
   fs.writeFileSync(x.writeGate, 'go'); fs.writeFileSync(y.writeGate, 'go');
   await until(() => fs.existsSync(x.written) && fs.existsSync(y.written));
   fs.writeFileSync(y.release, 'done'); assert.equal(await y.result, 0);
   assert.match(y.stdout(), /OUT OF SCOPE: a\/base.txt, a\/new.txt.*left live/);
-  assert.match(y.stdout(), /1 skill proposals restored and awaiting the lead/);
-  assert.equal(fs.readFileSync(path.join(f.linked, 'skills/sample/SKILL.md'), 'utf8'), 'Original skill.');
-  const { indexPath, proposals: [proposal] } = y.end().result.skillProposalDetails;
-  // Windows runners hand out the temp folder under an 8.3 alias; compare resolved paths, not their spelling.
-  const real = file => fs.realpathSync.native(file);
-  assert.equal(real(proposal.path), real(path.join(f.linked, 'skills/sample/SKILL.md')));
-  assert.equal(proposal.operation, 'edit');
-  assert.equal(proposal.text, 'Unapproved worker proposal.');
-  assert.equal(proposal.truncated, false);
-  assert.ok(real(indexPath).startsWith(real(path.join(f.root, 'profile')) + path.sep));
-  assert.equal(fs.readFileSync(proposal.savedPath, 'utf8'), proposal.text);
+  assert.equal(fs.readFileSync(path.join(f.linked, 'skills/sample/SKILL.md'), 'utf8'), 'In-scope worker edit.');
   assert.equal(fs.readFileSync(path.join(f.linked, 'a/base.txt'), 'utf8'), 'peer edit');
   assert.equal(fs.readFileSync(path.join(f.linked, 'a/new.txt'), 'utf8'), 'peer new file');
   fs.writeFileSync(x.release, 'done'); assert.equal(await x.result, 0);
@@ -184,16 +174,19 @@ test('skill proposal restoration remains active when N1 leaves a peer ordinary e
 for (const main of [false, true]) test(`N1: exclusive scope violations are quarantined only in a linked worktree (main=${main})`, { timeout: 15000 }, async t => {
   const f = fixture(t), cwd = main ? f.main : f.linked;
   if (!main) boardEvent(t, 'self'); // macOS also reports an event for the watched directory's own inode.
-  const worker = f.start('exclusive', 'a/**', [['b/base.txt', 'worker violation'], ['b/new.txt', 'new worker violation']], cwd);
+  const worker = f.start('exclusive', 'a/**',
+    [['b/base.txt', 'worker violation'], ['b/new.txt', 'new worker violation'], ['skills/sample/SKILL.md', 'outside scope']], cwd);
   fs.writeFileSync(worker.writeGate, 'go'); fs.writeFileSync(worker.release, 'done');
   assert.equal(await worker.result, 0); assert.match(worker.stdout(), /OUT OF SCOPE/);
   assert.equal(fs.readFileSync(path.join(cwd, 'b/base.txt'), 'utf8'), main ? 'worker violation' : 'original');
+  assert.equal(fs.readFileSync(path.join(cwd, 'skills/sample/SKILL.md'), 'utf8'), main ? 'outside scope' : 'Original skill.');
   if (main) assert.equal(fs.readFileSync(path.join(cwd, 'b/new.txt'), 'utf8'), 'new worker violation');
   else {
     const quarantine = worker.stdout().match(/quarantined scope changes: (.*?) ·/)[1];
     assert.equal(fs.readFileSync(path.join(quarantine, 'b/base.txt'), 'utf8'), 'worker violation');
     assert.equal(fs.readFileSync(path.join(quarantine, 'b/new.txt'), 'utf8'), 'new worker violation');
-    assert.equal(fs.existsSync(path.join(cwd, 'b/new.txt')), false); assert.match(worker.stdout(), /restored 2/);
+    assert.equal(fs.readFileSync(path.join(quarantine, 'skills/sample/SKILL.md'), 'utf8'), 'outside scope');
+    assert.equal(fs.existsSync(path.join(cwd, 'b/new.txt')), false); assert.match(worker.stdout(), /restored 3/);
   }
 });
 

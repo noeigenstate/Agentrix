@@ -182,17 +182,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const routingOwned = useRef(true);
   useEffect(() => {
     const api = window.agentrix;
-    if (!api?.skillSeats) return;
+    if (!api?.routingSeats) return;
     let active = true;
     let revision = 0;
     const load = () => {
       const request = ++revision;
-      void api.skillSeats(projectId ?? null, terminal.id).then(info => {
+      void api.routingSeats(projectId ?? null, terminal.id).then(info => {
         if (active && revision === request) routingOwned.current = info?.conductor !== false;
       }, () => {});
     };
     load();
-    const off = api.onSkills?.(load);
+    const off = api.onRouting?.(load);
     return () => { active = false; off?.(); };
   }, [projectId, terminal.id]);
   useEffect(() => {

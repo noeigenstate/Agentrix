@@ -82,9 +82,9 @@ function createHostInputs(deps) {
   }
 
   // The spec a native session starts with, the router's resolveSpec: it clears the terminal's ended host, asks the
-  // skills library for the session's delivery, writes the bootstrap file and keeps the spec in nativeSpecs.
+  // routing store for the launch note, writes the bootstrap file and keeps the spec in nativeSpecs.
   function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
-    const { findProject, sessions, nativeSpecs, store, randomUUID, skills } = deps;
+    const { findProject, sessions, nativeSpecs, store, randomUUID, routing } = deps;
     const project = findProject(id), old = sessions.get(id);
     if (project.kind === 'ssh' && !supportsNative(agent, project.kind)) throw new Error('SSH 原生会话目前仅支持 Codex。');
     if (validateOnly) return;
@@ -97,29 +97,29 @@ function createHostInputs(deps) {
     const savedThread = resume && (saved?.agent || legacyRestoreAgent) === agent ? saved?.threadId || null : null;
     const providerSessionId = launch?.latest ? null : launch?.providerSessionId || savedThread;
     // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-    const lead = skills?.leadOptions?.(project.id, agent);
+    const lead = routing?.leadOptions?.(project.id, agent);
     const runOptions = { model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
       ...nativePolicy.permissions?.(store.settings) };
     const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
     if (project.kind === 'ssh') {
-      skills?.delivery?.(project, true, sessionId, { agent, started: true });
+      routing?.launch?.(project, true, sessionId, { agent, started: true });
       const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
         sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
       nativeSpecs.set(id, spec); return spec;
     }
     // The outbox is beside this file and outlives a host process restart.
     const bootstrapFile = path.join(deps.runtimeDir, `${id}.json`);
-    const conductor = !!skills?.seatsInfo?.(project.id)?.conductor;
-    const delivery = skills?.delivery?.(project, false, sessionId, { agent, started: true });
+    const conductor = !!routing?.seatsInfo?.(project.id)?.conductor;
+    const launchInfo = routing?.launch?.(project, false, sessionId, { agent, started: true });
     const dispatchSnapshot = deps.writeBootstrap({ file: bootstrapFile, eventServer: deps.eventServer, projectId: id, projectPath: project.path,
       sessionKey, controlAddress: deps.controlAddress, controlCapability, claudeBackgroundTasks: store.settings?.claudeBackgroundTasks,
-      lead: nativePolicy.bootstrapLead ? lead : undefined, dispatchSeats: delivery?.agentSeats ?? null, conductor });
+      lead: nativePolicy.bootstrapLead ? lead : undefined, dispatchSeats: launchInfo?.agentSeats ?? null, conductor });
     // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
     const env = deps.nativeEnvironment(bootstrapFile, launch?.codexHome);
     const shellEnv = deps.nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
-    const context = deps.startupNote(deps.READING_NOTE, deps.handoffFile(id), path.join(project.path, 'skills'), delivery);
+    const context = deps.startupNote(deps.READING_NOTE, deps.handoffFile(id), path.join(project.path, 'skills'), launchInfo);
     const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
-      sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
+      sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: launchInfo?.agentSeats, providerSessionId,
       roleServer: roleServer(env, agent) };
     const encodeSeats = seats => JSON.stringify({ format: 'agentrix.seat-map', version: 1, seats: seats ?? null });
     env.AGENTRIX_SEATS = nativePolicy.envSeats?.(dispatchSnapshot ?? encodeSeats(null)) ?? encodeSeats(spec.seatsMap);

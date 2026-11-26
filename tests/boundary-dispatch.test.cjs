@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { builtinModules } = require('node:module');
 const { briefOf, runtimeFiles, dispatchCompanions } = require('../integration/dispatch.cjs');
-const { skillFrontMatter } = require('../electron/features/skills/session.cjs');
+const { frontMatter } = require('../electron/shared/front-matter.cjs');
 const { readKeyValue } = require('../electron/features/agents/dispatch-events.cjs');
 
 const root = path.resolve(__dirname, '..');
@@ -27,7 +27,7 @@ test('local and SSH layouts give both providers the shipped plain replies body i
     fs.writeFileSync(target, content);
   }
   const remote = require(remoteHelper);
-  const body = skillFrontMatter.frontMatter(read('resources/skills/plain-reply/SKILL.md')).body.trim();
+  const body = frontMatter(read('resources/skills/plain-reply/SKILL.md')).body.replace(/\r\n/g, '\n').trim();
   const task = Buffer.from('用户的任务。');
   assert.deepEqual(remote.runtimeFiles(), carried);
   for (const render of [briefOf, remote.briefOf]) for (const agent of ['claude', 'codex']) for (const small of [false, true]) {
@@ -141,13 +141,14 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
   assert.deepEqual(dispatchCompanions, ['role-tools.cjs', 'role-artifacts.cjs']);
   assert.ok(dispatchCompanions.every(file => !(file in carried)));
   const helper = ['dispatch.cjs', ...dispatchCompanions].reduce((bytes, file) => bytes + Buffer.byteLength(read(`integration/${file}`)), 0);
-  assert.ok(count <= 48, `SSH carries ${count} runtime modules; the limit is 48`);
+  assert.ok(count === 46, `SSH carries ${count} runtime modules; expected 46`);
   assert.ok(count <= limit('DISPATCH_MODULE_COUNT') * 0.75, `${count} runtime modules leave under 25% of DISPATCH_MODULE_COUNT`);
   assert.ok(bytes <= limit('DISPATCH_MODULE_BYTES') * 0.75, `${bytes} bytes of runtime modules leave under 25% of DISPATCH_MODULE_BYTES`);
   assert.ok(helper <= limit('DISPATCH_HELPER_BYTES') * 0.75, `the ${helper}-byte helper leaves under 25% of DISPATCH_HELPER_BYTES`);
-  const { MAX_SSH_BUNDLE_BYTES } = require('../electron/features/skills/store.cjs');
-  assert.ok(limit('DISPATCH_HELPER_BYTES') + limit('DISPATCH_MODULE_BYTES') + MAX_SSH_BUNDLE_BYTES <= limit('MAX_MESSAGE') * 0.75,
-    'the helper, its modules and the skills bundle leave a quarter of MAX_MESSAGE for escaping and the envelope');
+  const { MAX_SSH_GUIDE_BYTES } = require('../electron/features/routing/store.cjs');
+  assert.equal(MAX_SSH_GUIDE_BYTES, limit('ROUTING_GUIDE_BYTES'));
+  assert.ok(limit('DISPATCH_HELPER_BYTES') + limit('DISPATCH_MODULE_BYTES') + MAX_SSH_GUIDE_BYTES <= limit('MAX_MESSAGE') * 0.75,
+    'the helper, its modules and the routing guide leave a quarter of MAX_MESSAGE for escaping and the envelope');
 });
 
 // Main's event loop also serves the pipe, the window and every terminal: a synchronous Git call for a team lookup stalled the control

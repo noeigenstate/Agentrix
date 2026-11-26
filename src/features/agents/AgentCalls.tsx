@@ -8,7 +8,7 @@ import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
-import { callSeatRole, modelRow, roleGroups, routeVerdict } from './skill-seats.ts';
+import { callSeatRole, modelRow, roleGroups, routeVerdict } from './routing-seats.ts';
 import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, openSplit, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
 import './activity-pane.css';
 import './agent-calls.css';
@@ -141,15 +141,15 @@ function TeamSeats({ projectId, terminals, children }: {
   const sessions = JSON.stringify(terminals.map(terminal => [terminal.id, terminal.sessionId, terminal.nativeRuntimeSessionId]));
   useEffect(() => {
     const api = window.agentrix;
-    if (!api?.skillSeats) return;
+    if (!api?.routingSeats) return;
     let active = true, request = 0;
     const load = async () => {
       const mine = ++request;
-      const entries = await Promise.all(terminals.map(async ({ id }) => [id, await api.skillSeats(projectId, id).catch(() => null)] as const));
+      const entries = await Promise.all(terminals.map(async ({ id }) => [id, await api.routingSeats(projectId, id).catch(() => null)] as const));
       if (active && request === mine) setInfo(Object.fromEntries(entries));
     };
     setInfo({}); void load();
-    const off = api.onSkills?.(load);
+    const off = api.onRouting?.(load);
     return () => { active = false; off?.(); };
   }, [projectId, sessions]);
   return children(info);

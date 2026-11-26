@@ -155,7 +155,7 @@ test('worktrees share team state and outside git the helper behaves as before', 
   assert.equal(result.code, 0); assert.match(result.stdout, /scope unchecked/); assert.doesNotMatch(result.stdout, / · roundtable /);
   assert.equal(captured.brief, briefOf({ cwd: f.runtime, allow: ['src/a.js'] }, Buffer.from('Whole plan.\n')).toString());
   assert.doesNotMatch(captured.brief, /# Project memory|# Working now|# Roundtable before work/);
-  assert.match(briefOf({ cwd: f.runtime, allow: [] }, Buffer.from('plain')).toString(), /finish_role\.skillProposals[\s\S]*plain$/);
+  assert.match(briefOf({ cwd: f.runtime, allow: [] }, Buffer.from('plain')).toString(), /# Plain replies[\s\S]*# Task\n\nplain$/);
 });
 
 test('a scoped build starts while a worker with overlapping scope is still running', async t => {
@@ -546,7 +546,7 @@ test('scoped dispatch lists repository files once and snapshots status before an
   const teamModule = load(teamFile, { 'node:child_process': children });
   const dispatched = load(helper, { [boundaryFile]: boundaries, [teamFile]: teamModule });
   const rendered = dispatched.briefOf({ cwd: f.repo, allow: [] }, Buffer.from('plain')).toString();
-  assert.ok(rendered.includes('finish_role.skillProposals'));
+  assert.ok(rendered.includes('# Standing rules'));
   assert.ok(rendered.endsWith('plain'));
   assert.equal(calls.length, 0, 'briefOf has no hidden team discovery');
   for (const withPeer of [false, true]) {

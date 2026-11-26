@@ -1,5 +1,5 @@
 function registerApplicationIpc(host) {
-  const { createIpcAdapter, ipcMain, devUrl, t, report, nativeSessions, registerUnavailableNative, registerSkillsIpc, skills, dialog, store,
+  const { createIpcAdapter, ipcMain, devUrl, t, report, nativeSessions, registerUnavailableNative, registerRoutingIpc, routing, dialog, store,
     workerTerminals, registerAgentsIpc, agents, shell, sessions, findProject, dashboard, readingHistory, listAgentCommands, interventions,
     registerSshIpc, getSSHInfo, sshAuth, startTerminal, startupErrors, broadcast, registerUpdatesIpc, updateManager, updateStoreSettings,
     allowEditorClose, liveTerminalCount, registerFilesIpc, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor,
@@ -8,10 +8,10 @@ function registerApplicationIpc(host) {
   if (nativeSessions) nativeSessions.register(handle);
   else registerUnavailableNative(handle);
   registerTitlebarState(host, listen);
-  registerSkillsIpc({ handle, skills, dialog, getWindow: () => host.window, claudeFastRefusal: () => store.claudeFastMode?.reason });
+  registerRoutingIpc({ handle, routing, claudeFastRefusal: () => store.claudeFastMode?.reason });
   workerTerminals.register({ handle, listen, getWebContents: () => host.window?.webContents, report });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
-    routingOwned: projectId => skills.routingOwned(projectId),
+    routingOwned: projectId => routing.routingOwned(projectId),
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
     // The legacy reply IPC remains inert; no planner relay requests are emitted.

@@ -127,7 +127,7 @@ function validDispatch(event) {
     (event.activeMs === null || number(event.activeMs)) && optionalCount(event.inputTokens) && optionalCount(event.cachedTokens) && optionalCount(event.totalOutputTokens) &&
     (event.filesChanged === undefined || Array.isArray(event.filesChanged) && event.filesChanged.length <= 50
       && event.filesChanged.every(file => line(file, 4096))) && optionalCount(event.filesChangedCount) &&
-    optionalCount(event.outOfScopeCount) && optionalCount(event.skillProposals) && (event.reportedCostUsd == null || number(event.reportedCostUsd)) &&
+    optionalCount(event.outOfScopeCount) && (event.reportedCostUsd == null || number(event.reportedCostUsd)) &&
     (event.verdict === undefined || ['ok', 'mismatch', 'unverified'].includes(event.verdict));
 }
 
@@ -165,7 +165,7 @@ const WIRE_FIELDS = Object.freeze({
     'dispatch.waiting': dispatchFields('kind message', 'menu'),
     'dispatch.start-failed': dispatchFields('code message'),
     'dispatch.ended': dispatchFields('agent model effort fast exitCode reason rate scope refused needsDecision result routing',
-      'skillProposals skillChangesLeftLive interventions stops treeStopFailure warnings fallback'),
+      'interventions stops treeStopFailure warnings fallback'),
     'dispatch.running': dispatchFields('seconds lastActivityAt', 'waiting'),
     'dispatch.unknown-run': dispatchFields(),
     'dispatch.detached': dispatchFields(),
@@ -222,7 +222,7 @@ const WIRE_FIELDS = Object.freeze({
     'agentrix.seat-map': fileFields('seats'),
     'agentrix.terminal-wire': fileFields('words claude'),
     'agentrix.board': fileFields('id pid title role agent model cwd allow startedAt', 'session controls closing'),
-    'agentrix.role-result': fileFields('runId source answer needsDecision needsApproval findings calls at', 'skillProposals verification'),
+    'agentrix.role-result': fileFields('runId source answer needsDecision needsApproval findings calls at', 'verification'),
     'agentrix.lead-seat': fileFields('model effort fast ultracode seats'),
     'agentrix.session-mode': fileFields('mode'),
     'agentrix.launch-route': fileFields('route'),

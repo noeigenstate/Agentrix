@@ -2,12 +2,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
-const { cleanConfig, compactConfig, resolveTeam, validateTeam } = require('../electron/features/skills/team-roles.cjs');
-const modelSeats = require('../electron/features/skills/model-seats.cjs');
+const { guideMetadata } = require('../electron/features/routing/guide-format.cjs');
+const { cleanConfig, compactConfig, resolveTeam, validateTeam } = require('../electron/features/routing/team-roles.cjs');
+const modelSeats = require('../electron/features/routing/model-seats.cjs');
 
-const skill = fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8');
-const entry = builtinMetadata(skill, 'model-routing');
+const skill = fs.readFileSync(path.join(__dirname, '../resources/routing/model-routing.md'), 'utf8');
+const entry = guideMetadata(skill, 'model-routing');
 const installed = { claude: true, codex: true };
 const catalog = modelSeats.catalog(installed, [{ model: 'gpt-6.2-sol' }, { model: 'gpt-peer' }]);
 const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);

@@ -68,7 +68,6 @@ function productFindings(source, file, checker) {
     'whole-word': /\.trim\(\)\s*[!=]={1,2}\s*(['"])[a-z][a-z0-9_-]*\1|\$\(\s*cat\b[^\n]*?\)\s*["']?\s*(?:==?|!=)\s*["']?[a-z][\w-]*\b/gi,
     'word-marker': /\b(?:word|words\[\$\w+\])\s*(?:-ceq|-eq|===?)\s*['"](?:--|-u)['"]|\$(?:word|entry)["']?\s*(?:==?|!=)\s*['"]?(?:--|-u)(?=['"\s])/g,
     'ordered-shell-lines': /\bIFS= read -r \w+[^\n]*&&\s*IFS= read -r \w+/g,
-    'note-marker': /\.(?:indexOf|split|partition)\(\s*(?:['"] Agentrix skill delivery: ['"]|(?:claudeWire\.)?note\.marker)/g,
   };
   for (const [rule, pattern] of Object.entries(patterns)) for (const _match of lines.matchAll(pattern)) findings.push(rule);
   if (file === 'scripts/routing-acceptance.mjs') {

@@ -277,25 +277,25 @@ test('terminals on one host share its SSH connection: one login, their own outpu
   assert.equal(prompts.size, 2);
 });
 
-test('SSH sends unchanged skills by key on the same link and resends only when the bundle changes', { timeout: 30000 }, async t => {
+test('SSH sends a complete routing guide or null with each open on the same link', { timeout: 30000 }, async t => {
   const fixture = await fixtureFor(t), auth = await new SSHAuthServer().start(), opened = [];
   const project = { id: randomUUID(), kind: 'ssh', path: process.platform === 'win32' ? '/srv/fixture' : fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
-  const open = skills => {
-    const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: randomUUID(), skills });
+  const open = guide => {
+    const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: randomUUID(), guide });
     opened.push(connection); return connection;
   };
   t.after(async () => { for (const connection of opened) connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
-  const bundle = { key: 'a'.repeat(64), instructions: 'Read-only references.', files: [{ id: 'user:test', scope: 'global', name: 'test', text: '---\nname: test\ndescription: Test.\n---\nBody.' }] };
-  const first = open(bundle); await first.ready;
+  const guide = { key: 'a'.repeat(64), text: 'Routing rules.' };
+  const first = open(guide); await first.ready;
   const sent = [], write = first.link.child.stdin.write.bind(first.link.child.stdin);
   t.mock.method(first.link.child.stdin, 'write', (data, ...args) => { sent.push(JSON.parse(data)); return write(data, ...args); });
-  const second = open(bundle); await second.ready;
+  const second = open(guide); await second.ready;
   const unchanged = sent.find(message => message.op === 'open');
-  assert.equal(unchanged.skills, null); assert.equal(unchanged.skillsKey, bundle.key);
+  assert.deepEqual(unchanged.guide, guide);
+  for (const field of ['skills', 'skillsKey', 'guideKey']) assert.ok(!(field in unchanged));
   assert.equal(Object.keys(unchanged)[0], 'channel');
-  const changed = { ...bundle, key: 'b'.repeat(64), instructions: 'Updated read-only references.' };
-  const third = open(changed); await third.ready;
-  assert.deepEqual(sent.filter(message => message.op === 'open')[1].skills, changed);
+  const third = open(null); await third.ready;
+  assert.equal(sent.filter(message => message.op === 'open')[1].guide, null);
   assert.equal(fixture.workers, 1);
 });
 
@@ -327,22 +327,27 @@ test('untrusted askpass requests are rejected without displaying a credential pr
   assert.equal(auth.getPending().length, 0);
 });
 
-test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts over the worker', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
-  const fixture = await fixtureFor(t, { nativeWorker: true });
-  const auth = await new SSHAuthServer().start(), events = [];
-  const project = { id: randomUUID(), kind: 'ssh', path: fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
-  const stub = `#!/usr/bin/env python3
+const claudeRoutingStub = `#!/usr/bin/env python3
 import json,os,subprocess,sys
 args=sys.argv[1:]
-reading=("You run inside Agentrix. SSH reading note. "
-         "Agentrix delivers skill instructions through its SessionStart hook.")
+references=os.path.expanduser("~/.local/state/agentrix/ssh-routing")
+original=os.path.join(references,"a"*64,"model-routing.md")
+changed=args[-2:]==["--resume","next"] or "--version" in args
+guide=os.path.join(references,"b"*64,"model-routing.md") if changed else original
+note_prefix="You run inside Agentrix. SSH reading note. Read "
+assert args.count("--append-system-prompt")==1 and args[2]=="--append-system-prompt"
+assert args[3].startswith(note_prefix) and args[3].endswith(".")
+assert os.path.realpath(args[3][len(note_prefix):-1])==os.path.realpath(guide)
+with open(guide,encoding="utf-8") as source:
+    assert source.read() == ("Updated SSH routing rules." if changed else "SSH routing rules.")
+with open(original,encoding="utf-8") as source:
+    assert source.read() == "SSH routing rules."
 if "--version" in args:
-    assert args[2:]==["--append-system-prompt", reading, "--version"]
+    assert args[4:]==["--version"]
     sys.exit(7)
-assert args.count("--append-system-prompt")==1
-assert args[2:4]==["--append-system-prompt", reading]
 settings_file=args[args.index("--settings")+1]
-assert os.path.dirname(settings_file)==os.path.dirname(os.environ["AGENTRIX_READING_NOTE_FILE"])
+assert "AGENTRIX_READING_NOTE_FILE" not in os.environ
+assert os.path.isfile(os.path.join(os.path.dirname(settings_file),"launch-note.txt"))
 assert os.path.basename(settings_file).startswith("claude-settings.")
 with open(settings_file,encoding="utf-8") as source: settings=json.load(source)
 with open("claude-settings.json","w",encoding="utf-8") as output: json.dump({"path":settings_file,"settings":settings},output)
@@ -364,21 +369,32 @@ def hook(name,**values):
     return result.stdout
 write({"type":"user","uuid":"prompt","message":{"content":"Remote work"}})
 write({"type":"assistant","uuid":"reply","effort":"high","message":{"model":"claude-test","usage":{"speed":"fast"},"content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"/srv/project/a.py"}}]}})
-context={"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\\nSSH skill instructions."}}
-assert json.loads(hook("SessionStart",source="startup"))==context
-assert hook("SessionStart",source="resume")==b""
-assert json.loads(hook("SessionStart",source="compact"))==context
+for source in ("startup","resume","compact"):
+    assert hook("SessionStart",source=source)==b""
 hook("UserPromptSubmit",prompt="Remote work")
 hook("Notification",notification_type="idle_prompt",message="Idle")
 hook("Notification",notification_type="permission_prompt",message="Permission")
 write({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"read","is_error":True,"content":"hidden output"}]}})
 hook("Stop")
 `;
-  await fs.writeFile(path.join(fixture.home, 'bin', 'claude'), stub, { mode: 0o755 });
-  const skills = { files: [], instructions: 'SSH skill instructions.', key: 'a'.repeat(64) };
-  const readingNote = 'You run inside Agentrix. SSH reading note. Agentrix skill delivery: remote. SSH skill instructions.';
+
+test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts over the worker', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
+  const fixture = await fixtureFor(t, { nativeWorker: true });
+  const auth = await new SSHAuthServer().start(), events = [];
+  const project = { id: randomUUID(), kind: 'ssh', path: fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
+  await fs.writeFile(path.join(fixture.home, 'bin', 'claude'), claudeRoutingStub, { mode: 0o755 });
+  const guide = { key: 'a'.repeat(64), text: 'SSH routing rules.' };
+  let currentGuide = guide;
+  const readingNote = 'You run inside Agentrix. SSH reading note. Read {AGENTRIX_ROUTING}.';
   const claudeLead = { model: 'claude-opus-5-5[1m]', effort: 'high', fast: true };
-  const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, skills, claudeLead, onEvent: event => events.push(event) });
+  const noteUpdates = [];
+  const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, guide, claudeLead, onEvent: event => {
+    events.push(event);
+    if (event.type === 'agent-started' && event.agent === 'claude') {
+      noteUpdates.push(connection.request('launch-note', { sequence: event.sequence, note: readingNote, guide: currentGuide }).then(
+        value => ({ value }), error => ({ error })));
+    }
+  } });
   let output = '';
   connection.onData(data => { output += data; });
   t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
@@ -410,11 +426,13 @@ hook("Stop")
   connection.write('claude --effort low; printf "EFFORT_STATUS=%d\\n" $?\r');
   await waitFor(() => /\r?\nEFFORT_STATUS=2\b/.test(output), 'the SSH wrapper to refuse the effort override');
   assert.equal(events.filter(event => event.type === 'agent-started').length, 1);
+  currentGuide = { key: 'b'.repeat(64), text: 'Updated SSH routing rules.' };
   connection.write('claude --resume next\r');
   await waitFor(() => events.some(event => event.type === 'agent-exited' && event.agent === 'claude' && event.exitCode === 8), 'the new seat and hook settings on the resumed launch');
   connection.write('claude --version\r');
   await waitFor(() => events.some(event => event.type === 'agent-exited' && event.agent === 'claude' && event.exitCode === 7));
   assert.ok(events.some(event => event.type === 'agent-started' && event.command === '--version' && event.agent === 'claude'));
+  assert.deepEqual(await Promise.all(noteUpdates), [{ value: null }, { value: null }, { value: null }]);
 });
 
 test('Linux remote worker reads real files, enforces boundaries and hands a typed codex to the native host', { timeout: 40000, skip: process.platform === 'win32' }, async t => {

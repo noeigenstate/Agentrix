@@ -100,7 +100,7 @@ for (const kind of ['local', 'ssh']) test(`${kind} native spec applies only the 
     nativeSpecs: new Map(), runtimeDir: path.resolve('runtime'), eventServer: { name: 'pipe', address: '/socket' }, process: { platform: process.platform, env: {} },
     writeBootstrap() {}, createTerminalEnvironment: () => ({ codex_home: 'old-home' }), withoutAppImage: value => value,
     startupNote: () => 'context', READING_NOTE: 'reading', handoffFile: () => 'handoff',
-    skills: { delivery() {}, leadOptions: () => ({ model: 'fixture-seat', effort: 'high', fast: true }) }, integrationDir: 'integration', controlAddress: 'control' });
+    routing: { launch() {}, leadOptions: () => ({ model: 'fixture-seat', effort: 'high', fast: true }) }, integrationDir: 'integration', controlAddress: 'control' });
   defineMain(context, 'nativeEnvironment', 'nativeSpec');
   const cwd = kind === 'ssh' ? '/remote/project/sub' : path.resolve('project/sub');
   const spec = context.nativeSpec('t', 'codex', true, false, { cwd, providerSessionId: thread, model: 'fixture', effort: 'max', fast: false, codexHome: '/private/codex' });

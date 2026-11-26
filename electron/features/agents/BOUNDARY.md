@@ -40,7 +40,7 @@ Reader and source-test counts are covered by `tests/self-format-guard.test.cjs`.
 
 ## May import
 - `src/features/agents/AgentBrandIcon.ts` and `src/features/agents/Metric.tsx` (shared brand and count components)
-- `src/features/agents/skill-seats.ts` (Agent tab role groups and labels)
+- `src/features/agents/routing-seats.ts` (Agent tab role groups and labels)
 - `src/shared/**`
 - `electron/agent-actions.cjs`
 - `electron/prompt-queue.cjs`

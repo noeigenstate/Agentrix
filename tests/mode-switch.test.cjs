@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { updateBootstrapMode } = require('../electron/features/terminal-events/bootstrap-file.cjs');
-const { modeNote, skillInstructions } = require('../electron/features/skills/delivery.cjs');
+const { modeNote, launchNote } = require('../electron/features/routing/mode-notes.cjs');
 
 test('writing a session mode reports a switch only when it replaces the other mode', t => {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-mode-'));
@@ -21,17 +21,17 @@ test('writing a session mode reports a switch only when it replaces the other mo
 });
 
 test('the mode note names the new mode, and a conductor is sent to its instructions and tools', () => {
-  const conductor = modeNote(true, 'C:\\skills\\model-routing\\SKILL.md'), native = modeNote(false, 'C:/skills/model-routing/SKILL.md');
+  const conductor = modeNote(true, 'C:\\routing\\model-routing.md'), native = modeNote(false, 'C:/routing/model-routing.md');
   assert.match(conductor, /owner has just switched this conversation's mode/);
   assert.match(conductor, /in conductor mode/);
-  assert.match(conductor, /read and follow C:\/skills\/model-routing\/SKILL\.md; start roles with the start_role tool\./);
+  assert.match(conductor, /read and follow C:\/routing\/model-routing\.md; start roles with the start_role tool\./);
   assert.match(native, /in native mode/);
   assert.doesNotMatch(native, /model-routing|start_role/);
   assert.doesNotMatch(modeNote(true, undefined), /read and follow/);
 });
 
 test('conductor startup and mode switching both give the lead the role escalation rules', () => {
-  const startup = conductor => skillInstructions({ conductor, skills: [], globalFolder: '<home>/skills' });
+  const startup = conductor => launchNote({ conductor });
   for (const text of [startup(true), modeNote(true)]) {
     assert.match(text, /Read needsDecision from role_result\. Decide each listed question and continue or restart the role with your decision/);
     assert.match(text, /Ask the owner only about irreversible or outward-facing actions.+or product decisions they have not delegated/);
@@ -44,7 +44,7 @@ test('conductor startup and mode switching both give the lead the role escalatio
 });
 
 test('SSH conductor notes describe the tool connection and the lack of interactive role menus', () => {
-  const context = skillInstructions({ conductor: true, remote: true, skills: [], globalFolder: '<home>/skills' });
+  const context = launchNote({ conductor: true, remote: true, guidePath: '{AGENTRIX_ROUTING}' });
   assert.match(context, /SSH roles have no interactive menu for answer_role/);
   const change = modeNote(true, null, true);
   assert.match(change, /reopen it to connect the role tools/);
@@ -53,10 +53,10 @@ test('SSH conductor notes describe the tool connection and the lack of interacti
 });
 
 test('a running conductor is told a changed seat table once; native mode and an unchanged table tell nothing', t => {
-  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+  const { RoutingStore } = require('../electron/features/routing/store.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-routing-change-'));
   const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
-  const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
+  const store = new RoutingStore({ dataDir: path.join(root, 'profile'), guideFile: path.join(__dirname, '../resources/routing/model-routing.md'),
     getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   assert.equal(store.routingChange('p', 'session', undefined), null, 'native mode tells no seats');

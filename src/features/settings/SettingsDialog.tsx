@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe, MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Lightning, Keyboard, ImageSquare, ArrowLeft, ArrowsOut, ArrowsIn, X } from '@phosphor-icons/react';
+import {
+  Bell, House, ArrowsOutSimple, Terminal as TerminalIcon, Power, ArrowCounterClockwise, Monitor, Cpu, Info, SpeakerHigh, Globe,
+  MagnifyingGlassPlus, Microphone, BookOpen, FloppyDisk, Palette, Robot, Keyboard, ImageSquare, ArrowLeft, X,
+} from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, Project, Settings, Workspace } from '../../shared/types';
 import { VoiceModelSetting } from '../voice/VoiceButton';
 import { currentLanguage, t } from '../../shared/i18n';
@@ -12,7 +15,6 @@ import { TerminalFontSettings } from './TerminalFontSettings';
 import { UserAvatarSetting } from './UserAvatarSetting';
 import { ThemeSetting } from './ThemeSetting';
 import { Select } from '../../shared/Select';
-import { SkillsSettings } from './SkillsSettings';
 import { ProjectImagesSettings } from './ProjectImagesSettings';
 import { AboutSettings } from './AboutSettings';
 import { steps as ZOOM_STEPS } from '../../../electron/window-zoom.json';
@@ -26,7 +28,6 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
   const pane = useRef<HTMLDivElement>(null);
   const [activeSection, setActiveSection] = useState(initialSection);
   const [projectImages, setProjectImages] = useState(false);
-  const [enlarged, setEnlarged] = useState(false);
   // One category at a time: the sidebar chooses it and the pane beside it shows only that category.
   const sections = [
     { id: 'appearance', title: t('外观'), hint: t('主题、语言、材质与动画'), icon: <Palette size={17} /> },
@@ -34,12 +35,11 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
     { id: 'terminal', title: t('终端与编辑'), hint: t('终端、会话恢复与编辑器'), icon: <TerminalIcon size={17} /> },
     { id: 'agents', title: t('编码助手'), hint: t('Codex 与 Claude Code'), icon: <Robot size={17} /> },
     { id: 'runtime', title: t('运行方式'), hint: t('Claude 的 API key 与原生模式'), icon: <Cpu size={17} /> },
-    { id: 'skills', title: t('技能'), hint: t('系统自带的技能，和你自己的技能'), icon: <Lightning size={17} /> },
     { id: 'shortcuts', title: t('键盘快捷键'), hint: t('查看和修改快捷键'), icon: <Keyboard size={17} /> },
     { id: 'about', title: t('更新与关于'), hint: t('版本信息、应用更新与相关资源'), icon: <Info size={17} /> },
   ];
   const current = sections.find(section => section.id === activeSection) || sections[0];
-  const choose = (id: string) => { setProjectImages(false); setEnlarged(false); setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
+  const choose = (id: string) => { setProjectImages(false); setActiveSection(id); pane.current?.scrollTo({ top: 0 }); };
   useEffect(() => { dialog.current?.showModal(); }, []);
   // Up and down move between categories while the sidebar has focus.
   const navKeys = (event: React.KeyboardEvent) => {
@@ -48,7 +48,7 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
     const index = sections.findIndex(section => section.id === current.id), next = sections[(index + (event.key === 'ArrowDown' ? 1 : sections.length - 1)) % sections.length];
     choose(next.id); dialog.current?.querySelector<HTMLElement>(`[data-settings-tab="${next.id}"]`)?.focus();
   };
-  return <dialog className={`settings-dialog settings-paned${enlarged ? ' is-enlarged' : ''}`} ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
+  return <dialog className="settings-dialog settings-paned" ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="settings-shell">
       <aside className="settings-sidebar">
         <div className="settings-brand"><span className="eyebrow">{t('设置')}</span><h2>{t('工作台设置')}</h2></div>
@@ -56,7 +56,11 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
         <div className="settings-sidebar-footer"><button className="text-button" onClick={onGuide}><BookOpen size={15} />{t('使用指南')}</button><button className="text-button danger-text" onClick={quit}><Power size={15} />{t('退出应用')}</button></div>
       </aside>
       <div className="settings-main">
-        <header className={`settings-main-head${current.id === 'skills' ? ' has-tools' : ''}`}><h3>{projectImages ? t('项目缩略图') : current.title}</h3><p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p>{current.id === 'skills' && <button type="button" className="icon-button settings-enlarge" aria-label={t('放大')} title={enlarged ? t('恢复大小') : t('放大')} aria-pressed={enlarged} onClick={() => setEnlarged(value => !value)}>{enlarged ? <ArrowsIn size={18} /> : <ArrowsOut size={18} />}</button>}<button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button></header>
+        <header className="settings-main-head">
+          <h3>{projectImages ? t('项目缩略图') : current.title}</h3>
+          <p>{projectImages ? t('自动选择、固定图片与原有编号') : current.hint}</p>
+          <button type="button" className="icon-button settings-close" aria-label={t('关闭设置')} title={t('关闭设置')} onClick={close}><X size={18} /></button>
+        </header>
         <div className="settings-pane" ref={pane}>
       <section className="settings-section" id="settings-appearance" aria-label={t('外观')} hidden={current.id !== 'appearance' || projectImages}>
       <ThemeSetting theme={settings.theme} update={theme => update({ theme })} />
@@ -103,7 +107,6 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
       <AgentsSettings agents={agents} onChange={onAgents} visible={current.id === 'agents'} />
       </section>
       {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}><AgentRuntimeSettings projectId={projectId} focusOnOpen={focusOnOpen} codexPermissions={settings.codexPermissions} onCodexPermissions={codexPermissions => update({ codexPermissions })} claudeBackgroundTasks={settings.claudeBackgroundTasks} onClaudeBackgroundTasks={claudeBackgroundTasks => update({ claudeBackgroundTasks })} /></section>}
-      {current.id === 'skills' && <section className="settings-section skills-section" id="settings-skills" aria-label={t('技能')}><SkillsSettings projects={projects} /></section>}
       {current.id === 'shortcuts' && <ShortcutSettings settings={settings} update={update} />}
       <section className="settings-section" id="settings-about" aria-label={t('更新与关于')} hidden={current.id !== 'about'}>
       <AboutSettings updates={updates} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onDownloadPage={onDownloadPage} />

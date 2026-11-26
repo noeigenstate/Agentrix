@@ -1,4 +1,4 @@
-declare module '*electron/features/skills/role-rules.mjs' {
+declare module '*electron/features/routing/role-rules.mjs' {
   type TeamRole = import('../../shared/types').TeamRole;
   type RoleConfig = import('../../shared/types').RoleConfig;
   type RoleRuleCode = import('../../shared/types').RoleRuleCode;

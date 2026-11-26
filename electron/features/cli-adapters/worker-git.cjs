@@ -1,3 +1,7 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
 const blocked = new Set(['commit', 'push', 'restore', 'clean', 'stash', 'merge', 'rebase', 'cherry-pick', 'revert', 'update-ref', 'tag', 'switch', 'checkout']);
 const gitOptionsWithValue = new Set(['-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix', '--attr-source']);
 const shellCommandOption = {
@@ -65,4 +69,13 @@ function gitMutationInCommand(input, depth = 0) {
   return words.length > 0 && commandMutation(command, words, depth);
 }
 
-module.exports = { gitMutationInCommand };
+function isolatedRoot(cwd) {
+  try {
+    const git = args => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+    const root = fs.realpathSync.native(git(['rev-parse', '--show-toplevel']));
+    const main = fs.realpathSync.native(git(['worktree', 'list', '--porcelain', '-z']).split('\0')[0].slice('worktree '.length));
+    return path.relative(root, main) ? root : null;
+  } catch { return null; }
+}
+
+module.exports = { gitMutationInCommand, isolatedRoot };

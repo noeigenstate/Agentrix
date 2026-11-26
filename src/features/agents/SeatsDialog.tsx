@@ -15,8 +15,8 @@ import {
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, rowFor,
   sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, agentOfModel, allowsUltracode, withSlot,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
-} from './skill-seats';
-import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
+} from './routing-seats';
+import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/routing/role-rules.mjs';
 import { copyRole, roleName, RoleEditor, sameRoleConfig } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
 import './seats-dialog.css';
@@ -126,9 +126,9 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
     if (alive.current && next?.defaultsMoved?.length) setMoved(next.defaultsMoved);
   };
   const loadInfo = async () => {
-    if (!window.agentrix?.skillSeats) return;
+    if (!window.agentrix?.routingSeats) return;
     const version = ++readVersion.current;
-    const next = await window.agentrix.skillSeats(projectId ?? null, terminalId).catch(() => null);
+    const next = await window.agentrix.routingSeats(projectId ?? null, terminalId).catch(() => null);
     rememberMoved(next);
     if (!next || !alive.current || version !== readVersion.current) return;
     if (next.migrated) onMigration(next.migrated);
@@ -138,7 +138,7 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
   useEffect(() => {
     alive.current = true;
     void refresh(true);
-    const off = window.agentrix?.onSkills?.(() => { void loadInfo(); });
+    const off = window.agentrix?.onRouting?.(() => { void loadInfo(); });
     return () => { alive.current = false; readVersion.current++; off?.(); };
   }, []);
   useEffect(() => { setRefreshed(null); rememberMoved(given); }, [given]);
@@ -150,12 +150,12 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
 
   const refresh = async (opening = false) => {
     if (reading.current) { if (!opening) queued.current = true; return; }
-    if (!window.agentrix?.skillSeatsRefresh) return;
+    if (!window.agentrix?.refreshRouting) return;
     reading.current = opening ? 'dialog' : 'manual';
     setRefreshing(reading.current);
     const version = ++readVersion.current;
     try {
-      const next = await window.agentrix.skillSeatsRefresh(projectId ?? null, terminalId ?? null, opening ? 'dialog' : 'manual');
+      const next = await window.agentrix.refreshRouting(projectId ?? null, terminalId ?? null, opening ? 'dialog' : 'manual');
       if (next?.migrated) onMigration(next.migrated);
       // Main reports moves once. Keep the receipt even if another read wins the data refresh.
       rememberMoved(next);

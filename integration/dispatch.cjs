@@ -21,13 +21,12 @@ const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(
 const { projectTeam, recordFindings } = require(path.join(runtime, 'features/team/team.cjs'));
 const { RunInbox, runId, validText, readBoard } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
-const { plainReply, skillFrontMatter } = require(path.join(runtime, 'features/skills/session.cjs'));
-const { WorkerSkillProposals, findSkillProposalIndex } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { workerOf, agentOfModel, defaultWorkerRules, isReadOnly, word, count, workerRefusal } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
+const { isolatedRoot } = require(path.join(runtime, 'features/cli-adapters/worker-git.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const { launchSeat, liveSeatMap, launchSeatMap, parseSeatMap } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -41,25 +40,43 @@ const dispatchCompanions = Object.freeze(['role-tools.cjs', 'role-artifacts.cjs'
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs', 'features/agents/agent-command.cjs',
   'features/team/team.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
-  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
-  'features/skills/agent-seat.cjs', 'features/agents/call-seat.cjs',
+  'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
+  'features/routing/agent-seat.cjs', 'features/agents/call-seat.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
   'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
   'features/cli-adapters/workers.cjs', 'features/cli-adapters/worker-git.cjs', 'features/cli-adapters/manifests/worker.cjs',
   'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
-const runtimeFiles = () => {
-  const files = Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
-  // Packaging and SSH already carry this module. Keep the document alongside its parser without adding a file.
-  if (plainReply === undefined) files['features/skills/session.cjs'] += `\nmodule.exports.plainReply = ${JSON.stringify(plainReplyInstructions())};\n`;
-  return { ...files, 'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'), ...shimRuntimeFiles() };
-};
+const runtimeFiles = () => ({
+  ...Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
+  'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'),
+  ...shimRuntimeFiles(),
+});
 
-function plainReplyInstructions() {
-  if (plainReply !== undefined) return plainReply;
-  const source = fs.readFileSync(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), 'utf8');
-  return skillFrontMatter.frontMatter(source).body.trim();
-}
+const PLAIN_REPLIES = `# Plain replies
+
+## When this applies
+
+Read and follow this skill before every task in every session, across all projects and languages.
+
+## What to do
+
+1. Start with the result and any action the user needs to take. Give the details afterward.
+2. Explain what happened in the user's language and in everyday words.
+3. Explain unfamiliar technical terms in the same sentence where they first appear. Use product and tool names the user already uses, such as Claude Code and Git, as they are.
+
+## Rules
+
+- Describe what happened in place of made-up labels, internal names, task numbers, or module names.
+- Say “The confirmation dialog Agentrix should answer automatically now pops up, and the role waits there.” Avoid shorthand such as “permission regression / hook / gating.”
+- These rules guide your wording and the order of your reply. Follow the project's own reply format.
+
+## Done when
+
+- The reply opens with the result and any action the user needs to take.
+- It uses the user's language and everyday words.
+- It explains unfamiliar technical terms where they first appear.
+- It follows the project's reply format.`;
 
 const START_TIMEOUT = 30000;
 const RATE_INTERVAL = 5000;
@@ -242,20 +259,25 @@ function reportChangedFiles(event, changed) {
 }
 
 
-// The code-standard skill files in the worker's folder: the system skill's source and the project's extensions of it.
+// Read a project's base code standard first, followed by the extensions in its skill folders.
 function codeStandardFiles(cwd) {
-  const extensionPrefix = 'code-standard-';
-  const skillIn = (root, name) => fs.existsSync(path.join(cwd, root, name, 'SKILL.md')) ? [`${root}/${name}/SKILL.md`] : [];
-  const extensions = root => {
-    try { return fs.readdirSync(path.join(cwd, root)).filter(name => name.startsWith(extensionPrefix)).sort().flatMap(name => skillIn(root, name)); }
+  const roots = ['skills', '.claude/skills', '.codex/skills'], base = 'code-standard';
+  const skillIn = (root, name) => {
+    const file = root + '/' + name + '/SKILL.md';
+    try { return fs.lstatSync(path.join(cwd, file), { throwIfNoEntry: false })?.isFile() ? [file] : []; }
     catch { return []; }
   };
-  return [...skillIn('resources/skills', extensionPrefix.slice(0, -1)), ...['skills', '.claude/skills', '.codex/skills'].flatMap(extensions)];
+  const extensions = root => {
+    try { return fs.readdirSync(path.join(cwd, root)).filter(name => name.startsWith(base + '-')).sort().flatMap(name => skillIn(root, name)); }
+    catch { return []; }
+  };
+  const standards = roots.flatMap(root => skillIn(root, base)).slice(0, 1);
+  return [...standards, ...roots.flatMap(extensions)];
 }
 
 const STANDARD_LIMIT = 8 * 1024;
 function inlineStandards(options, files) {
-  if (options.small || files.length < 2 || files[0] !== 'resources/skills/code-standard/SKILL.md') return '';
+  if (options.small || !files[0]?.endsWith('/code-standard/SKILL.md')) return '';
   let remaining = STANDARD_LIMIT;
   try {
     const bodies = files.map(file => {
@@ -296,12 +318,9 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
   parts.push(standingRules(options));
-  parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
-    + 'Record suggested skill changes in finish_role.skillProposals. Unapproved changes are saved in the project’s proposal archive; only an isolated worker worktree is restored. '
-    + 'Shared or managed files are report-only because their author is unknown.');
   if (options.ledger || team || options.small) parts.push('# Handing back\n\nRecord the facts, decisions and pitfalls the next worker must know in finish_role.findings '
     + '(file:line where it helps). They are added to the shared context.');
-  parts.push(plainReplyInstructions());
+  parts.push(PLAIN_REPLIES);
   return Buffer.concat([Buffer.from(parts.join('\n\n') + '\n\n# Task\n\n'), brief]);
 }
 
@@ -381,7 +400,7 @@ function gitChangeText({ before, after, refs = [], refCount = 0, refsUnavailable
 
 function renderDispatchEnd(event) {
   const { id, agent, exitCode, reason, rate, scope, refused, needsDecision, result, routing, fallback,
-    warnings = [], skillProposals, skillChangesLeftLive, interventions, stops, treeStopFailure, gitChange } = event;
+    warnings = [], interventions, stops, treeStopFailure, gitChange } = event;
   if (!agent) {
     const label = result.source === 'lab' ? (reason === 'killed' ? 'stopped' : reason) : 'error';
     const failure = warnings.find(value => value.code === 'lab_dispatch_failed');
@@ -400,13 +419,9 @@ function renderDispatchEnd(event) {
     + (gitChange ? gitChangeText(gitChange) : '')
     + (refused.count ? ` · refused ${refused.count}${refused.first ? ': ' + refused.first.action : ''}` : '') + restore + restoredText
     + (bookkeeping ? ' · WARNING: team bookkeeping failed: ' + bookkeeping : '')
-    + (skillProposals ? ` · ${skillProposals} skill proposals restored and awaiting the lead` : '')
-    + (skillChangesLeftLive ? ` · ${skillChangesLeftLive} skill changes left live (author unknown)` : '')
-    + warnings.filter(value => value.code === 'skill_proposal').map(value => ' · ' + value.detail).join('')
     + (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '')
     + (treeStopFailure ? ' · tree stop failed: ' + treeStopFailure : '')
-    + ` · out ${result.out}${fallbackText(fallback)}${routing ? ' · routing ' + routing : ''}${needsDecision ? ' · needs decision' : ''}`
-    + (result.skillProposalDetails ? ` · skill proposal index ${oneLine(result.skillProposalDetails.indexPath)}` : '');
+    + ` · out ${result.out}${fallbackText(fallback)}${routing ? ' · routing ' + routing : ''}${needsDecision ? ' · needs decision' : ''}`;
 }
 
 function renderNotice({ id, code, detail }) {
@@ -422,7 +437,6 @@ function renderNotice({ id, code, detail }) {
     case 'scope_restore_failed': return `scope restore failed: ${detail}`;
     case 'runtime_failed': return `runtime failed ${id}: ${detail}`;
     case 'finalization_failed': return `finalization failed: ${detail}`;
-    case 'skill_recovery_failed': return `skill recovery failed: ${detail}`;
     case 'deferred_control_unavailable': return 'deferred control receipts unavailable';
   }
 }
@@ -1151,7 +1165,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   let finalize, options, worker, usesAppServer, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let workerStartedAt;
-  let team = null, registered = false, teamFinished = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
+  let team = null, registered = false, teamFinished = false;
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
   let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
   let treeStop = Promise.resolve(), stoppingChild, stoppingRuntime, treeStopError, workerProcess, nativeStopUnconfirmed;
@@ -1237,12 +1251,6 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }
     return total;
   };
-  const restoreSkills = changedFiles => {
-    if (!skillGuard || options.readOnly) return;
-    const total = skillGuard.finish(id, changedFiles);
-    skillProposals = skillGuard.restoredCount;
-    skillChangesLeftLive = total - skillProposals;
-  };
   const recordTeam = async report => {
     if (!registered || teamFinished) return null;
     teamFinished = true;
@@ -1267,21 +1275,20 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     if (!options) return;
     // Even without a session, the pane needs a declared row before it can retain the failure.
     send({ ...assignment(), model: 'unreported', effort: null, fast: null, declared: declared(), unconfirmed: true });
-    // A real timed-out process is stopped next; recover after it exits, before reporting its final proposal count.
+    // A real timed-out process is stopped next and reports its end after it exits.
     if (child?.pid && !exited && child.exitCode === null) return;
-    try { restoreSkills(); } catch {}
     send({ type: 'dispatch-end', id, model: 'unreported', effort: null, fast: null, exitCode, reason: 'unconfirmed',
-      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+      inputTokens: null, cachedTokens: null, reportedCostUsd: null, outputTokens: null, totalOutputTokens: null, activeMs: null, verdict: 'unverified', endedAt: Date.now() });
     endSent = true;
   };
   const reported = () => ({ agent: options.agent, ...(unconfirmed ? declared() : output.routing()) });
   const ended = ({ exitCode, reason, rate = null, scope = scopeReport(false), bookkeeping, restore,
     resultSource = 'final-text', needsDecision = null, routing = null, treeStopFailure }) => {
-    const warnings = [restore, bookkeeping, ...Array.from(skillGuard?.notes ?? [], detail => ({ code: 'skill_proposal', detail }))].filter(Boolean);
-    const result = { source: resultSource, out: options.out, ...(skillGuard?.details && { skillProposalDetails: skillGuard.details }) };
+    const warnings = [restore, bookkeeping].filter(Boolean);
+    const result = { source: resultSource, out: options.out };
     const gitChange = beforeGit && compareGit(beforeGit, gitState(options.cwd));
     signal('ended', { ...reported(), exitCode, reason, rate, scope, needsDecision, routing, result,
-      refused: { count: refused.length, ...(refused.length && { first: refused[0] }) }, skillProposals, skillChangesLeftLive, interventions, stops,
+      refused: { count: refused.length, ...(refused.length && { first: refused[0] }) }, interventions, stops,
       ...(gitChange && { gitChange }), ...(treeStopFailure && { treeStopFailure }),
       ...(warnings.length && { warnings }) });
   };
@@ -1529,7 +1536,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
     if (scoped || options.readOnly) before = snapshot(options.cwd, repo);
     const checking = scoped || Boolean(before);
-    skillGuard = new WorkerSkillProposals(options, env, repo);
+    const restoreRoot = scoped && !options.readOnly ? isolatedRoot(options.cwd) : null;
     const dirtyBytes = new Map();
     let capturedBytes = 0;
     for (const { file } of (options.readOnly ? [] : before?.status ?? [])) {
@@ -1543,7 +1550,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }
     function restoreScope(files) {
       if (!files?.length) return;
-      if (scopeRestoreBlocked || !skillGuard.restoreRoot) { scopeRestoreReport = { code: 'scope_left_live', detail: true }; return; }
+      if (scopeRestoreBlocked || !restoreRoot) { scopeRestoreReport = { code: 'scope_left_live', detail: true }; return; }
       let restored = 0, quarantine;
       const restoredNote = () => { scopeRestoreReport = { code: 'scope_restored', count: restored, quarantine }; };
       const preserveCurrent = (filename, file) => {
@@ -1592,7 +1599,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         .map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
       const outbox = after && send.directory && path.relative(after.root, send.directory).split(path.sep).join('/');
       const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file) && !(outbox && file.startsWith(outbox + '/')))) ?? null;
-      return { after, changed, outOfScope: changed && changed.filter(file => !options.readOnly && !matches(options.allow, file)) };
+      return { changed, outOfScope: changed && changed.filter(file => !options.readOnly && !matches(options.allow, file)) };
     };
     if (labMeter) options.lab = true;
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, repo, before: checking ? before : undefined });
@@ -1745,11 +1752,9 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       log.write(JSON.stringify(event) + '\n');
     }
     finalize = async result => {
-      const { after, changed, outOfScope } = inspectScope();
+      const { changed, outOfScope } = inspectScope();
       const restore = () => {
         checkBoard();
-        // Skill proposals keep their original snapshot/ownership policy; N1 covers ordinary files only.
-        restoreSkills(after?.status.map(entry => entry.file));
         // A read-only worker has no approved writes. Tree snapshots and the board
         // cannot tell shell writes apart from owner or peer edits, even in a linked worktree.
         if (!options.readOnly) restoreScope(outOfScope);
@@ -1798,7 +1803,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         ...(stopFailure && { treeStopFailure: stopFailure }),
         verdict: routeVerdict(),
         ...(outOfScope && !options.readOnly ? { outOfScopeCount: outOfScope.length } : {}),
-        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() },
+        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), endedAt: Date.now() },
       filesChanged));
       endSent = true;
       ended({ exitCode, reason, rate, scope, bookkeeping, restore: scopeRestoreReport, needsDecision, resultSource,
@@ -2006,7 +2011,6 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       try { return await finalize({ code: 1, killedBy: killed || segmentStopped ? 'SIGTERM' : null }); }
       catch (failure) { notice('finalization_failed', oneLine(failure.message)); }
     }
-    try { restoreSkills(); } catch (recovery) { notice('skill_recovery_failed', oneLine(recovery.message)); }
     failed(error.message, 1, options ? 'runtime' : 'admission');
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
@@ -2015,7 +2019,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason, ...usage(),
         ...(stopFailure && { treeStopFailure: stopFailure }),
-        verdict: routeVerdict(), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+        verdict: routeVerdict(), ...(refused.length && { refused }), endedAt: Date.now() });
       endSent = true;
       ended({ exitCode: 1, reason, bookkeeping, treeStopFailure: stopFailure });
     }
@@ -2043,10 +2047,10 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   }
 }
 
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, dispatchCompanions,
+module.exports = { PLAIN_REPLIES, argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, dispatchCompanions,
   dispatchEvent, detachedEnd, renderDispatchLine, renderDispatchStart,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
-  answerDetachedRole, findSkillProposalIndex };
+  answerDetachedRole };
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(error => {
     console.error('[dispatch] ' + oneLine(error.message));

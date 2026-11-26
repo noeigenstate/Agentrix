@@ -49,17 +49,17 @@ function useSeats(terminalId: string | undefined, sessionId: string | null | und
   const [info, setInfo] = useState<SeatsInfo | null>(null);
   useEffect(() => {
     const api = typeof window === 'undefined' ? undefined : window.agentrix;
-    if (!terminalId || !api?.skillSeats) return;
+    if (!terminalId || !api?.routingSeats) return;
     let active = true, request = 0;
     const load = () => {
       const mine = ++request;
-      void api.skillSeats(null, terminalId).then(
+      void api.routingSeats(null, terminalId).then(
         next => { if (active && request === mine) setInfo(next); },
         () => { if (active && request === mine) setInfo(null); },
       );
     };
     setInfo(null); load();
-    const off = api.onSkills?.(load);
+    const off = api.onRouting?.(load);
     return () => { active = false; off?.(); };
   }, [terminalId, sessionId]);
   return info;

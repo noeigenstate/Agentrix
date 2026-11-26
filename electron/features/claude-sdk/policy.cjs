@@ -9,7 +9,6 @@ const DENIALS = {
   invalid_path: '任务策略无法验证目标路径。',
   invalid_command: '任务策略无法验证命令。',
   outside_scope: '目标文件不在任务授权的编辑范围内。',
-  skill_not_authorized: '修改该技能需要明确授权其文件路径。',
 };
 const READ = new Set(READ_TOOLS);
 const EDIT = new Set(EDIT_TOOLS);

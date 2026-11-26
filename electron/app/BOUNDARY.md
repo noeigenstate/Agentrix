@@ -23,7 +23,7 @@ Assembles terminal sessions, IPC, window state and presentation from application
 
 - `registerApplicationIpc` (`electron/app/application-ipc.cjs`) — application IPC registration and renderer sender checks
 - `createPublicState` (`electron/app/public-state.cjs`) — project and terminal lookups, ordering and the public workspace snapshot
-- `createSessionPresentation` (`electron/app/session-presentation.cjs`) — reading history, conversation batches and skill session notes
+- `createSessionPresentation` (`electron/app/session-presentation.cjs`) — reading history, conversation batches and routing launch notes
 - `createProjectPreviews` (`electron/app/project-previews.cjs`) — generated image and themed project previews
 - `createWindowHost` (`electron/app/window-host.cjs`) — theme, menus, indicators and completion notifications
 - `openMainWindow` (`electron/app/window-startup.cjs`) — primary and secondary window setup with deferred Lab loading
@@ -31,6 +31,7 @@ Assembles terminal sessions, IPC, window state and presentation from application
 - `createUsageHost` (`electron/features/agents/usage-host.cjs`) — usage meters, account watchers, CLI checks and model probes
 
 ## May import
+- `electron/features/routing/store.cjs` (remote guide payload)
 - `electron/project-svg.cjs` (project image theming)
 - `electron/conversation-timing.cjs` (publication delay)
 - `electron/app/mac-menu.cjs` (native menu template)

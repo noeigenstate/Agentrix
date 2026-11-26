@@ -5,7 +5,7 @@ const { createHmac } = require('node:crypto');
 const { reason } = require('../../shared/reason.cjs');
 
 // The events Claude Code posts to main (hook-server.cjs). SessionStart cannot be an HTTP hook and stays the command that
-// delivers skills; MessageDisplay holds the screen until it is answered and waits for the T6 rendering.
+// reports the conversation path; MessageDisplay holds the screen until it is answered and waits for the T6 rendering.
 const HTTP_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
   'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionEnd',
   'Elicitation', 'ElicitationResult'];
@@ -65,8 +65,8 @@ function powershellHook({ powershellPath, script, pipeName, projectId, sessionKe
 }
 // The hook command of a zsh or Bash terminal, which Claude Code runs with sh: every word is quoted for it.
 const shQuote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
-const posixHook = ({ node, helper, socket, projectId, sessionKey, noteFile }) => kind => ['ELECTRON_RUN_AS_NODE=1',
-  ...[node, helper, 'claude-hook', socket, projectId, sessionKey].map(shQuote), kind, ...(kind === 'session' ? [shQuote(noteFile || '')] : [])].join(' ');
+const posixHook = ({ node, helper, socket, projectId, sessionKey }) => kind => ['ELECTRON_RUN_AS_NODE=1',
+  ...[node, helper, 'claude-hook', socket, projectId, sessionKey].map(shQuote), kind].join(' ');
 
 // The --settings a terminal's wrapper passes Claude Code, which merge with the user's own: HTTP hooks for every event but
 // SessionStart, or command hooks for all of them. Hidden roles use a synchronous permission decision on both channels.

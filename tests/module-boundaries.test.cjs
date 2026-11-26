@@ -10,6 +10,15 @@ test('every BOUNDARY.md holds against the code', () => {
   assert.deepEqual(problems, []);
 });
 
+test('the packaged routing guide is declared alongside its owning module', () => {
+  const guide = 'resources/routing/model-routing.md';
+  const root = path.join(__dirname, '..');
+  assert.ok(fs.statSync(path.join(root, guide)).isFile());
+  assert.ok(fs.readFileSync(path.join(root, 'electron/features/routing/BOUNDARY.md'), 'utf8').includes(guide));
+  const { build } = require('../package.json');
+  assert.ok(build.extraResources.some(resource => resource.from === 'resources/routing' && resource.to === 'routing'));
+});
+
 test('globs: * stays within a name, ** crosses folders', () => {
   assert.ok(globRegExp('src/features/terminal/**').test('src/features/terminal/TerminalPane.tsx'));
   assert.ok(globRegExp('src/features/terminal/**').test('src/features/terminal/a/b.ts'));

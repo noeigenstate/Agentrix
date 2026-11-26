@@ -19,26 +19,16 @@ test('additionalContext, systemMessage, displayContent, continue and decision:bl
 
 test('PowerShell status hooks report events silently and do not consume the session note', {
   skip: process.platform !== 'win32' && 'requires Windows PowerShell',
-}, async t => {
-  const folder = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agentrix-command-hook-'));
-  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
-  const noteFile = path.join(folder, 'note.txt'), manifest = path.join(folder, 'manifest.md');
-  const { deliveryMarker, digest } = require('../electron/features/skills/session.cjs');
-  fs.writeFileSync(manifest, 'Fixture skill instructions.');
-  fs.writeFileSync(noteFile, 'Fixture. ' + deliveryMarker({ manifest, fingerprint: digest('fixture') }));
-  for (const kind of new Set(Object.values(COMMAND_KINDS).filter(kind => kind !== 'session'))) {
-    const result = await runPowerShellHook(kind, { session_id: 'fixture', source: 'startup', notification_type: 'permission_prompt' }, { noteFile });
+}, async () => {
+  for (const kind of new Set(Object.values(COMMAND_KINDS))) {
+    const result = await runPowerShellHook(kind, { session_id: 'fixture', source: 'startup', notification_type: 'permission_prompt' });
     assert.deepEqual(result, { code: 0, stdout: '', stderr: '' }, kind);
   }
-  const result = await runPowerShellHook('session', { session_id: 'fixture', source: 'startup' }, { noteFile });
-  assert.equal(result.code, 0); assert.equal(result.stderr, '');
-  assert.deepEqual(JSON.parse(result.stdout).hookSpecificOutput, { hookEventName: 'SessionStart', additionalContext: 'Agentrix skill instructions:\nFixture skill instructions.' });
 });
-
 test('the settings generators emit only http hooks but SessionStart, or the declared command fallback', () => {
   const eventServer = { name: 'agentrix-pipe', address: '/tmp/agentrix.sock' };
   const shells = { powershell: { posix: false, powershellPath: 'C:\\Windows\\powershell.exe', script: 'C:\\agentrix\\claude-hook.ps1' },
-    posix: { posix: true, node: '/agentrix/node', helper: '/agentrix/agent-event.cjs', noteFile: '/runtime/s-skills.txt' } };
+    posix: { posix: true, node: '/agentrix/node', helper: '/agentrix/agent-event.cjs' } };
   for (const platform of ['win32', 'darwin', 'linux']) for (const [kind, shell] of Object.entries(shells)) {
     const hooks = terminalHooks({ port: 4242, terminalId: 'term 1', sessionKey: 'session-key', eventServer, env: {}, cwd: '/project', shell, platform, home: '/home', read: () => '{}' });
     const label = `${platform} ${kind}`;
@@ -49,8 +39,8 @@ test('the settings generators emit only http hooks but SessionStart, or the decl
       const [entry] = settings.hooks.SessionStart;
       assert.equal(entry.hooks.length, 1);
       assert.equal(entry.hooks[0].type, 'command');
-      assert.equal(entry.hooks[0].async, undefined, `${label}: SessionStart delivers skills before the session starts`);
-      assert.match(entry.hooks[0].command, kind === 'posix' ? / 'claude-hook' .* session '\/runtime\/s-skills\.txt'$/ : /claude-hook\.ps1" .* -Kind session$/);
+      assert.equal(entry.hooks[0].async, undefined, `${label}: SessionStart reports the conversation path`);
+      assert.match(entry.hooks[0].command, kind === 'posix' ? / 'claude-hook' .* session$/ : /claude-hook\.ps1" .* -Kind session$/);
     };
     const http = JSON.parse(hooks.settings.http);
     assert.deepEqual(Object.keys(http.hooks).sort(), [...HTTP_EVENTS, 'SessionStart'].sort(), label);
@@ -64,7 +54,7 @@ test('the settings generators emit only http hooks but SessionStart, or the decl
     for (const [event, commandKind] of Object.entries(COMMAND_KINDS)) {
       const [hook] = fallback.hooks[event][0].hooks;
       assert.equal(hook.type, 'command');
-      assert.ok(hook.command.endsWith(kind === 'posix' ? ` ${commandKind}` : ` -Kind ${commandKind}`) || commandKind === 'session', `${label}: ${event}`);
+      assert.ok(hook.command.endsWith(kind === 'posix' ? ` ${commandKind}` : ` -Kind ${commandKind}`), `${label}: ${event}`);
       assert.equal(hook.async === true, commandKind === 'progress' || platform === 'win32' && !['session', 'permission', 'stop-failed'].includes(commandKind), `${label}: ${event} async`);
     }
     sessionStart(fallback);

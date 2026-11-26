@@ -178,7 +178,7 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
 13. **A network error before any test.** `npm ci` failing with `ECONNRESET` ("network read") in "Install locked
    dependencies" is the runner's connection, not the release: no smoke ran and none left a picture. The install steps
    retry once by themselves; if it still fails, re-run the failed jobs under the session's publication authorization and the release publishes
-   when they pass. Hand the diagnosis to Codex (read-only, the token only inside its scripts) per `model-routing`.
+   when they pass. Hand the diagnosis to Codex (read-only, the token only inside its scripts) per the routing guide.
 14. **Offline completion fixtures need received input.** A fresh task fixture includes a `user_message`, not only
    `task_started` and `task_complete`. Those callbacks must never rearm notifications themselves. Keep historical
    completed/resumed fixture records distinct; use the actual conversation reader and store in the regression.

@@ -59,7 +59,6 @@ const finishRole = {
     needsDecision: list(object({ question: string, options: list(object({ label: string, effect: string })), recommendation: string })),
     needsApproval: list(object({ action: string, reason: string })),
     findings: list({ ...string, maxLength: 1000 }, 20),
-    skillProposals: list(string),
     verification: object({
       ran: list(object({ command: string, result: { ...string, enum: ['pass', 'fail', 'skipped'] }, note: string })),
       unverified: list(string),
@@ -150,22 +149,6 @@ function roleResultFields({ format, version, runId, ...result }) {
     ...(result.source === 'legacy-heading' && { legacyNeedsDecision: true }) };
 }
 
-async function readSkillProposalDetails(details, runId, indexPath = details?.indexPath) {
-  if (details && !details.previewsInIndex) return details;
-  if (!indexPath) return details;
-  try {
-    const folder = path.dirname(indexPath);
-    if (path.basename(indexPath) !== 'index.json' || path.basename(path.dirname(path.dirname(folder))) !== 'skill-proposals'
-      || !privateFolder(await fs.lstat(folder)) || path.relative(folder, await fs.realpath(folder))) throw new Error('Invalid skill proposal archive');
-    const archive = JSON.parse(await readStamp(folder, 'index.json', 128 * 1024 * 1024));
-    if (archive.version !== 1 || archive.runId !== runId || !Array.isArray(archive.proposals)
-      || details && archive.proposals.length !== details.count) throw new Error('Invalid skill proposal index');
-    return { indexPath, count: archive.proposals.length, proposals: archive.proposals };
-  } catch {
-    return details && { ...details, notice: 'The full skill proposal index is no longer available.' };
-  }
-}
-
 async function stampRoleArtifacts({ folder, token }, state, now = Date.now()) {
   try {
     if (!NAME.test(path.basename(folder)) || !privateFolder(await fs.lstat(folder)) || await readStamp(folder, MARKER, 36) !== token) return;
@@ -248,4 +231,4 @@ async function sweepRoleArtifacts(root, { now = Date.now(), maxFolders = MAX_FOL
 }
 
 module.exports = { createRoleArtifacts, stampRoleArtifacts, trackRoleProcess, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION,
-  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleResultFields, readSkillProposalDetails };
+  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleResultFields };

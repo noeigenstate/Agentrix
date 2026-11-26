@@ -109,7 +109,7 @@ function createDispatchIntake(deps) {
     const calls = s.calls || AgentCalls.forTerminal(sessions, id, () => {
       const helperPids = new WeakMap(), current = () => sessions.get(id);
       return new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
-        roles: () => (current()?.remoteConnection || current()?.terminal)?.appliedRouting?.roles ?? deps.skills?.sessionRoles?.(project.id) ?? null,
+        roles: () => (current()?.remoteConnection || current()?.terminal)?.appliedRouting?.roles ?? deps.routing?.sessionRoles?.(project.id) ?? null,
         dispatchAlive: async call => {
           if (project.kind === 'ssh') return null;
           let pid = call.helperPid || helperPids.get(call);

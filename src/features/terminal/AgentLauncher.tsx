@@ -21,17 +21,17 @@ function useLauncherRouting(projectId: string) {
   const [routing, setRouting] = useState<{ projectId: string; info: SeatsInfo | null } | null>(null);
   useEffect(() => {
     const api = window.agentrix;
-    if (!api?.skillSeats) return;
+    if (!api?.routingSeats) return;
     let active = true, request = 0;
     const load = () => {
       const mine = ++request;
-      void api.skillSeats(projectId, null).then(
+      void api.routingSeats(projectId, null).then(
         info => { if (active && request === mine) setRouting({ projectId, info }); },
         () => { if (active && request === mine) setRouting(null); },
       );
     };
     load();
-    const off = api.onSkills?.(load);
+    const off = api.onRouting?.(load);
     return () => { active = false; off?.(); };
   }, [projectId]);
   return routing?.projectId === projectId ? routing.info : null;

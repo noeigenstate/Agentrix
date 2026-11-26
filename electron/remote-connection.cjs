@@ -52,11 +52,6 @@ class RemoteLink {
     // Put channel first so the worker can reject an oversized line before parsing the full payload.
     if (!this.closed && this.child.stdin.writable) this.child.stdin.write(JSON.stringify({ channel: message.channel, ...message }) + '\n');
   }
-  open(message) {
-    const skillsKey = message.skills?.key || null;
-    this.send({ ...message, skillsKey, skills: skillsKey && skillsKey === this.skillsKey ? null : message.skills });
-    this.skillsKey = skillsKey;
-  }
   receive(text) {
     this.buffer += text;
     let index;
@@ -98,7 +93,7 @@ function linkFor(ssh, options) {
 // A terminal of an SSH project, with its requests for the files, Git and conversations there.
 class RemoteConnection {
   constructor(project, options, connect = linkFor) {
-    const { auth, sessionKey, onEvent, onReady, codingPath, readingNote = '', skills = null } = options;
+    const { auth, sessionKey, onEvent, onReady, codingPath, readingNote = '', guide = null } = options;
     const dispatchFile = path.join(options.integrationDir, 'dispatch.cjs');
     const { runtimeFiles, dispatchCompanions } = require(dispatchFile);
     const dispatchHelper = fs.readFileSync(dispatchFile, 'utf8'), dispatchModules = runtimeFiles();
@@ -117,7 +112,7 @@ class RemoteConnection {
       if (seconds > 60) this.fail(new Error('SSH 连接超时。请确认主机可连接，且远端已安装 Python 3 和 Bash。'));
     }, 1000);
     this.connectTimer.unref?.();
-    this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills, native: options.native === true,
+    this.link.send({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, guide, native: options.native === true,
       allowBackgroundTasks: options.allowBackgroundTasks === true, claudeLead: options.claudeLead ?? null,
       dispatchHelper, dispatchModules, dispatchCompanions: companions });
   }

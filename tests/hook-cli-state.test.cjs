@@ -21,7 +21,7 @@ for (const [hookEvent, kind] of Object.entries(hooks)) test(hookEvent + ' is sil
 test('Bash, zsh and PowerShell register matching observation hooks', () => {
   // One generator writes every wrapper's settings; the command fallback keeps these kinds in every shell.
   const shells = { powershell: { posix: false, powershellPath: 'C:\Windows\powershell.exe', script: 'C:\agentrix\claude-hook.ps1' },
-    posix: { posix: true, node: '/agentrix/node', helper: '/agentrix/agent-event.cjs', noteFile: '/runtime/note' } };
+    posix: { posix: true, node: '/agentrix/node', helper: '/agentrix/agent-event.cjs' } };
   for (const [name, shell] of Object.entries(shells)) {
     const { settings } = terminalHooks({ port: 1, terminalId: 'terminal', sessionKey: 'capability', eventServer: { name: 'pipe', address: '/socket' }, env: {}, cwd: '/project',
       shell, platform: 'linux', home: '/home', read: () => '{}' });

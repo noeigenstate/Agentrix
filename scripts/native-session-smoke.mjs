@@ -14,7 +14,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor, timeoutScale } from './wait.mjs';
 import { withGuiLock } from './gui-lock.mjs';
 import { chooseFromAppMenu } from './app-menu-helper.mjs';
-import { roleKind, roleLocks } from '../electron/features/skills/role-rules.mjs';
+import { roleKind, roleLocks } from '../electron/features/routing/role-rules.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
@@ -448,7 +448,7 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
   roles.push({ id: 'frontend', name: '前端', duty: '前端开发', detail: '界面组件、状态、样式与交互', outputs: '界面改动、截图',
     kind: 'author', source: 'library', enabled: false, fresh: false, locked: roleLocks('author', 'library'),
     defaultEnabled: false, defaultFresh: false, inherits: 'developer' });
-  const routing = { ...team, roles, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors, fresh,
+  const routing = { ...team, roles, lead: 'orchestrator', leadAgent: 'claude', authors, fresh,
     leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer },
     template: { roles: {}, conductor: true }, config: null, current: null, currentRoles: null,
     routing: { layer: 'template', state: 'absent', remote: false, path: null, digest: null, actions: [] },
@@ -462,7 +462,7 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
       return cfg.mode === 'hold' ? new Promise(resolve => { globalThis.__panelRelease = () => resolve(result); }) : result;
     });
     ipcMain.handle('native:run-options', () => ({ ok: true, value: { permissions: 'config' } }));
-    for (const channel of ['skills:seats', 'skills:seats-refresh']) {
+    for (const channel of ['routing:seats', 'routing:refresh']) {
       ipcMain.removeHandler(channel);
       ipcMain.handle(channel, () => ({ ok: true, value: seats }));
     }

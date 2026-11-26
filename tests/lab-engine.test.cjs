@@ -989,12 +989,13 @@ test('the lab copy of the real dispatch helper starts Codex on the file credenti
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, content);
   }
-  const { commandOf } = require(path.join(directory, 'dispatch.cjs'));
+  const { commandOf, PLAIN_REPLIES } = require(path.join(directory, 'dispatch.cjs'));
+  assert.equal(PLAIN_REPLIES, require(helper).PLAIN_REPLIES);
   assert.deepEqual(commandOf({ agent: 'codex' }, true), ['-c', 'cli_auth_credentials_store="file"', 'app-server', '--listen', 'stdio://']);
   assert.equal(commandOf({ agent: 'claude', model: 'm', effort: 'high', permission: 'plan' }, true).includes('-c'), false);
   assert.deepEqual(require(helper).commandOf({ agent: 'codex' }), ['app-server', '--listen', 'stdio://'], 'regular dispatch preserves the configured account store');
   assert.deepEqual(Object.keys(modules).filter(name => name !== 'dispatch.cjs').sort(),
-    Object.keys(require(helper).runtimeFiles()).filter(name => name !== 'features/native-session/routing.cjs').map(name => 'electron/' + name).sort());
+    Object.keys(require(helper).runtimeFiles()).map(name => 'electron/' + name).sort());
   // The carried intercept module sits in no shim folder there: a worker's env gets no shims, no hooks, no pass-through.
   const { withShims } = require(path.join(directory, 'electron/shims/intercept.cjs'));
   const worker = withShims({ PATH: 'lab-tools' }, { depth: 1, runId: 'lab-run', proof: 'lab-proof' });

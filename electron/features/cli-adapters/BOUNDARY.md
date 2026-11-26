@@ -28,6 +28,7 @@ Git approval checks recognize explicit subcommands. The final snapshot can detec
 
 - `workerOf` (`electron/features/cli-adapters/workers.cjs`) — the CJS worker registry for dispatch, including CLI argv, normalized output, permission and standing rules.
 - `workerRefusal` (`electron/features/cli-adapters/workers.cjs`) — shared command and file scope decisions for worker approvals. The Claude worker policy also exposes it with the role's access level bound.
+- `isolatedRoot` (`electron/features/cli-adapters/worker-git.cjs`) — resolves the linked Git worktree root for dispatch scope restoration.
 - `worker-manifests` (`electron/features/cli-adapters/manifests/worker.cjs`) — the carried install floors and ordered model matches projected from the shared manifests.
 
 ## May import

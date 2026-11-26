@@ -104,7 +104,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
   useEffect(() => {
     const api = window.agentrix, session = terminal.sessionId, id = terminal.id;
     const facet = screenOf(agent), picker = facet?.picker, echo = facet?.echo, matches = facet?.inputMatches;
-    if (!agent || !session || !picker || !echo || !matches || !api?.skillSeats || !api.answerTerminal) return;
+    if (!agent || !session || !picker || !echo || !matches || !api?.routingSeats || !api.answerTerminal) return;
     let active = true, running = false, loading = false, seats: SeatsInfo | null = null, reads = 0;
     let failed = '', scope = '', previous: AgentSettings | null = null, observed: Partial<AgentSettings> = {};
     const clearFailure = () => { if (failed) { failed = ''; setLeadRoutingFailure(scope, null); } };
@@ -186,11 +186,11 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
         if (running && previousTarget !== targetKey(target())) clearPending();
         void syncLead();
       };
-      void api.skillSeats(projectId, id).then(accept, () => { if (currentRead()) loading = false; });
+      void api.routingSeats(projectId, id).then(accept, () => { if (currentRead()) loading = false; });
     };
     wake.current = () => { void syncLead(); };
     load();
-    const off = api.onSkills?.(load);
+    const off = api.onRouting?.(load);
     const unsubscribe = subscribeScreen(id, wake.current);
     return () => { active = false; clearFailure(); clearPending(); wake.current = null; off?.(); unsubscribe(); };
   }, [agent, projectId, terminal.id, terminal.sessionId]);

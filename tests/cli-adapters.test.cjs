@@ -17,7 +17,7 @@ const { adapters, adapterOf, adapterOfModel, agentOfModel, createAdapter, bindNa
 const { CAPABILITY_KEYS, UNSUPPORTED, UNVERIFIED_VERSION, support } = require('../electron/features/cli-adapters/capabilities.mjs');
 const claudeRuntime = require('../electron/features/claude-runtime/adapter.cjs');
 const codexRuntime = require('../electron/features/codex-runtime/adapter.cjs');
-const { allowsUltracode } = require('../electron/features/skills/seat-rules.mjs');
+const { allowsUltracode } = require('../electron/features/routing/seat-rules.mjs');
 const en = require('../electron/locales/en.json');
 
 test('carried workers use the shared manifest projection', () => {
@@ -50,7 +50,7 @@ test('workers can run tests and Unity, and refuse explicit Git operations inside
   }
 });
 
-test('file approval checks every path against the cwd, glob and exact skill grant', t => {
+test('file approval checks every path against the working tree and allowed patterns', t => {
   const { workerRefusal } = require('../electron/features/cli-adapters/workers.cjs');
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-worker-policy-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
@@ -61,8 +61,8 @@ test('file approval checks every path against the cwd, glob and exact skill gran
   assert.equal(edit(['src/new.txt', '../escape.txt']), 'outside_worktree');
   assert.equal(edit(['src/new.txt', 'outside.txt']), 'outside_scope');
   assert.equal(edit([], {}), 'invalid_path');
-  assert.equal(edit(['src/SKILL.md']), 'skill_not_authorized');
-  assert.equal(edit(['src/SKILL.md'], { allow: ['src/SKILL.md'] }), null);
+  assert.equal(edit(['src/SKILL.md']), null);
+  assert.equal(edit(['docs/SKILL.md']), 'outside_scope');
   fs.symlinkSync(path.dirname(cwd), path.join(cwd, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.equal(edit(['linked/escape.txt'], { allow: ['**'] }), 'outside_worktree');
 });

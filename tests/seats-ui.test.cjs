@@ -6,7 +6,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
-const seatsLib = require('../src/features/agents/skill-seats.ts');
+const seatsLib = require('../src/features/agents/routing-seats.ts');
 const { paletteGroups, lineOf, shortLabel, menuPlacement, withInstalled, canonicalModel, sameModel, assignModel, assignCustom,
   rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, baselineFor,
   startScope, fallbackFor, saveSeats } = seatsLib;
@@ -23,7 +23,7 @@ const catalog = (overrides = {}) => [row('opus', 'Opus', 'claude', 3), row('sonn
   .map(entry => ({ ...entry, ...overrides[entry.model] }));
 const team = require('./fixtures/team-seats.json');
 const DEFAULTS = team.defaults;
-const { roleKind, roleLocks } = require('../electron/features/skills/role-rules.mjs');
+const { roleKind, roleLocks } = require('../electron/features/routing/role-rules.mjs');
 const shipped = (role, source = 'builtin') => {
   const kind = roleKind(role.id, ['developer', 'frontend']);
   const defaultEnabled = source === 'builtin', defaultFresh = ['qa', 'reviewer'].includes(role.id);
@@ -35,7 +35,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 function seatsInfo({ global = {}, project = null, ...overrides } = {}) {
   const template = { roles: global }, applied = project ? { roles: project } : null;
   return {
-    skill: 'model-routing', seats: SEATS, roles: team.roles.map(role => shipped(role)), lead: 'orchestrator',
+    seats: SEATS, roles: team.roles.map(role => shipped(role)), lead: 'orchestrator',
     authors: ['developer'], leadAgent: 'claude', leads: { claude: DEFAULTS.orchestrator, codex: DEFAULTS.developer },
     fresh: ['qa', 'reviewer'], defaults: clone(DEFAULTS), template, config: applied,
     effective: { ...clone(DEFAULTS), ...(applied ?? template).roles }, current: null, currentRoles: null, leadPending: null, routing: source(),
@@ -88,14 +88,14 @@ test('the applied project layer starts at built-in defaults and excludes templat
 
 test('routing saves send one scoped config and the on-disk base, and preserve structured refusals', async () => {
   const calls = [], config = { roles: { architect: { model: 'sonnet', effort: 'low' } } };
-  const api = { setSkillRouting: async (...args) => { calls.push(args); return { ok: true }; } };
+  const api = { saveRouting: async (...args) => { calls.push(args); return { ok: true }; } };
   assert.deepEqual(await saveSeats(api, 'project', 'p1', config, 'original'), { ok: true });
   assert.deepEqual(await saveSeats(api, 'template', 'p1', config, 'original'), { ok: true });
   assert.deepEqual(calls, [['project', 'p1', config, 'original'], ['template', null, config, null]]);
   const error = { ok: false, code: 'file-changed', message: 'Changed' };
-  const refused = await saveSeats({ setSkillRouting: async () => error }, 'project', 'p1', config, 'original');
+  const refused = await saveSeats({ saveRouting: async () => error }, 'project', 'p1', config, 'original');
   assert.deepEqual(refused, { ok: false, message: error.message, error });
-  assert.deepEqual(await saveSeats({ setSkillRouting: async () => { throw new Error('ipc closed'); } },
+  assert.deepEqual(await saveSeats({ saveRouting: async () => { throw new Error('ipc closed'); } },
     'template', null, config, null), { ok: false, message: 'ipc closed' });
 });
 
@@ -113,7 +113,7 @@ function compile(file, hooks, stubs = {}) {
       currentLanguage: () => stubs.language ?? 'en',
       t: (text, values = {}) => (stubs.language === 'zh' ? text : en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match),
     };
-    if (name === './skill-seats') return seatsLib;
+    if (name === './routing-seats') return seatsLib;
     if (['./RoleEditor', './RoutingReview'].includes(name)) return compile(name.slice(2) + '.tsx', hooks, stubs);
     if (name.endsWith('/role-rules.mjs')) return original(name);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
@@ -177,17 +177,17 @@ function dialogHarness(t, info, props = {}) {
   const calls = [], closed = [], refreshes = [];
   let current = info, changed;
   const api = {
-    onSkills: listener => { changed = listener; return () => { changed = undefined; }; },
-    skillSeats: async () => current,
-    resolveSkillRouting: props.resolveSkillRouting,
-    setSkillRouting: async (...args) => {
+    onRouting: listener => { changed = listener; return () => { changed = undefined; }; },
+    routingSeats: async () => current,
+    resolveRouting: props.resolveRouting,
+    saveRouting: async (...args) => {
       calls.push(args);
       if (props.reply && !props.reply.ok) return props.reply;
       const [scope, , config] = args, key = scope === 'project' ? 'config' : 'template';
       current = { ...current, [key]: config, routing: source() };
       return { ok: true };
     },
-    skillSeatsRefresh: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
+    refreshRouting: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
   globalThis.window = { agentrix: api, innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
   const listeners = [];
   globalThis.document = { activeElement: null, elementFromPoint: () => null, addEventListener: (type, fn) => listeners.push([type, fn]), removeEventListener: (type, fn) => { const at = listeners.findIndex(entry => entry[0] === type && entry[1] === fn); if (at >= 0) listeners.splice(at, 1); } };
@@ -654,9 +654,9 @@ test('a default-move receipt survives a newer read and the first edit without co
   const info = seatsInfo();
   const h = dialogHarness(t, info);
   let publish, finishOpening;
-  window.agentrix.onSkills = listener => { publish = listener; return () => {}; };
-  window.agentrix.skillSeats = async () => info;
-  window.agentrix.skillSeatsRefresh = () => new Promise(resolve => { finishOpening = resolve; });
+  window.agentrix.onRouting = listener => { publish = listener; return () => {}; };
+  window.agentrix.routingSeats = async () => info;
+  window.agentrix.refreshRouting = () => new Promise(resolve => { finishOpening = resolve; });
   h.render();
   publish();
   await settle();
@@ -955,7 +955,7 @@ test('the host keeps a migration that arrives after closing and the next dialog 
   const migration = '总指挥沿用原领队 Claude 槽 sonnet·high·fast；原 Codex 槽 gpt-6.2-sol 未保留\nSample: 总指挥沿用原领队 Codex 槽 gpt-6.2-sol·high';
   const info = seatsInfo(), window = new EventTarget();
   let finishRefresh;
-  window.agentrix = { skillSeats: async () => info, skillSeatsRefresh: () => new Promise(resolve => { finishRefresh = resolve; }) };
+  window.agentrix = { routingSeats: async () => info, refreshRouting: () => new Promise(resolve => { finishRefresh = resolve; }) };
   const HTMLElement = globalThis.HTMLElement;
   globalThis.HTMLElement = class {};
   t.after(() => { globalThis.HTMLElement = HTMLElement; });
@@ -990,7 +990,7 @@ test('the host keeps a migration that arrives after closing and the next dialog 
 test('the app seats host opens only when main supplies routing info', async t => {
   const window = new EventTarget();
   let answer = null;
-  window.agentrix = { skillSeats: async () => answer };
+  window.agentrix = { routingSeats: async () => answer };
   globalThis.window = window;
   globalThis.document = { activeElement: null };
   const HTMLElement = globalThis.HTMLElement;
@@ -1008,7 +1008,7 @@ test('the app seats host opens only when main supplies routing info', async t =>
 
 test('the activity key is one button with a row for each role and opens the scoped dialog', async t => {
   const window = new EventTarget(), events = [];
-  window.agentrix = { skillSeats: async () => seatsInfo() };
+  window.agentrix = { routingSeats: async () => seatsInfo() };
   window.addEventListener('agentrix:open-seats', event => events.push(event.detail));
   globalThis.window = window;
   const props = { projectId: 'p1', terminalId: 't1', sessionId: 's1' };
@@ -1057,7 +1057,7 @@ test('routing rows reduce height before using two columns and expand as usage sh
   };
   globalThis.MutationObserver = class { observe() {} disconnect() {} };
   const h = mount(t, 'RoutingKeyCard.tsx', 'RoutingKeyCard', { terminalId: 't1' });
-  window = { agentrix: { skillSeats: async () => seatsInfo() } };
+  window = { agentrix: { routingSeats: async () => seatsInfo() } };
   h.render();
   await settle();
   h.render(tree => { byAttr(tree, 'className', 'activity-routing-rows').props.ref.current = rows; });
@@ -1267,7 +1267,7 @@ test('the routing key refreshes accepted roles and shows the lead the conversati
   const effective = Object.fromEntries(roles.map(role => [role.id, saved]));
   const initial = seatsInfo({ current: DEFAULTS, currentRoles: team.roles.map(role => shipped(role)) });
   let info = initial, notify;
-  globalThis.window = { agentrix: { skillSeats: async () => info, onSkills: listener => { notify = listener; } } };
+  globalThis.window = { agentrix: { routingSeats: async () => info, onRouting: listener => { notify = listener; } } };
   const handle = mount(t, 'RoutingKeyCard.tsx', 'RoutingKeyCard', { projectId: 'p1', terminalId: 't1' }, {});
   handle.render();
   await settle();
@@ -1347,9 +1347,9 @@ test('English counts one specialty and multiple specialties with the right infle
 });
 
 test('English localizes every shipped role library field and the copy suffix', () => {
-  const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
-  const shippedSkill = fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8');
-  const { library, roles } = builtinMetadata(shippedSkill, 'model-routing');
+  const { guideMetadata } = require('../electron/features/routing/guide-format.cjs');
+  const guide = fs.readFileSync(path.join(__dirname, '../resources/routing/model-routing.md'), 'utf8');
+  const { library, roles } = guideMetadata(guide, 'model-routing');
   for (const { name, duty, detail, outputs } of roles.filter(role => library.includes(role.id))) {
     for (const key of ['席位 · ' + name, name, duty, detail, outputs]) {
       assert.ok(en[key], 'missing translation for ' + key);
@@ -1467,7 +1467,7 @@ test('a changed review digest temporarily disables every action and sends only t
   const pending = digest => source({ state: 'pending', digest, actions: ['apply', 'keep', 'overwrite'] });
   const info = seatsInfo({ routing: pending('old'), current: DEFAULTS }), calls = [];
   const accepted = seatsInfo({ current: DEFAULTS, project: { architect: { model: 'sonnet', effort: 'medium' } } });
-  const h = dialogHarness(t, info, { resolveSkillRouting: async (...args) => {
+  const h = dialogHarness(t, info, { resolveRouting: async (...args) => {
     calls.push(args);
     h.deliver(accepted);
     return { ok: true };

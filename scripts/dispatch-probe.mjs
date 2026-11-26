@@ -16,8 +16,8 @@ import { waitFor } from './wait.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
-const { claudeProbeConfig } = require('./skills-probe-config.cjs');
-const { instructionsOf } = require('./skills-probe-model.cjs');
+const { claudeProbeConfig } = require('./dispatch-probe-config.cjs');
+const { instructionsOf } = require('./dispatch-probe-model.cjs');
 const sse = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const sh = value => `'${value.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
 

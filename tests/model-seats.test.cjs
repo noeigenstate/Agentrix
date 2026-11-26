@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { cleanSeat, cleanStoredSeats, migrateSeats, catalog, defaultsFor, effective, leadOptions } = require('../electron/features/skills/model-seats.cjs');
+const { cleanSeat, cleanStoredSeats, migrateSeats, catalog, defaultsFor, effective, leadOptions } = require('../electron/features/routing/model-seats.cjs');
 const fixture = require('./fixtures/team-seats.json');
 const ids = fixture.seats;
 const both = { claude: true, codex: true };
@@ -79,31 +79,31 @@ test('the other-family lead uses its family default and an uninstalled family ha
 });
 
 test('routing IPC forwards saves and review actions with the exact contract arguments', async () => {
-  const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
+  const { registerRoutingIpc } = require('../electron/features/routing/ipc.cjs');
   const handlers = {}, calls = [], config = { roles: { researcher: seat('sonnet') } };
   const record = (...args) => { calls.push(args); return { ok: true }; };
-  registerSkillsIpc({ handle: (name, fn) => handlers[name] = fn, skills: {
-    seatsInfo: (...args) => { calls.push(args); return { skill: 'declaring-skill' }; },
+  registerRoutingIpc({ handle: (name, fn) => handlers[name] = fn, routing: {
+    seatsInfo: (...args) => { calls.push(args); return { lead: 'orchestrator' }; },
     setRouting: record, resolveRouting: record,
   } });
-  assert.equal(handlers['skills:seats']('project', 'terminal').skill, 'declaring-skill');
-  assert.deepEqual(await handlers['skills:setRouting']('project', 'p', config, null), { ok: true });
-  assert.deepEqual(await handlers['skills:resolveRouting']('p', 'keep', 'digest'), { ok: true });
+  assert.equal(handlers['routing:seats']('project', 'terminal').lead, 'orchestrator');
+  assert.deepEqual(await handlers['routing:save']('project', 'p', config, null), { ok: true });
+  assert.deepEqual(await handlers['routing:resolve']('p', 'keep', 'digest'), { ok: true });
   assert.deepEqual(calls, [['project', 'terminal', true], ['project', 'p', config, null], ['p', 'keep', 'digest']]);
 });
 test('seat reads and refreshes carry the last local Claude fast refusal in conductor mode only', async () => {
-  const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
+  const { registerRoutingIpc } = require('../electron/features/routing/ipc.cjs');
   const handlers = new Map();
   let reason = 'Fast mode requires usage credits';
   const seatsInfo = project => ({ conductor: project !== 'native', routing: { remote: project === 'ssh' } });
-  registerSkillsIpc({ handle: (name, fn) => handlers.set(name, fn), claudeFastRefusal: () => reason,
-    skills: { seatsInfo, refreshSeats: async project => seatsInfo(project) } });
-  for (const channel of ['skills:seats', 'skills:seats-refresh']) {
+  registerRoutingIpc({ handle: (name, fn) => handlers.set(name, fn), claudeFastRefusal: () => reason,
+    routing: { seatsInfo, refreshSeats: async project => seatsInfo(project) } });
+  for (const channel of ['routing:seats', 'routing:refresh']) {
     const read = handlers.get(channel);
     assert.equal((await read('local')).claudeFastRefusal, reason);
     assert.equal((await read('ssh')).claudeFastRefusal, undefined);
     assert.equal((await read('native')).claudeFastRefusal, undefined);
   }
   reason = null;
-  assert.deepEqual(handlers.get('skills:seats')('local'), seatsInfo('local'));
+  assert.deepEqual(handlers.get('routing:seats')('local'), seatsInfo('local'));
 });

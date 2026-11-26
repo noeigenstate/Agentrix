@@ -5,7 +5,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 
 ## Owns
 - `src/features/agents/SeatsDialog.tsx`
-- `src/features/agents/skill-seats.ts`
+- `src/features/agents/routing-seats.ts`
 - `src/features/agents/SeatsHost.tsx`
 - `src/features/agents/RoutingKeyCard.tsx`
 - `src/features/agents/RoleEditor.tsx`
@@ -15,14 +15,14 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 ## Interface
 - `SeatsHost` (`src/features/agents/SeatsHost.tsx`) — handles scoped routing requests and opens the dialog. App mounts it through ActivityPane's re-export.
 - `RoutingKeyCard` (`src/features/agents/RoutingKeyCard.tsx`) — shows the current routing summary and opens the scoped dialog from ActivityPane.
-- `roleGroups` (`src/features/agents/skill-seats.ts`) — `callSeatRole`, `modelRow`, `roleGroups`, `routeVerdict` and `shortLabel` support the Agent tab's role groups and labels.
+- `roleGroups` (`src/features/agents/routing-seats.ts`) — `callSeatRole`, `modelRow`, `roleGroups`, `routeVerdict` and `shortLabel` support the Agent tab's role groups and labels.
 
 ## May import
 
 - `src/features/cli-screens/index.ts`
 - `src/features/terminal/terminal-screen.ts`
-- `electron/features/skills/seat-rules.mjs` (shared seat validation and model rules)
-- `electron/features/skills/role-rules.mjs` (shared role validation, locks and ID generation)
+- `electron/features/routing/seat-rules.mjs` (shared seat validation and model rules)
+- `electron/features/routing/role-rules.mjs` (shared role validation, locks and ID generation)
 - `src/features/agents/subagent-splits.ts` (the `CallRow` type)
 - `src/shared/i18n.ts`
 - `src/shared/lead-routing-notices.ts` (formats the same fast-mode refusal as automatic lead switching)
@@ -38,5 +38,6 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - The key follows accepted roles and shows the lead the conversation runs now — test: `tests/seats-ui.test.cjs` › "the routing key refreshes accepted roles and shows the lead the conversation runs now"
 
 ## Not ours
-- Persisting and validating seat choices or applying them at launch — Skills and the launch runtimes.
+- Validating seat choices and role rules — Model routing backend.
+- Saving seat choices and applying them at launch — Model routing backend and the launch runtimes.
 - Rendering the Agent tab and tracking its calls — Activity pane.

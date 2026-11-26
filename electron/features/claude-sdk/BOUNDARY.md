@@ -16,6 +16,7 @@ Worker scope policy constrains the model's requested inputs and applies the boun
 and rewrite an allowed input to a path outside the worker scope. This is an explicit owner decision, not an isolation guarantee.
 Dispatch sessions offer only the built-in tools the worker policy can allow at that access level. PreToolUse denials give a specific reason and a direction to stop.
 Both worker access levels expose Bash for commands and tests. Worker PreToolUse denies explicit Git commit, push and reset --hard.
+Writable workers use the same allowed file patterns for all project files, including SKILL.md.
 The role selects relevant tests. Read-only sessions use dontAsk, leave project files untouched and expose reading tools.
 Edits, planning, questions and MCP remain blocked for read-only sessions.
 The worker stream carries denied work with a reason code and a short action summary. Bookkeeping denials stay in the audit, and summaries omit command arguments and file contents.
@@ -32,7 +33,7 @@ The worker stream carries denied work with a reason code and a short action summ
 - `commands` (`electron/features/claude-sdk/session.cjs`) — a native-safe command catalog from the live SDK, its replacement pushes or the shared file catalog before a query exists; listing never starts a query. models() retains resolved values, aliases, advertised efforts and fast capability; query settings use the host's frozen launch seat, including fast mode
 
 ## May import
-- `electron/features/skills/*seat*` (prepare or observe Agent tool seat input)
+- `electron/features/routing/agent-seat.cjs` (prepare or observe Agent tool seat input)
 - `electron/features/claude-runtime/**` (its Interface: where Claude Code is, as the locator finds it; the resolver this runtime tells what its sessions and the connection test saw, and the decide() it reads the API route from)
 - `electron/claude-sessions.cjs` (Claude transcript lookup)
 - `electron/session-files.cjs` (session-file identity checks)

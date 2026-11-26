@@ -130,16 +130,16 @@ Codex's **Reset limit** row shows the remaining reset count or query status inli
 
 When a round ends, open a changed file from the Git tab and see it the way `git diff` does. **Decide each hunk on its own**: keep it (stage it) or revert it; unstage what you staged, bring back a deleted file.
 
-### 🧰 Skills every session follows
+### 🧰 Project skills
 
-A skill is a folder with a `SKILL.md` that tells an agent how you want work done. **Settings → Skills** lists them on the left and shows the selected one on the right. Every Claude Code and Codex session Agentrix starts gets them in its startup note; SSH sessions get read-only copies.
+Keep reusable instructions in the project's `skills/` folder, with a `SKILL.md` in each skill's own folder.
+Agentrix points agents to that folder in the startup note. Agents read and edit skills like other project files.
+Roles can edit skills within their assigned scope. Agentrix replaces personal information such as user names,
+home paths, email addresses and keys with placeholders in local project skills.
 
-- **Built in, updated with the app, read-only.** *Model routing* (on demand, for anything beyond a quick answer or a one-line change) splits the work by role: the lead orchestrates, Opus plans and reviews the architecture, GPT-6.1-Sol designs the back end, takes the core code and debugging, Sonnet the routine and front-end work and checks the interface. GPT runs at high effort in fast mode and Claude at high by default; when Codex is installed it asks once per project, and you can change either in conversation. It has plans for both agents, Claude Code only, Codex only and Codex leading. *Code standard* (always) reviews a project's code in the first session there and proposes a staged plan, changing nothing until you agree; afterwards every code change follows it. *UI standard* (on demand) guides UI work in any project: for development beyond a small fix, a clickable mockup first; then five measured acceptance questions, a grayscale checklist and restrained colour; screenshots are accepted by another model, or by the user if no second model is available. What a built-in changed is described in the update notes.
-- **Your own.** Create, edit or import a folder, turn each on or off, and scope it to all projects or one. Skills live in Agentrix's data folder, or in the project's `skills/` folder.
-- **Three triggers.** *Always* (before every task; the first session in a project is also told it is the skill's first run there), *On demand* (when the description fits), *First open* (the first session in a project, then on demand).
-- **Built-ins always apply.** A project skill with the same name as a built-in (in `skills/`, `.claude/skills` or `.codex/skills`) is moved out to a recovery folder automatically and listed under that built-in in Settings → Skills; naming it in `AGENTS.md` / `CLAUDE.md` changes nothing. To extend a built-in, name your skill `<built-in name>-<id>` (e.g. `code-standard-team`): it is delivered right after its base and never moved, and where they conflict the built-in wins.
-- **Skills that improve.** Agents refine your skills as a project goes on. Every version is kept, with a diff and a way back. Skills an agent created are marked *New*; turn off *Let agents improve it* to freeze one, or turn on *Ask me before a change takes effect* to review each proposal first. Personal data (user names, paths, hosts, emails, keys) is replaced by placeholders before it is kept in a project's skills.
-- **Proof it's used.** *Taking effect* shows when an agent last read the skill, in which project and which agent. `SKILL.md` is shown as formatted text, with a *Source* toggle.
+To reuse an old shared skill, copy it from the `skills` folder in the Agentrix data directory into the project's
+`skills/` folder. Project skills previously moved because of a name match are in `skill-replaced` in the same data
+directory.
 
 ### 🎙️ Speak, and it listens
 
@@ -249,9 +249,6 @@ No. The hooks for completion alerts and the note that the reading view shows pic
 ## 🗺️ Roadmap
 
 - [ ] Remember each project's fast-mode and effort choice in Agentrix, so model routing stops asking
-- [ ] Sync skill refinements made over SSH back to your own skills
-- [ ] Share skills: export and import, then a skills marketplace
-- [ ] More built-in skills
 - [ ] A read-only spec panel: each requirement and bug with its status and fix attempts
 - [ ] A development overview: tokens, cost and time for each requirement and bug
 - [ ] The reading view for more CLIs (OpenCode, Gemini CLI and others)

@@ -4,7 +4,7 @@ const { elements } = require('./helpers/renderer-fixtures.cjs');
 const { explorerView } = require('./helpers/explorer-view.cjs');
 const { identifiers } = require('./helpers/source-structure.cjs');
 const fixture = require('./fixtures/team-seats.json');
-const { callSeatRole, roleGroups, routeVerdict } = require('../src/features/agents/skill-seats.ts');
+const { callSeatRole, roleGroups, routeVerdict } = require('../src/features/agents/routing-seats.ts');
 
 const row = (id, seat, model, item = {}, call = {}) => ({
   terminalId: 't1', item: { id, seat, ...item }, call: { model, effort: 'high', fast: false, ...call },

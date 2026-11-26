@@ -28,7 +28,7 @@ function activityHarness(mode = 'codex') {
     gate: { input() {} }, nativeMessages: [], native: mode.endsWith('-native') ? { registry: { list: () => [] } } : null };
   const sessions = new Map([[s.terminalId, s]]);
   const context = vm.createContext({ adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf, s, project, sessions, store, ConversationLog, summarizeTask: promptSummary, promptText, isLocalAgentCommand, callsOf: () => null, dispatchedOnly: () => null,
-    publishConversation() {}, broadcast() {}, scheduleState() {}, notifyCompletion() { alerts++; }, followClaude() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
+    publishConversation() {}, broadcast() {}, scheduleState() {}, notifyCompletion() { alerts++; }, followClaude() {}, refreshClaudeAccounts() {}, describeActions() {},
     memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [], remember: async () => {}, scrubProjectSkills: async () => {},
     setTimeout: () => ({ unref() {} }), Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },
     findProject: () => project, randomUUID: require('node:crypto').randomUUID,

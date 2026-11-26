@@ -105,7 +105,7 @@ test('invalid and rejected routing show only main’s allowed actions and readab
 
 test('routing actions send the rendered digest and refuse actions absent from the source', async () => {
   const calls = [];
-  const api = { resolveSkillRouting: async (...args) => { calls.push(args); return { ok: true }; } };
+  const api = { resolveRouting: async (...args) => { calls.push(args); return { ok: true }; } };
   for (const verb of ['apply', 'keep', 'overwrite']) {
     await resolveRouting(api, 'project-1', foreign, verb);
   }

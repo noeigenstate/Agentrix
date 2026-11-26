@@ -103,7 +103,7 @@
       "electron/features/codex-runtime/BOUNDARY.md",
       "electron/features/files/BOUNDARY.md",
       "electron/features/lab/BOUNDARY.md",
-      "electron/features/skills/BOUNDARY.md",
+      "electron/features/routing/BOUNDARY.md",
       "electron/features/ssh/BOUNDARY.md",
       "electron/features/terminal-events/BOUNDARY.md"
     ],
@@ -140,9 +140,6 @@
     "tests/remote_claude_test.py": [
       "electron/features/ssh/BOUNDARY.md"
     ],
-    "tests/remote_skill_leases_test.py": [
-      "electron/features/ssh/BOUNDARY.md"
-    ],
     "tests/windows-integration.test.cjs": [
       "electron/features/terminal/BOUNDARY.md"
     ],
@@ -168,20 +165,35 @@
       "electron/features/agents/BOUNDARY.md"
     ],
     "tests/role-rules.test.cjs": [
-      "electron/features/skills/BOUNDARY.md"
+      "electron/features/routing/BOUNDARY.md"
     ],
     "tests/project-routing.test.cjs": [
-      "electron/features/skills/BOUNDARY.md"
+      "electron/features/routing/BOUNDARY.md"
     ],
     "tests/team-roles.test.cjs": [
-      "electron/features/skills/BOUNDARY.md"
+      "electron/features/routing/BOUNDARY.md"
     ],
     "tests/routing-review-ui.test.cjs": [
       "src/features/agents/routing/BOUNDARY.md",
-      "electron/features/skills/BOUNDARY.md"
+      "electron/features/routing/BOUNDARY.md"
     ],
     "tests/skill-privacy.test.cjs": [
       "electron/features/agents/BOUNDARY.md"
+    ],
+    "tests/remote_skill_leases_test.py": [
+      "electron/features/ssh/BOUNDARY.md"
+    ],
+    "tests/routing-guide.test.cjs": [
+      "electron/features/routing/BOUNDARY.md"
+    ],
+    "tests/routing-store.test.cjs": [
+      "electron/features/routing/BOUNDARY.md"
+    ],
+    "tests/routing-launch.test.cjs": [
+      "electron/features/routing/BOUNDARY.md",
+      "electron/app/BOUNDARY.md",
+      "electron/features/terminal-events/BOUNDARY.md",
+      "integration/BOUNDARY.md"
     ]
   },
   "helpers": {
@@ -425,7 +437,7 @@
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "85678e2f36ef6967941c7fe8c3e363e03fee16906f22e647a07161d7c00e0e37",
+      "digest": "c65a4cfb4c242fa80ea584459ba4759395798d30837a891c77d63b2cc393d6ee",
       "targets": [
         "integration/dispatch.cjs"
       ],
@@ -437,10 +449,9 @@
       "reason": "Loads the external Sherpa wrapper and seeds it with the native engine chosen by the voice runtime."
     },
     "integration/agent-event.cjs": {
-      "digest": "14363f265c76aea6037685cb36e879556e220a60d588bac2359aaef61205039c",
+      "digest": "149c6d1c52e337ab1930b3c7ca231c3a0c67f65c84084dbc3692c82b1ed098da",
       "targets": [
-        "electron/features/skills/session.cjs",
-        "electron/features/skills/agent-seat.cjs",
+        "electron/features/routing/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
         "electron/features/agents/dispatch-events.cjs",
         "electron/features/agents/start-failure.cjs"
@@ -448,7 +459,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "53c2ab5ddce1f6101e2a518aff65494f47c840956f9a9cb263c4c59689ecd1f4",
+      "digest": "6a26e0fdd7930a10b5df254dff78ac13e053e5e9831bef1213ff8914fc74af6c",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -459,9 +470,7 @@
         "electron/features/team/team.cjs",
         "electron/features/team/inbox.cjs",
         "electron/features/dashboard/records-routing.cjs",
-        "electron/features/skills/session.cjs",
-        "electron/features/skills/worker-proposals.cjs",
-        "electron/features/skills/agent-seat.cjs",
+        "electron/features/routing/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
         "electron/features/codex-app-server/index.cjs",
         "electron/features/agents/dispatch-control.cjs",
@@ -482,7 +491,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "b3ea4fb2cb66d055adc682b8b0a3be98a582127cdb20f4b0a8b7a4c67b66085a",
+      "digest": "d18f974fb74acd884cea1eb35ffacca77646aceb28763d8ee99d4f2762a907c1",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

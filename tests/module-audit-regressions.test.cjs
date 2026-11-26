@@ -159,9 +159,9 @@ test('a lab run writes diff recovery failures to the run log', async t => {
   assert.match(log, /ENOENT/);
 });
 
-test('delivery cleanup reports a busy snapshot and continues deleting its siblings', t => {
-  const { pruneDeliveryFiles } = require('../electron/features/skills/delivery-cleanup.cjs');
-  const root = folder(t), snapshot = name => path.join(root, name.repeat(32) + '-' + '1'.repeat(32) + '.md');
+test('routing cleanup reports a busy guide and continues deleting its siblings', t => {
+  const { pruneGuides } = require('../electron/features/routing/guide-cleanup.cjs');
+  const root = folder(t), snapshot = name => path.join(root, name.repeat(32) + '.md');
   const busy = snapshot('a'), sibling = snapshot('b'), errors = [];
   fs.writeFileSync(busy, 'a'); fs.writeFileSync(sibling, 'b');
   const unlink = fs.unlinkSync;
@@ -169,28 +169,10 @@ test('delivery cleanup reports a busy snapshot and continues deleting its siblin
     if (file === busy) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
     return unlink(file);
   });
-  pruneDeliveryFiles(root, new Set(), error => errors.push(error.code));
+  pruneGuides(root, new Set(), error => errors.push(error.code), Date.now() + 31 * 86400_000);
   assert.deepEqual(errors, ['EBUSY']);
   assert.equal(fs.existsSync(busy), true);
   assert.equal(fs.existsSync(sibling), false);
-});
-
-test('skill edit tracking reads the original filename and prunes old unclaimed evidence', t => {
-  const { SkillsStore } = require('../electron/features/skills/store.cjs');
-  const root = folder(t), file = path.join(root, 'Capital', 'SKILL.md'), reads = [];
-  fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, 'Edit');
-  const read = fs.readFileSync;
-  t.mock.method(fs, 'readFileSync', (name, ...args) => {
-    if (String(name).toLowerCase() === file.toLowerCase()) reads.push(name);
-    return read(name, ...args);
-  });
-  const writers = new Map([['old', { at: Date.now() - 70_000 }], ['fresh', { at: Date.now() }]]);
-  SkillsStore.prototype.recordAction.call({ writers, report: assert.fail },
-    { kind: 'edit', done: true, at: Date.now(), files: [{ path: file }] }, { cwd: root, project: 'p', agent: 'claude' });
-  assert.deepEqual(reads, [file]);
-  assert.equal(writers.has('old'), false);
-  assert.deepEqual([...writers.keys()].slice(0, 1), ['fresh']);
-  assert.equal([...writers.values()].at(-1).project, 'p');
 });
 
 test('concurrent Claude and Codex lookups with different PATHs each return the correct executable', async t => {

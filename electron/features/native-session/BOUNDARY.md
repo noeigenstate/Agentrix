@@ -23,7 +23,8 @@ The authenticated read-only binding selects Claude worker permissions for both t
 
 ## May import
 
-- `electron/features/skills/seat-rules.mjs` (validate option-safe Claude worker model and effort values)
+- `electron/features/routing/store.cjs` (remote guide payload)
+- `electron/features/routing/seat-rules.mjs` (validate option-safe Claude worker model and effort values)
 - `electron/features/agents/agent-usage.cjs` (public account observation reducers)
 - `electron/features/agents/agent-command.cjs` (routing command names and their refusal)
 - `electron/features/claude-runtime/**` (its Interface: every path is decide()'s, from the resolver's facts)

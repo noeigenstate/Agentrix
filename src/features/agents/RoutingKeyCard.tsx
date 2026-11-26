@@ -3,7 +3,7 @@ import { CaretRight, Hammer, Lightning } from '@phosphor-icons/react';
 import type { SeatId, SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelLabel, openSeats, routingRoleName } from '../../shared/routing-command.ts';
-import { displayedSeat } from './skill-seats';
+import { displayedSeat } from './routing-seats';
 
 export function RoutingKeyCard({ projectId, terminalId, sessionId, workingSeats, leadWorking }: {
   projectId?: string; terminalId: string; sessionId: string | null; workingSeats?: ReadonlySet<SeatId>; leadWorking?: boolean;
@@ -12,17 +12,17 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId, workingSeats,
   const rowsRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const api = window.agentrix;
-    if (!api?.skillSeats) return;
+    if (!api?.routingSeats) return;
     let active = true, request = 0;
     const load = () => {
       const mine = ++request;
-      void api.skillSeats(projectId ?? null, terminalId).then(
+      void api.routingSeats(projectId ?? null, terminalId).then(
         next => { if (active && request === mine) setInfo(next); },
         () => { if (active && request === mine) setInfo(null); },
       );
     };
     setInfo(null); load();
-    const off = api.onSkills?.(load);
+    const off = api.onRouting?.(load);
     return () => { active = false; off?.(); };
   }, [projectId, terminalId, sessionId]);
   useLayoutEffect(() => {

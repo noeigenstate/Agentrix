@@ -1,4 +1,4 @@
-const { outsideFences, region } = require('./builtin-format.cjs');
+const { outsideFences, region } = require('./guide-format.cjs');
 const { agentAlias, defaultsFor, resolveSeat } = require('./model-seats.cjs');
 const { agentOfModel } = require('./seat-rules.mjs');
 
@@ -51,7 +51,7 @@ function teamRows(shipped, library, roles, spec, summary) {
   return roles.some(role => role.source === 'custom') ? [framing, '', ...head, ...rows] : [...head, ...rows];
 }
 
-function renderRoutingSkill(text, spec) {
+function renderRoutingGuide(text, spec) {
   const { roles, map } = spec;
   const enabled = roles.filter(role => role.enabled ?? Object.hasOwn(map, role.id));
   const selected = roles.length ? enabled : Object.keys(map).map(id => ({ id, name: id }));
@@ -76,4 +76,4 @@ function renderRoutingSkill(text, spec) {
   return parts.join('');
 }
 
-module.exports = { renderRoutingSkill, modelWords };
+module.exports = { renderRoutingGuide, modelWords };

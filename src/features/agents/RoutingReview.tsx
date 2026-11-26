@@ -46,9 +46,9 @@ export function escapeRoutingText(value: string) {
   });
 }
 
-export function resolveRouting(api: Pick<Window['agentrix'], 'resolveSkillRouting'>, projectId: string, source: RoutingSource, action: RoutingAction) {
+export function resolveRouting(api: Pick<Window['agentrix'], 'resolveRouting'>, projectId: string, source: RoutingSource, action: RoutingAction) {
   if (!source.digest || !source.actions.includes(action)) return;
-  return api.resolveSkillRouting(projectId, action, source.digest);
+  return api.resolveRouting(projectId, action, source.digest);
 }
 
 const groups = { added: '新增角色', removed: '移除或停用的角色', changed: '修改的角色' } as const;

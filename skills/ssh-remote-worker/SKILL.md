@@ -11,7 +11,7 @@ description: Use when changing how an SSH project's terminals talk to the server
   opened there. Its first stdin line is `remote-worker.py`, zlib-compressed and base64 (the bootstrap in
   `sshArguments` decompresses it). A terminal after the first opens without another handshake, login or password.
 - Each terminal is a channel (`RemoteConnection`): every message both ways carries `channel`. Agentrix sends
-  `{op: "open", channel, path, codingPath, projectId, token, cols, rows, readingNote}` and the worker answers with its
+  `{op: "open", channel, path, codingPath, projectId, token, cols, rows, readingNote, guide}` and the worker answers with its
   terminal output, then `ready`; `{op: "shutdown", channel}` closes only that terminal. The SSH process ends when the
   last channel leaves (stdin closes, the worker exits on EOF).
 - A message without `channel` from the worker is about the whole connection: an `error` there fails every terminal.
@@ -34,15 +34,11 @@ description: Use when changing how an SSH project's terminals talk to the server
   60 seconds, honors Retry-After and backs off; each project's route is checked before any cached result is returned.
   The desktop poller is bound to its live channel and discards cancelled or replaced-session answers. Dashboard quota
   scopes already separate SSH hosts from one another and from local accounts.
-- Claude skills have one delivery channel: SessionStart prints `hookSpecificOutput.additionalContext`. startup/resume
-  deduplicate by CLI session id and bundle `key`; compact/clear forget that session's other receipts and deliver again.
-  Startup arguments keep startup instructions and the manifest fallback; only the skills manifest uses the hook.
-  State and read-only skill references live below the remote worker's own
-  `~/.local/state/agentrix/ssh-skills/`, outside Claude's files; fingerprinted references survive a closed terminal so
-  a resumed session's current-bundle auto-skill paths still exist. Each live terminal holds a `.lease-*` file in the
-  references it uses, refreshed every minute; on each terminal spawn, other reference keys untouched for 30 days
-  with no lease fresher than 10 minutes, and receipts older than 30 days, are pruned. The bundle remains `files/instructions/key`. Codex keeps its own
-  delivery path; follow the skills module's measured protocol when changing it.
+- Each `open` carries `guide: {key, text}` for conductor mode or `null`. A `launch-note` request carries the sequence,
+  note and guide, and acknowledges the update with `null`. The worker expands `{AGENTRIX_ROUTING}` in the note to
+  `~/.local/state/agentrix/ssh-routing/<key>/model-routing.md`. Claude and Codex receive the path through their startup
+  instructions. SessionStart reports session activity. A guide is read-only and retains its path across close and
+  resume. Live channels refresh their guide leases. Cleanup removes copies unused for 30 days with no fresh lease.
 
 ## Testing
 
@@ -53,7 +49,7 @@ description: Use when changing how an SSH project's terminals talk to the server
 - `node --test tests/remote-claude-account.test.cjs tests/remote-ssh-cards.test.cjs`: fake-account validation,
   cancellation, host quota scopes and real-shaped question screens over an isolated OpenSSH connection.
 - `python -m unittest discover -s tests -p "remote*_test.py"`: remote-only fake credentials, route checks, numeric
-  replies, backoff, hook transport and SessionStart delivery. Inject the HTTP opener; never use a developer login.
+  replies, backoff, SessionStart activity and routing guide leases. Inject the HTTP opener; never use a developer login.
 - A local `python -u -c '<bootstrap>'` fed the compressed worker checks the bootstrap; it stops at `SIGHUP` on Windows,
   which is expected (the server is always Linux).
 - For a real server, use a scratch SSH config and known_hosts in the test output folder and a temporary askpass file

@@ -14,7 +14,7 @@ export function SeatsHost({ onError }: { onError: (message: string) => void }) {
       const { projectId, terminalId, info } = (event as CustomEvent<SeatsRequest>).detail ?? {};
       const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const mine = ++request;
-      const seats = info ?? await window.agentrix?.skillSeats?.(projectId, terminalId).catch(() => null);
+      const seats = info ?? await window.agentrix?.routingSeats?.(projectId, terminalId).catch(() => null);
       if (request === mine && seats) {
         if (seats.migrated) rememberMigration(seats.migrated);
         setDialog({ projectId, terminalId, info: seats, opener, request: mine });

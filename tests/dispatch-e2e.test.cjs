@@ -121,7 +121,7 @@ test('roles from a Windows terminal bootstrap appear under the lead project and 
   const hooks = terminalHooks({ platform: 'win32', port: 12345, terminalId: session.terminalId, sessionKey: session.sessionKey,
     eventServer: server, env: {}, cwd: project.path, seatRouting: true, read: () => '{}',
     shell: { powershellPath: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe', script,
-      node: process.execPath, noteFile: path.join(root, 'terminal-skills.txt') } });
+      node: process.execPath } });
   hooks.fastSettings = Object.fromEntries(Object.entries(hooks.settings).map(([channel, settings]) =>
     [channel, JSON.stringify({ ...JSON.parse(settings), fastMode: true })]));
   writeBootstrap({ file: session.bootstrapFile, eventServer: server, projectId: session.terminalId, projectPath: project.path,
@@ -194,7 +194,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
     dispatchRefused: value => reportDispatchRefusal(value, { warn: (_message, code, id) => warnings.push({ code, id }) }),
     dashboard: { run() {} }, createNativeUsage: () => ({ apply() {} }), nativeSessions: { forget: async () => {}, tokenRate: () => null },
     PromptQueue: class { reset() {} }, CompletionWork: class { reset() {} }, ActionLog: class {}, ConversationLog: class {},
-    readingHistory: { close() {} }, syncDashboardLive() {}, endSkillSession() {}, skills: { endSession() {}, delivery: () => null }, stopUsageAccount() {},
+    readingHistory: { close() {} }, syncDashboardLive() {}, endSkillSession() {}, routing: { endSession() {}, launch: () => null }, stopUsageAccount() {},
     clearTimeout, startupErrors: new Map(), reportHookChannel() {}, acceptShellEvent: () => false,
     claudeConfigDir: () => path.join(root, 'claude'), rememberClaudeSource() {}, require: name => {
       if (name === './features/team/team-locate.cjs') return { locateTeam };

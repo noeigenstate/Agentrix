@@ -56,7 +56,7 @@ function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirec
     'Only the lead may dispatch the planned workers. Those workers must never delegate further.',
   ];
   const pipeline = [
-    'You are the Opus 5.5 lead. Follow the system model-routing skill with this experiment taking precedence.',
+    'You are the Opus 5.5 lead. Follow the workflow defined for this experiment.',
     'Plan the module interfaces and scopes, then dispatch the builds with those decisions in their briefs;',
     'Sol builds complex code/debugging in worktree A; Sonnet handles routine/front-end/tests in worktree B;',
     'integrate diffs without commits and test; an independent Opus architecture review and fresh Sonnet acceptance;',

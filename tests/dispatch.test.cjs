@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
-const { readFileSync, writeFileSync } = require('node:fs');
+const { readFileSync } = require('node:fs');
 const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const { createHash, randomUUID } = require('node:crypto');
@@ -18,7 +18,7 @@ const { createRoleArtifacts, sweepRoleArtifacts, RETENTION } = require('../integ
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { dispatchDirectory, validDispatch, readEnvelope, WIRE_FIELDS } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
-const { digest, deliveryMarker, skillFrontMatter } = require('../electron/features/skills/session.cjs');
+const { PLAIN_REPLIES } = require('../integration/dispatch.cjs');
 
 const helper = path.resolve(__dirname, '../integration/dispatch.cjs');
 const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
@@ -113,9 +113,6 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
     name = name.replaceAll('\\', '/');
     if (name.endsWith('features/claude-runtime/locator.cjs')) return { createLocator: () => ({ locate: async () => ({ terminal: { file: 'synthetic-resolved-claude' } }) }) };
     if (name.endsWith('features/team/team.cjs')) return { ...local(name), projectTeam: () => null };
-    if (name.endsWith('features/skills/worker-proposals.cjs')) return { WorkerSkillProposals: class {
-      artifacts = new Set(); notes = new Set(); restoredCount = 0; finish() { return 0; }
-    } };
     if (name.endsWith('dispatch-outbox.cjs')) return { DispatchOutbox: class { append(event) { events.push(event); } } };
     return local(name);
   });
@@ -661,11 +658,11 @@ test('Codex 0.170 command and file approvals use raw actions and every path from
     const edit = readOnly ? 'decline' : 'accept';
     assert.deepEqual(requests.filter(row => /^request-/.test(row.id)).map(row => row.result.decision), [
       'accept', 'decline', 'decline', 'accept', 'decline', 'accept', 'decline', 'accept', 'decline',
-      edit, 'decline', 'decline', 'decline', edit, 'decline', 'decline', 'decline', 'decline',
+      edit, 'decline', 'decline', edit, edit, 'decline', 'decline', 'decline', 'decline',
     ]);
     assert.deepEqual(f.events.at(-1).refused.map(item => item.reason), [
       'git_forbidden', 'git_forbidden', 'invalid_command', 'git_forbidden', 'invalid_command',
-      ...(readOnly ? Array(9).fill('read_only') : ['outside_scope', 'outside_worktree', 'skill_not_authorized',
+      ...(readOnly ? Array(9).fill('read_only') : ['outside_scope', 'outside_worktree',
         'outside_scope', 'outside_worktree', 'outside_worktree', 'invalid_path']),
     ]);
   }
@@ -747,9 +744,6 @@ test('detached Codex and Claude expose engine timing and decisions through the r
   const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-timing-')));
   t.after(() => fs.rm(cwd, { recursive: true, force: true }));
   const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md');
-  const project = path.join(cwd, 'project'), skill = path.join(project, 'skills/sample/SKILL.md');
-  await fs.mkdir(path.dirname(skill), { recursive: true });
-  await fs.writeFile(skill, 'Original skill');
   await fs.writeFile(brief, 'Synthetic role task');
   const cases = [['codex', 'gpt-6.1-sol'], ['claude', 'claude-sonnet-5-5'], ['claude', 'claude-sonnet-5-5', true]];
   for (const [agent, model, structured] of cases) {
@@ -757,11 +751,11 @@ test('detached Codex and Claude expose engine timing and decisions through the r
     const answer = 'Done.\r\n\r\n## Needs decision\r\n\r\nPrivate options for the lead.';
     const roleArtifacts = await createRoleArtifacts(cwd);
     const id = randomUUID(), out = path.join(roleArtifacts.folder, 'answer.md');
-    const policy = structured ? ['--permission', 'acceptEdits', '--allow', 'skills/**'] : agent === 'claude' ? ['--permission', 'plan'] : ['--read-only'];
+    const policy = structured ? ['--permission', 'acceptEdits'] : agent === 'claude' ? ['--permission', 'plan'] : ['--read-only'];
     store.create({ id, cwd, out, roleArtifacts, createdAt: Date.now(), argv: [agent, '--role', 'review', '--title', 'Timed role',
-      '--model', model, '--effort', 'high', '--cwd', structured ? project : cwd, '--brief', brief, '--out', out, ...policy] });
+      '--model', model, '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, ...policy] });
     assert.equal(await runDetached(store.file(id), {
-      env: { CODEX_HOME: cwd, AGENTRIX_DATA_DIR: path.join(cwd, 'profile') }, resolveExecutable: (_agent, args) => ({ file: 'synthetic-cli', args }),
+      env: { CODEX_HOME: cwd }, resolveExecutable: (_agent, args) => ({ file: 'synthetic-cli', args }),
       launch: (_file, args) => {
         const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, remote: true,
           stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -773,7 +767,6 @@ test('detached Codex and Claude expose engine timing and decisions through the r
             argv: ['node', peer, 'app-server'], env: {}, cwd: () => cwd, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exit: child.kill,
           } });
         } else if (structured) {
-          writeFileSync(skill, 'Worker proposal');
           assert.ok(args.includes('--strict-mcp-config'));
           const configFile = args[args.indexOf('--mcp-config') + 1];
           const { command, args: serverArgs } = JSON.parse(readFileSync(configFile, 'utf8')).mcpServers.agentrix_role;
@@ -813,14 +806,6 @@ test('detached Codex and Claude expose engine timing and decisions through the r
     assert.deepEqual(JSON.parse(jsonl), ended);
     await sweepRoleArtifacts(cwd, { now: endedAt + RETENTION });
     await assert.rejects(fs.stat(roleArtifacts.folder), { code: 'ENOENT' });
-    if (structured) {
-      const { indexPath, count, proposals: [proposal] } = store.read(id, { fresh: true }).ended.result.skillProposalDetails;
-      assert.equal(count, 1);
-      assert.ok(indexPath.startsWith(path.join(cwd, 'profile') + path.sep));
-      assert.equal(proposal.operation, 'edit');
-      assert.equal(proposal.text, 'Worker proposal');
-      assert.equal(await fs.readFile(proposal.savedPath, 'utf8'), proposal.text);
-    }
   }
 });
 
@@ -1198,7 +1183,7 @@ test('the worker reads the ledger, the boundaries of the modules it may change, 
   assert.match(text, /# Files you may change\n\n- `src\/\*\*`[\s\S]*out of scope/);
   assert.match(text, /finish_role\.findings/);
   assert.match(text, /# Task\n\nDo the task\.$/);
-  assert.match(briefOf({ cwd: directory, allow: [] }, Buffer.from('plain')).toString(), /finish_role\.skillProposals[\s\S]*plain$/);
+  assert.match(briefOf({ cwd: directory, allow: [] }, Buffer.from('plain')).toString(), /# Plain replies[\s\S]*# Task\n\nplain$/);
   assert.equal(recordFindings(options, 'Done.\n\n## Findings for the ledger\n\n- `src/a.js:1` parses cents.\n', 'now · T'), true);
   assert.match(await fs.readFile(options.ledger, 'utf8'), /### now · T\n\n- `src\/a\.js:1` parses cents\./);
 });
@@ -1213,13 +1198,12 @@ test('small role briefs trim context by permission and preserve the default byte
   const team = { context: (_id, _before, { small }) => [...(small ? [] : ['# Project memory\n\nMemory.']), '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
   const render = (options, currentTeam = team) => briefOf({ cwd, ...options }, Buffer.from('Inspect src/a.js.'), currentTeam, { repo });
   const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
-  const plainReply = skillFrontMatter.frontMatter(await fs.readFile(path.join(__dirname, '../resources/skills/plain-reply/SKILL.md'), 'utf8')).body.trim();
   // Pin the rest of the default brief without the shared rules.
   const withoutSharedRules = options => render(options).toString()
-    .replace(`\n\n${plainReply}\n\n# Task`, '\n\n# Task')
+    .replace(`\n\n${PLAIN_REPLIES}\n\n# Task`, '\n\n# Task')
     .replace(/^- Skip a named skill.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
   assert.deepEqual([read, write].map(options => createHash('sha256').update(withoutSharedRules(options)).digest('hex')),
-    ['caaa5198f3adb8851e613503404d6b1a73241695cf31dcfe767065bbeee17929', 'eef7a5f1087dba83131c0311c012e72cd3ed4380637fadb7b1244158c6885da8']);
+    ['1ef644f7351015340074b31ed83469cd9b547bf76c29cb092305b06887319c01', 'a8017df3f69166a20ef0a42ce81c36b86fd864199b369bddc56ec0de1f2a89d4']);
 
   const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };
   const lookup = render({ ...read, small: true }, readOnlyTeam).toString();
@@ -1234,13 +1218,14 @@ test('small role briefs trim context by permission and preserve the default byte
   assert.match(edit, /# Working now\n\nPeers\.\n\n# Repository\n\n\(clean\)/);
   assert.match(edit, /# Module boundary: src\/BOUNDARY\.md\n\nRead this file from the repository root before editing\./);
   assert.match(edit, /# Files you may change\n\n- `src\/a\.js`[\s\S]*out of scope/);
-  for (const text of [lookup, edit]) assert.match(text, /# Standing rules[\s\S]*# Skill changes[\s\S]*finish_role\.findings[\s\S]*# Task\n\nInspect src\/a\.js\.$/);
+  for (const text of [lookup, edit]) assert.match(text, /# Standing rules[\s\S]*finish_role\.findings[\s\S]*# Task\n\nInspect src\/a\.js\.$/);
 });
 
 test('standing rules inline bounded standards for normal briefs and keep references for small or oversized briefs', async t => {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-standing-')));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  const section = options => /# Standing rules\n[\s\S]*?(?=\n\n# Skill changes)/.exec(briefOf({ cwd: directory, allow: [], ...options }, Buffer.from('任务。')).toString())[0];
+  const section = options => /# Standing rules\n[\s\S]*?(?=\n\n# (?:Handing back|Plain replies))/
+    .exec(briefOf({ cwd: directory, allow: [], ...options }, Buffer.from('任务。')).toString())[0];
   const scoped = section({ allow: ['src/**'] });
   for (const small of [false, true]) {
     const codex = section({ agent: 'codex', readOnly: true, small });
@@ -1264,7 +1249,7 @@ test('standing rules inline bounded standards for normal briefs and keep referen
     assert.match(claude, /what you ran with its result/);
     assert.doesNotMatch(codex, /ExitPlanMode/);
   }
-  for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/,
+  for (const rule of [/project's code-standard skill if it has one, and the project's conventions/, /Change only the paths under "Files you may change"/,
     /Do not start another worker/, /no GUI smoke test/, /system clipboard/, /only the tests the task touches/, /Report what you changed/,
     /language the task is written in/]) assert.match(scoped, rule);
   for (const readOnly of [section({ readOnly: true }), section({ permission: 'plan' })]) {
@@ -1277,7 +1262,9 @@ test('standing rules inline bounded standards for normal briefs and keep referen
   assert.match(writableClaude, /Scope: Change only what the task needs\./);
   assert.match(writableClaude, /may run commands and tests\. Decide whether to run tests and which to run based on the task/);
   assert.match(writableClaude, /Do not commit, push, or run git reset --hard/);
-  for (const file of ['resources/skills/code-standard/SKILL.md', 'skills/code-standard-team/SKILL.md', 'skills/other/SKILL.md']) {
+  const base = '.claude/skills/code-standard/SKILL.md', extension = 'skills/code-standard-team/SKILL.md';
+  const files = [base, extension, 'skills/other/SKILL.md'];
+  for (const file of files) {
     await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
     await fs.writeFile(path.join(directory, file), `---\nname: fixture\n---\n# ${path.basename(path.dirname(file))} rules\n`);
   }
@@ -1286,13 +1273,19 @@ test('standing rules inline bounded standards for normal briefs and keep referen
   assert.match(named, /# Code standards\n\n# code-standard rules\n\n# code-standard-team rules/);
   assert.doesNotMatch(named, /other rules|code-standard-empty|session was given|name: fixture/);
   assert.ok(Buffer.byteLength(named) < 8 * 1024 + 1400);
-  const references = /read `resources\/skills\/code-standard\/SKILL\.md` and `skills\/code-standard-team\/SKILL\.md` and follow them in any code/;
+  const references = /read `\.claude\/skills\/code-standard\/SKILL\.md` and `skills\/code-standard-team\/SKILL\.md` and follow them in any code/;
   assert.match(section({ small: true }), references);
   await fs.appendFile(path.join(directory, 'skills/code-standard-team/SKILL.md'), '汉'.repeat(3000));
   const oversized = section({ allow: ['src/**'] });
   assert.match(oversized, references);
   assert.doesNotMatch(oversized, /# Code standards|汉/);
   assert.ok(Buffer.byteLength(oversized) < 1600, `the reference section stays short (${Buffer.byteLength(oversized)})`);
+  await fs.unlink(path.join(directory, extension));
+  const codex = '.codex/skills/code-standard/SKILL.md';
+  await fs.mkdir(path.dirname(path.join(directory, codex)), { recursive: true });
+  await fs.rename(path.join(directory, base), path.join(directory, codex));
+  assert.match(section({ allow: ['src/**'] }), /# Code standards\n\n# code-standard rules/);
+  assert.ok(section({ small: true }).includes(codex));
 });
 
 test('a read-only Claude headless role disables writing tools and detects tracked and new writes without allow globs', async t => {
@@ -1341,65 +1334,15 @@ test('a worker that stays within --allow ends with scope ok', async t => {
   assert.match((await finished).stdout, /reason exit · scope ok · out /);
 });
 
-test('dispatch restores unapproved skill edits and reports proposal counts on successful and failed runs', async t => {
+test('dispatch keeps in-scope skill edits on successful and failed runs', async t => {
   for (const exitCode of [0, 9]) {
-    const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Worker proposal.' }], {
+    const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Worker edit.' }], {
       exitCode, extra: ['--allow', 'skills/**'], isolated: true,
       setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
     });
     const result = await f.finished;
     assert.equal(result.code, exitCode === 0 ? 0 : 1);
-    assert.match(result.stdout, /1 skill proposals restored and awaiting the lead/);
-    assert.equal(f.events.at(-1).skillProposals, 1);
-    assert.equal(f.events.at(-1).skillChangesLeftLive, 0);
-    assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
-    const { proposals } = JSON.parse(await fs.readFile(result.stdout.trimEnd().split(' · skill proposal index ').at(-1), 'utf8'));
-    assert.equal(await fs.readFile(proposals[0].savedPath, 'utf8'), 'Worker proposal.');
-    assert.match(JSON.parse(await fs.readFile(f.capture, 'utf8')).brief, /finish_role\.skillProposals/);
+    assert.match(result.stdout, /scope ok/);
+    assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Worker edit.');
   }
-});
-
-test('an unconfirmed exited worker restores its skill edits before the failure event', async t => {
-  const f = await fixture(t, [{ write: 'skills/sample/SKILL.md', text: 'Unconfirmed proposal.' }], { hold: 0,
-    isolated: true, extra: ['--allow', 'src/**'],
-    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
-  });
-  assert.notEqual((await f.finished).code, 0);
-  assert.equal(f.events.at(-1).skillProposals, 1);
-  assert.equal(f.events.at(-1).skillChangesLeftLive, 0);
-  assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
-});
-
-test('dispatch reports shared-checkout changes without reverting them and prints snapshot-limit degradation', async t => {
-  const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Concurrent live version.' }], {
-    extra: ['--allow', 'skills/**'],
-    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'x'.repeat(512 * 1024 + 1) }),
-  });
-  const result = await f.finished;
-  assert.equal(result.code, 0);
-  assert.match(result.stdout, /1 skill changes left live \(author unknown\) · skill guard report-only: snapshot limits exceeded/);
-  assert.doesNotMatch(result.stdout, /awaiting the lead|pending lead approval/);
-  assert.equal(f.events.at(-1).skillProposals, 0);
-  assert.equal(f.events.at(-1).skillChangesLeftLive, 1);
-  assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Concurrent live version.');
-});
-
-test('dispatch reports restored proposals and live managed changes separately in the same end line and event', async t => {
-  const f = await fixture(t, [...codex, { write: 'skills/sample/SKILL.md', text: 'Worker proposal.' }, { write: 'managed/sample/SKILL.md', text: 'Owner live change.' }], {
-    isolated: true, extra: ['--allow', 'skills/**', '--allow', 'managed/**'],
-    setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Original.', 'managed/sample/SKILL.md': 'Owner original.' }),
-    environment: async directory => {
-      const manifest = path.join(directory, 'manifest.md'), fingerprint = digest('mixed');
-      await fs.writeFile(manifest, 'Instructions.');
-      await fs.writeFile(`${manifest}.json`, JSON.stringify({ projectRoot: directory, fingerprint, roots: [path.join(directory, 'managed')] }));
-      return { AGENTRIX_READING_NOTE: `Note. ${deliveryMarker({ manifest, fingerprint })}` };
-    },
-  });
-  const result = await f.finished;
-  assert.equal(result.code, 0);
-  assert.match(result.stdout, /1 skill proposals restored and awaiting the lead · 1 skill changes left live \(author unknown\)/);
-  assert.equal(f.events.at(-1).skillProposals, 1);
-  assert.equal(f.events.at(-1).skillChangesLeftLive, 1);
-  assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Original.');
-  assert.equal(await fs.readFile(path.join(f.directory, 'managed/sample/SKILL.md'), 'utf8'), 'Owner live change.');
 });

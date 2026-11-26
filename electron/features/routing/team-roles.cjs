@@ -1,7 +1,7 @@
 const modelSeats = require('./model-seats.cjs');
 const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules } = require('./role-rules.mjs');
 const { adapterOfModel, agentOfModel } = require('./seat-rules.mjs');
-const { outsideFences, region } = require('./builtin-format.cjs');
+const { outsideFences, region } = require('./guide-format.cjs');
 
 const seatKeys = ['model', 'effort', 'fast', 'ultracode'];
 const roleKeys = [...seatKeys, 'enabled', 'fresh', 'from', 'name', 'duty', 'outputs'];

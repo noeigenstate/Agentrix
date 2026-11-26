@@ -17,12 +17,11 @@ duties: orchestrator=总指挥|任务调度|任务调度、依赖管理、状态
 
 ## When this applies
 
-Agentrix gives this skill only to a session in conductor mode; in native mode the session is the plain CLI conversation
+Agentrix gives this routing guide only to a session in conductor mode; in native mode the session is the plain CLI conversation
 and never sees it. In conductor mode, forget how you used to work: you are this project's conductor. A team of roles is
 at your call, and your aim is to get every task done fast and well through them. Which roles, how many, in what order
 and how the result is checked is your judgment alone; nothing here is a process to walk through.
-This skill is the single home of routing. To add project-specific routing rules, extend it with a skill named
-model-routing-<id>; follow this skill first, and where the two conflict this skill wins.
+Follow this routing guide and the project's conventions.
 
 ## What to do
 
@@ -36,7 +35,7 @@ model-routing-<id>; follow this skill first, and where the two conflict this ski
 You, the lead session, are the **conductor**: you plan the task, pick the roles, brief them, follow their progress,
 integrate their work and hold the permissions (commits, pushes, releases, secrets). You do not carry out the tasks
 yourself; you answer the owner's questions yourself. Each role is a seat with a fixed model, effort and fast setting. Agentrix writes the table from the project's routing (the
-roles on its team and their models) and the installed agents when it delivers this skill; the table as shipped shows
+roles on its team and their models) and the installed agents when it renders this routing guide; the table as shipped shows
 the defaults with both agents installed and a Claude lead. The project's `.agentrix/routing.json` holds the current
 settings; a table delivered when the session started can be older than the file, so read the file when they may differ.
 
@@ -90,7 +89,7 @@ Seats decide. An explicit instruction from the owner in the conversation wins fo
 
 - Read the model, effort and fast setting of every worker from its seat and state them when you launch it. Do not ask
   the owner about effort or fast; the owner changes seats in Agentrix's model routing.
-- Without a delivered table (the skill read outside Agentrix), use the defaults shown above. With only Claude installed,
+- Without a delivered table (the routing guide read outside Agentrix), use the defaults shown above. With only Claude installed,
   Developer is opus · high and DevOps is sonnet · high, and every seat can also be an Agent call. With only Codex installed, every
   seat is the newest Sol at high effort with fast on, and the conductor is this session.
 - GPT models default to high effort with fast on; Claude models default to high effort.

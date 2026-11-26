@@ -44,7 +44,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
   const context = vm.createContext({ sessions, store,
     ...require('../electron/features/cli-adapters/registry.cjs'),
     readingHistory: { summary: () => null, close() {} }, prepareReading: async () => {}, summarizeTask: () => '', isLocalAgentCommand, promptText,
-    notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {}, describeActions() {}, nativeSkillActions() {},
+    notifyCompletion: () => alerts++, broadcast() {}, publishConversation() {}, refreshClaudeAccounts() {}, describeActions() {},
     memoryFolder: () => directory, memoryDir: () => directory, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }), scrubProjectSkills: async () => {},
     followClaude() {}, followClaudeSession: async () => {}, claudeResumeCommand,
@@ -158,7 +158,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return require('../electron/features/agents/agent-command.cjs'); },
     ActionLog: require('../electron/agent-actions.cjs').ActionLog,
     createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
-    clearTimeout, syncDashboardLive() {}, skills: { endSession() {}, delivery: () => ({ agentSeats }) },
+    clearTimeout, syncDashboardLive() {}, routing: { endSession() {}, launch: () => ({ agentSeats }) },
     cleanupTerminalFiles() {}, report: error => errors.push(error),
     runtimeDir: project.path, fs: syncFs, process: { platform: process.platform, env: {} },
     createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',
@@ -1069,7 +1069,7 @@ test('native process exit cancels its pending work and alert without waiting for
   s.completionWork.start('pending-native-task', 2000); h.apply('complete', 'parent', 2100);
   s.terminal = { onData() {}, onExit: callback => { exited = callback; } };
   Object.assign(context, { nativeSessions: null, stopUsageAccount() {}, restorePlans: new Map(), quitting: false,
-    startupErrors: new Map(), bindDispatchInbox() {}, captureBranch() {}, endSkillSession() {}, skills: { endSession() {} } });
+    startupErrors: new Map(), bindDispatchInbox() {}, captureBranch() {}, endSkillSession() {}, routing: { endSession() {} } });
   createTerminalLifecycle(context).bindTerminalEvents(s, h.project, {});
   exited({ exitCode: 0 });
   assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.completionWork.timer, null); assert.equal(s.activitySnapshot, null);

@@ -206,11 +206,10 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
 
 test('the SSH Python launcher writes keyed routes and NUL-delimited arguments for both manifest versions', t => {
   const output = pythonProbe(t, String.raw`
-import json, os, pathlib, runpy, subprocess, sys, tempfile, threading
+import json, os, pathlib, runpy, subprocess, sys, tempfile
 worker = runpy.run_path(sys.argv[1])
 wire = json.loads(sys.argv[2])
-raw_note = 'SSH reading note. Agentrix skill delivery: remote. Skill instructions.'
-expected_note = 'SSH reading note. Agentrix delivers skill instructions through its SessionStart hook.'
+note_template = 'SSH reading note. Read {AGENTRIX_ROUTING}.'
 with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
     root = pathlib.Path(directory)
     notifier = root / 'notify.py'
@@ -222,7 +221,18 @@ with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
                                        AGENTRIX_LAUNCH_MODEL='sonnet', AGENTRIX_LAUNCH_EFFORT='high'),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
     legacy = {key: value for key, value in wire.items() if key not in ('format', 'version')}
-    legacy['claude'] = dict(wire['claude'], note=dict(wire['claude']['note'], marker=' Agentrix skill delivery: '))
+    session = worker['Worker'](lambda _: None)
+    session.temp = directory
+    session.guide_state_dir = str(root / 'routing')
+    session.launch_note_sequence = 1
+    guide = {'key': 'a' * 64, 'text': 'SSH routing rules.'}
+    assert session.update_launch_note(1, note_template, guide) is None
+    assert session.launch_note_ready.is_set()
+    expected_note = (root / 'launch-note.txt').read_text(encoding='utf-8')
+    assert expected_note.startswith('SSH reading note. Read ') and expected_note.endswith('.')
+    guide_path = pathlib.Path(expected_note[len('SSH reading note. Read '):-1])
+    assert guide_path.resolve(strict=True) == (root / 'routing' / guide['key'] / 'model-routing.md').resolve(strict=True)
+    assert guide_path.read_text(encoding='utf-8') == guide['text']
     for document in (legacy, wire):
         manifest.write_text(json.dumps(document), encoding='utf-8')
         for agent, args, route in (('claude', ('--model=sonnet',), 'refused'), ('claude', ('--version',), 'utility'),
@@ -235,23 +245,11 @@ with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
         assert result.returncode == 0, result.stderr
         assert result.stdout.split(b'\0') == [b'format=agentrix.launch-words', b'version=1', b'arg=--append-system-prompt',
                                                b'arg=hello\nworld=a=b', b'arg=--model', b'arg=sonnet', b'arg=--effort', b'arg=high', b'']
-        result = launch('claude', 'words', note=raw_note)
+        result = launch('claude', 'words', note=expected_note)
         assert result.returncode == 0, result.stderr
         assert result.stdout.split(b'\0')[2:4] == [b'arg=--append-system-prompt', ('arg=' + expected_note).encode('utf-8')]
-    session = worker['Worker'](lambda _: None)
-    session.temp = directory
-    session.skill_note_sequence = 1
-    session.skill_note_ready = threading.Event()
-    session.skill_paths = {}
-    session.startup_note = lambda note: note
-    session.terminal_manifest = lambda: worker['read_terminal_wire'](wire)
-    assert session.write_launch_note(raw_note, None) == raw_note  # Native startup still gets its full context.
-    literal = 'Earlier work. Agentrix skill delivery: a literal phrase.'
-    assert session.write_launch_note(literal, session.terminal_manifest()) == literal
-    assert session.write_launch_note(raw_note, session.terminal_manifest()) == expected_note
-    session.update_skill_note(1, raw_note, {})
-    assert session.skill_note_ready.is_set()
-    print((root / 'skill-note.txt').read_text(encoding='utf-8'))
+    session.stop()
+    print(expected_note.replace(guide_path.as_posix(), '/fixture/model-routing.md'))
     manifest.write_text(json.dumps(dict(wire, version=19)), encoding='utf-8')
     result = launch('claude', 'classify')
     assert result.returncode != 0 and not result.stdout
@@ -261,7 +259,7 @@ with tempfile.TemporaryDirectory(prefix='ssh-wire-') as directory:
   const { terminalLaunch } = require('../integration/shims/intercept.cjs');
   const env = { AGENTRIX_LAUNCH_NOTE: output.trimEnd() };
   assert.deepEqual(JSON.parse(terminalLaunch(env, 'claude', 'json', 'remote', [])).argv,
-    ['--append-system-prompt', 'SSH reading note. Agentrix delivers skill instructions through its SessionStart hook.']);
+    ['--append-system-prompt', 'SSH reading note. Read /fixture/model-routing.md.']);
 });
 
 test('the SSH lookup requires a supported version and preserves exact path bytes amid login noise', t => {
@@ -393,14 +391,13 @@ with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
     folder = pathlib.Path(directory)
     worker.coding_root, worker.token = directory, 'fixture'
     worker.claude_lead = {'seatsMap': new, 'launchSeatsMap': coder}
-    def install_note(note, native):
-        (folder / 'skill-key.txt').write_text('fixture')
+    def install_note(note, native, guide):
         worker.dispatch_server = {'env': {'AGENTRIX_BOOTSTRAP': str(folder / 'dispatch.json')}}
         (folder / 'events.sock').touch()
         return note
     fixtures = (patch.object(worker, 'startup_note', install_note), patch.object(tempfile, 'mkdtemp', return_value=directory),
                 patch.object(socket, 'socket'), patch.object(socket, 'AF_UNIX', 1, create=True),
-                patch.object(module['threading'], 'Thread'), patch.dict(worker.agent_environment.__globals__, prune_skill_state=lambda *_: None))
+                patch.object(module['threading'], 'Thread'), patch.dict(worker.agent_environment.__globals__, prune_guide_state=lambda *_: None))
     with contextlib.ExitStack() as stack:
         for fixture in fixtures: stack.enter_context(fixture)
         env, _ = worker.agent_environment('', native=True)
@@ -612,8 +609,9 @@ test('SSH open carries the background switch and Claude seat, and changes use se
   for (const allow of [false, true]) {
     const sent = [];
     let remote;
-    const link = { attach: () => 1, detach() {}, open: message => sent.push(message), send: message => {
-      sent.push(message); remote.receive({ type: 'response', id: message.id, ok: true, value: true });
+    const link = { attach: () => 1, detach() {}, send: message => {
+      sent.push(message);
+      if (message.id !== undefined) remote.receive({ type: 'response', id: message.id, ok: true, value: true });
     } };
     const claudeLead = allow ? { model: 'opus', effort: 'high', fast: true, ultracode: true } : null;
     const deliveries = [];
@@ -622,6 +620,7 @@ test('SSH open carries the background switch and Claude seat, and changes use se
     t.after(() => remote.close());
     assert.equal(sent[0].allowBackgroundTasks, allow);
     assert.deepEqual(sent[0].claudeLead, claudeLead);
+    assert.equal(sent[0].guide, null);
     assert.deepEqual(Object.keys(sent[0].dispatchCompanions), ['role-tools.cjs', 'role-artifacts.cjs']);
     assert.ok(Object.keys(sent[0].dispatchCompanions).every(name => !(name in sent[0].dispatchModules)));
     remote.receive({ type: 'ready', info: { root: '/fixture', cwd: '/fixture' } });

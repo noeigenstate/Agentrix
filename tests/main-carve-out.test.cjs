@@ -125,10 +125,10 @@ test('startup and restoration do not request an account read for background proj
   assert.deepEqual(nodes(callback, node => ts.isIdentifier(node) && accountRequests.has(node.text)), []);
 });
 
-test('main lets the skills store own the model catalog and its provider probes', () => {
+test('main lets the routing store own the model catalog and its provider probes', () => {
   const directLoads = nodes(tree, node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
     node.expression.text === 'require' && ts.isStringLiteral(node.arguments[0]));
-  const internal = new Set(['./features/skills/model-catalog.cjs', './features/skills/model-probe.cjs']);
+  const internal = new Set(['./features/routing/model-catalog.cjs', './features/routing/model-probe.cjs']);
   assert.deepEqual(directLoads.filter(node => internal.has(node.arguments[0].text)), []);
 });
 

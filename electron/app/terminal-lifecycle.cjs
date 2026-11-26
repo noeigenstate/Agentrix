@@ -1,3 +1,4 @@
+const { remoteGuide } = require('../features/routing/store.cjs');
 function createCloseGuards({ app, dialog, getWindow, sessions, findProject, allowEditorClose, t, setQuitting }) {
   const liveTerminalCount = () => [...sessions.values()].filter(s => s.status !== 'exited').length;
   // always: ask even with nothing running (removing a project by its shortcut).
@@ -192,12 +193,12 @@ function startTerminal(deps, shellCache, id, agentStarting = false, transfer = n
   const claudeHookPath = deps.path.join(deps.integrationDir, 'claude-hook.ps1');
   const hooks = bootstrapFile && deps.terminalHooks({ port: deps.hookServer?.port, terminalId: id, sessionKey, eventServer: deps.eventServer, env, cwd: startPath, seatRouting: true,
     shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath: deps.powershellPath, script: claudeHookPath, node: process.execPath,
-      helper: deps.path.join(deps.integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
-  const { terminal, remoteSkills, env: terminalEnv } = prepareAndSpawnTerminal(deps, { project, shell, id, sessionId, sessionKey,
+      helper: deps.path.join(deps.integrationDir, 'agent-event.cjs') } });
+  const { terminal, remoteLaunch, env: terminalEnv } = prepareAndSpawnTerminal(deps, { project, shell, id, sessionId, sessionKey,
     controlCapability, startPath, hooks, env, process, bootstrapFile, skillNoteFile, claudeHookPath, transfer });
   const s = createTerminalSession(deps, { id, project, terminal, env: terminalEnv, transfer, sessionId, sessionKey, controlCapability,
     bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
-  if (remoteSkills) terminal.appliedRouting = { effective: remoteSkills.seatsMap, roles: remoteSkills.roles, conductor: remoteSkills.conductor === true };
+  if (remoteLaunch) terminal.appliedRouting = { effective: remoteLaunch.seatsMap, roles: remoteLaunch.roles, conductor: remoteLaunch.conductor === true };
   registerTerminalSession(deps, s, project);
   bindTerminalEvents(deps, s, project, terminalEnv);
 }
@@ -219,17 +220,16 @@ function writeTerminalStartupFiles(deps, { project, id, sessionId, sessionKey, c
     sessionKey, controlAddress: deps.controlAddress, controlCapability,
     claudeBackgroundTasks: deps.store.settings?.claudeBackgroundTasks, powershellPath: deps.powershellPath, notifyPath: deps.path.join(deps.integrationDir, 'notify.ps1'), claudeHookPath,
     nodePath: process.execPath, accountScopeHelper: deps.path.join(deps.integrationDir, 'codex-account-scope.cjs'), hooks,
-    lead: deps.skills.terminalLead?.(project.id) ?? null, dispatchSeats: deps.skills.dispatchSeats?.(project.id), conductor: !!deps.skills.seatsInfo?.(project.id)?.conductor });
+    lead: deps.routing.terminalLead?.(project.id) ?? null, dispatchSeats: deps.routing.dispatchSeats?.(project.id), conductor: !!deps.routing.seatsInfo?.(project.id)?.conductor });
   setTerminalExecutables(deps, project, env);
   if (project.kind !== 'ssh') env.AGENTRIX_ACCOUNT_BASELINE = JSON.stringify(deps.accountEnvironment(env));
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
-    const note = deps.startupNoteFields(deps.READING_NOTE, deps.handoffFile(id), deps.path.join(project.path, 'skills'),
-      deps.skills.delivery(project, false, sessionId, { agent: 'claude' }));
-    env.AGENTRIX_READING_NOTE = note.full;
-    deps.writeFileAtomic(skillNoteFile, note.full);
-    deps.writeFileAtomic(bootstrapFile + '.launch-note', note.launch);
+    const note = deps.startupNote(deps.READING_NOTE, deps.handoffFile(id), deps.path.join(project.path, 'skills'),
+      deps.routing.launch(project, false, sessionId, { agent: 'claude' }));
+    env.AGENTRIX_READING_NOTE = note;
+    deps.writeFileAtomic(skillNoteFile, note);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void deps.writeHandoff(deps.handoffFile(id), startPath, { memoryDir: deps.memoryDir() }).catch(() => {});
   }
@@ -387,7 +387,7 @@ function bindTerminalEvents(deps, s, project, env) {
     if (deps.nativeSessions?.failed?.(id, s.nativeRuntimeSessionId)) { s.ready = false; deps.broadcast(); return; }
     flush();
     deps.endSkillSession(s);
-    deps.skills.endSession(project.id, sessionId);
+    deps.routing.endSession(project.id, sessionId);
     deps.stopUsageAccount(s);
     s.status = 'exited'; s.ready = false; s.cliActive = false;
     deps.readingHistory.close(id);
@@ -448,7 +448,7 @@ function disposeTerminal(deps, id, { preserveNative = false, preserveSwitch = fa
   }
   if (!s) return;
   if (!preserveSwitch) {
-    deps.syncDashboardLive(); deps.endSkillSession(s); deps.skills.endSession(s.projectId, s.sessionId);
+    deps.syncDashboardLive(); deps.endSkillSession(s); deps.routing.endSession(s.projectId, s.sessionId);
   }
   deps.stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);
@@ -473,19 +473,19 @@ function spawnTerminal(deps, { project, shell, id, sessionId, sessionKey, startP
   const sshAskpassPath = project.kind === 'ssh' ? deps.prepareAskpass() : undefined;
   const terminalOptions = { name: 'xterm-256color', cols: 90, rows: 22, cwd: startPath, env,
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
-  const remoteSkills = project.kind === 'ssh' ? deps.skills.delivery(project, true, sessionId) : null;
+  const remoteLaunch = project.kind === 'ssh' ? deps.routing.launch(project, true, sessionId) : null;
   const terminal = project.kind === 'ssh' ? new deps.RemoteConnection({ ...project, id }, {
     integrationDir: deps.integrationDir, auth: deps.sshAuth, sessionKey, onEvent: deps.onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     allowBackgroundTasks: deps.store.settings?.claudeBackgroundTasks,
-    claudeLead: { ...(deps.skills.terminalLead?.(project.id, { remote: true }) ?? { seatsMap: deps.skills.dispatchSeats?.(project.id) ?? {} }),
-      conductor: remoteSkills.conductor === true, launchSeatsMap: remoteSkills.agentSeats ?? {} },
-    readingNote: deps.startupNote(deps.READING_NOTE, '{AGENTRIX_HANDOFF}', deps.path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
+    claudeLead: { ...(deps.routing.terminalLead?.(project.id, { remote: true }) ?? { seatsMap: deps.routing.dispatchSeats?.(project.id) ?? {} }),
+      conductor: remoteLaunch.conductor === true, launchSeatsMap: remoteLaunch.agentSeats ?? {} },
+    readingNote: deps.startupNote(deps.READING_NOTE, '{AGENTRIX_HANDOFF}', deps.path.posix.join(project.path, 'skills'), remoteLaunch, '{AGENTRIX_DISPATCH}'), guide: remoteGuide(remoteLaunch.guide),
     onReady: info => { deps.remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? deps.pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
     : shellKind === 'bash' ? deps.pty.spawn(shell.file, deps.bashArguments(deps.integrationDir), terminalOptions)
     : shellKind === 'cmd' ? deps.pty.spawn(deps.cmdPath, ['/D', '/Q', '/K', deps.path.join(deps.integrationDir, 'bootstrap.cmd')], terminalOptions)
     : deps.pty.spawn(deps.powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', deps.path.join(deps.integrationDir, 'bootstrap.ps1')], terminalOptions);
-  return { terminal, remoteSkills, env };
+  return { terminal, remoteLaunch, env };
 }
 
 function setTerminalExecutables(deps, project, env) {

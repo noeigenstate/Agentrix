@@ -660,7 +660,7 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { dispatchEvent: event => { calls.push(['event', event.type, event.detail]); return true; }, agentrix: {
     getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude } }), onAgents: () => () => {},
-    skillSeats: async () => routing, onSkills: () => () => {},
+    routingSeats: async () => routing, onRouting: () => () => {},
     startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
     agentHistory: async () => ({ ok: true, value: history }),
@@ -2812,7 +2812,7 @@ test('native routing commands request the seats dialog without sending text or c
     };
     const view = sessionView(idle, bridge, { provider });
     const info = { roles: [] };
-    window.agentrix.skillSeats = async () => info;
+    window.agentrix.routingSeats = async () => info;
     window.addEventListener('agentrix:open-seats', event => requests.push(event.detail));
     try {
       for (const command of ['/model opus', '/effort', '/fast on']) {
@@ -2822,7 +2822,7 @@ test('native routing commands request the seats dialog without sending text or c
         assert.equal(listbox(view), undefined);
       }
       assert.deepEqual(requests, Array(3).fill({ projectId: 'p1', terminalId: 't1', info }));
-      window.agentrix.skillSeats = async () => null;
+      window.agentrix.routingSeats = async () => null;
       await typeIn(view, '/model'); keyIn(view, 'Enter'); await settle();
       assert.deepEqual(view.toasts(), ['无法读取模型路由状态']);
       assert.equal(requests.length, 3);
@@ -3010,7 +3010,7 @@ test('what a setting was changed to is a note of two seconds in the place of the
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const bridge = { runOptions: async (...args) => ({ ok: true, value: { model: args[2].model ?? 'sonnet', effort: args[2].effort ?? 'high', fast: false } }), send: async () => ({ ok: true, value: { status: 'consumed', local: contextLocal } }) };
   const view = sessionView(idle, bridge);
-  window.agentrix.skillSeats = async () => ({ roles: [] });
+  window.agentrix.routingSeats = async () => ({ roles: [] });
   try {
     await typeIn(view, '/model opus'); keyIn(view, 'Enter'); await settle(); view.tree();
     assert.deepEqual([view.toasts(), statusLines(view)], [['模型由模型路由决定'], []], 'told by the note, in no <p> of the tail');

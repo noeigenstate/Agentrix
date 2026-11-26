@@ -123,7 +123,7 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   delete source.ZDOTDIR; delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME;
   // No hook server here: the wrapper passes the command hooks, which this test runs the way Claude Code would.
   const channelHooks = terminalHooks({ terminalId: 'project', sessionKey: 'key', eventServer: server, env: {}, cwd: project,
-    shell: { posix: true, node: process.execPath, helper, noteFile }, platform: process.platform, home, read: () => '{}' });
+    shell: { posix: true, node: process.execPath, helper }, platform: process.platform, home, read: () => '{}' });
   const env = zshEnvironment(createTerminalEnvironment(source, ''), { folder, socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale: 'en_US.UTF-8',
     hooks: channelHooks });
   const terminal = pty.spawn(zsh, ['-l', '-i'], { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });

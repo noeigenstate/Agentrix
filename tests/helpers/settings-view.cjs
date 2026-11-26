@@ -7,7 +7,7 @@ function settingsView(t) {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: text => text, currentLanguage: () => 'en' },
     './VoiceButton': {}, './shortcuts': { shortcut: () => '' }, './ShortcutSettings': {}, './AgentsSettings': {},
     './AgentRuntimeSettings': { AgentRuntimeSettings }, './platform': { commandShortcut: key => '⌘' + key }, './TerminalFontSettings': {}, './UserAvatarSetting': {},
-    './ThemeSetting': {}, './Select': {}, './SkillsSettings': {}, './ProjectImagesSettings': {}, './AboutSettings': {},
+    './ThemeSetting': {}, './Select': {}, './ProjectImagesSettings': {}, './AboutSettings': {},
   });
   t.after(() => view.dispose());
   const render = props => elements(view.render('SettingsDialog', { ...props, settings: { glassTransparency: null, ...props.settings } }).result);

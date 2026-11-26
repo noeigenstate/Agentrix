@@ -1438,7 +1438,7 @@ test('dictation inserts at the end and focuses the box when it had no focus', as
 
 test('reading routing commands show a notice and never enter the PTY or outbox', async t => {
   const h = workingComposerHarness(t, 'claude'), requests = [], info = { roles: [] };
-  window.agentrix.skillSeats = async () => info;
+  window.agentrix.routingSeats = async () => info;
   window.dispatchEvent = event => requests.push([event.type, event.detail]);
   for (const command of ['/model opus', '/effort', '/fast off']) {
     h.edit(command); h.press('Enter'); await h.tick(0);
@@ -1447,18 +1447,18 @@ test('reading routing commands show a notice and never enter the PTY or outbox',
     assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['模型由模型路由决定'])));
   }
   assert.deepEqual(requests, Array(3).fill(['agentrix:open-seats', { projectId: h.props.projectId, terminalId: h.props.terminal.id, info }]));
-  window.agentrix.skillSeats = async () => null;
+  window.agentrix.routingSeats = async () => null;
   h.edit('/model'); h.press('Enter'); await h.tick(0);
   assert.equal(h.node.value, '');
   assert.deepEqual([h.pasted, h.written, h.popup(), requests.length], [[], [], undefined, 3]);
   assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['无法读取模型路由状态'])));
 });
 
-test('reading accepts the newest routing mode when skill-seat reads resolve out of order', async t => {
+test('reading accepts the newest routing mode when routing seat reads resolve out of order', async t => {
   const h = dictationHarness(t), pending = [], events = [];
   let changed;
-  window.agentrix.onSkills = fn => { changed = fn; return () => {}; };
-  window.agentrix.skillSeats = () => new Promise(resolve => pending.push(resolve));
+  window.agentrix.onRouting = fn => { changed = fn; return () => {}; };
+  window.agentrix.routingSeats = () => new Promise(resolve => pending.push(resolve));
   window.dispatchEvent = event => events.push(event.type);
   h.remount();
   changed();
@@ -1467,7 +1467,7 @@ test('reading accepts the newest routing mode when skill-seat reads resolve out 
   await h.tick(0);
   pending[0]({ conductor: false, roles: [] });
   await h.tick(0);
-  window.agentrix.skillSeats = async () => ({ conductor: true, roles: [] });
+  window.agentrix.routingSeats = async () => ({ conductor: true, roles: [] });
   h.edit('/model'); h.press('Enter'); await h.tick(0);
   assert.deepEqual(events, ['agentrix:open-seats']);
   assert.deepEqual(h.written, []);

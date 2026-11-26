@@ -53,13 +53,13 @@ const { registerGitIpc } = require('./features/git/ipc.cjs');
 const { registerUpdatesIpc } = require('./features/updates/ipc.cjs');
 const { registerAgentsIpc } = require('./features/agents/ipc.cjs');
 const { createInterventions } = require('./features/agents/interventions.cjs');
-const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
-const { SkillsStore, probeCodex, probeClaude } = require('./features/skills/store.cjs');
+const { registerRoutingIpc } = require('./features/routing/ipc.cjs');
+const { RoutingStore, probeCodex, probeClaude } = require('./features/routing/store.cjs');
 const { writeFileAtomic } = require('./atomic-write.cjs');
 const { retryFileOperation } = require('./file-retry.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
-const { writeHandoff, startupNote, startupNoteFields } = require('./features/agents/handoff.cjs');
+const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
 const { writeSeatMap } = require('./features/agents/call-seat.cjs');
 const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
@@ -180,14 +180,14 @@ let activeTerminal = null;
 let activeFileTree = null;
 let fileOperations, filesIpc;
 let voiceManager;
-let skills;
+let routing;
 let attentionTimer;
-const { prepareReading, publishAction, publishConversation, readEvery, describeActions, startSkillSession, endSkillSession, refreshSkillNotes } =
+const { prepareReading, publishAction, publishConversation, readEvery, describeActions, startSkillSession, endSkillSession, refreshRoutingNotes } =
   createSessionPresentation({
-    findProject, adapterOf, sessions, readingHistory, scheduleState, send, skillDescription, startupNote, startupNoteFields,
+    findProject, adapterOf, sessions, readingHistory, scheduleState, send, skillDescription, startupNote,
     READING_NOTE, handoffFile, writeFileAtomic, path, report, randomUUID, refreshRemoteRouting, updateDispatchSeats,
     updateBootstrapMode, updateBootstrapLead, t,
-    get store() { return store; }, get skills() { return skills; }, get nativeSessions() { return nativeSessions; },
+    get store() { return store; }, get routing() { return routing; }, get nativeSessions() { return nativeSessions; },
     get tellMode() { return tellMode; }, get tellRemoteRouting() { return tellRemoteRouting; },
   });
 
@@ -231,12 +231,12 @@ const host = {
   get controlAddress() { return controlAddress; }, set controlAddress(value) { controlAddress = value; },
   get claudeRuntime() { return claudeRuntime; }, set claudeRuntime(value) { claudeRuntime = value; }, get terminalInput() { return terminalInput; },
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
-  get runtimeDir() { return runtimeDir; }, get skills() { return skills; },
+  get runtimeDir() { return runtimeDir; }, get routing() { return routing; },
   accountEnvironment, ActionLog, adapterOf, AgentCalls, app, ApprovalGuard, approvalStamp, bashArguments, captureBranch, claudeResumeCommand,
   codexLocator, CompletionWork, ConversationLog, dashboard, endSkillSession, fs, InputGate, isTerminalResponse, legacyRestoreAgent, linuxShell,
   macShell, onPath, os, path, prepareAskpass, PromptMarkers, PromptQueue, pty, publishAction, publishConversation, quotaScope,
   readingHistory, remoteBranch, RemoteConnection, removeBootstrap, restorePlans, retryFileOperation, shellEnvironment, startupErrors,
-  startupNoteFields, stopUsageAccount, SubmissionTracker, t, terminalHooks, terminalLocale, TerminalTitleTracker, wholeThread,
+  stopUsageAccount, SubmissionTracker, t, terminalHooks, terminalLocale, TerminalTitleTracker, wholeThread,
   writeFileAtomic, writeHandoff, zshEnvironment,
   get claudeFirst() { return claudeFirst; },
   get claudeLocator() { return claudeLocator; }, get cmdPath() { return cmdPath; }, get codexFirst() { return codexFirst; },
@@ -268,7 +268,7 @@ const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInpu
 const clipboardWrites = new ClipboardWrites();
 const powershellPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const cmdPath = process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
-function send(channel, data) { if (window && !window.isDestroyed()) window.webContents.send(channel, data); }
+function send(channel, ...args) { if (window && !window.isDestroyed()) window.webContents.send(channel, ...args); }
 // One Claude Code locator for the terminal and the native path (claude-runtime/BOUNDARY.md).
 const claudeLocator = createLocator();
 // A local terminal lead's Claude workers, each in a hidden terminal of its own, never in `sessions` (worker-terminals/BOUNDARY.md).
@@ -288,7 +288,7 @@ function broadcast() {
   dashboardWindow?.sync();
   syncDashboardLive();
   labWindow?.sync();
-  skills?.syncWatchers();
+  routing?.syncWatchers();
   clearTimeout(stateTimer);
   stateTimer = null;
   updateIndicators();
@@ -344,7 +344,7 @@ if (!app.requestSingleInstanceLock()) {
       probeClaude, createSdkLoader, resolveClaudeExecutable, claudeLocator, apiEnvironment, listModels, netRequest, electronNet,
       get claudeRuntime() { return claudeRuntime; },
     });
-    skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
+    routing = new RoutingStore({ dataDir: app.getPath('userData'), guideFile: path.join(app.isPackaged ? process.resourcesPath : path.join(root, 'resources'), 'routing', 'model-routing.md'),
       modelProbes,
       seatSession: id => {
         const session = sessions.get(id), spec = nativeSpecs.get(id);
@@ -352,15 +352,15 @@ if (!app.requestSingleInstanceLock()) {
           ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId,
             appliedRouting: (session.remoteConnection || session.terminal)?.appliedRouting } : null;
       },
-      getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.cliActive).map(s => s.projectId),
-      changed: (infos, { deliveryChanged }) => {
-        const refreshed = deliveryChanged && refreshSkillNotes();
-        send('skills:changed', infos);
+      getProjects: () => store.projects, getAgents: () => agents.getState(),
+      changed: () => {
+        const refreshed = refreshRoutingNotes();
+        send('routing:changed');
         return refreshed;
       }, report,
       routingNote: () => routingNote(app.getPath('userData')) });
-    skills.syncWatchers();
-    codexFirst.then(() => skills.modelCatalog.refresh('startup')).catch(report);
+    routing.syncWatchers();
+    codexFirst.then(() => routing.modelCatalog.refresh('startup')).catch(report);
     projectImageAuto = autoProjectImages({ createProjectImageAuto, store, projectImageCandidates, broadcast, get quitting() { return quitting; } });
     voiceManager = new VoiceManager({ directory: voiceDirectory, model: store.settings.voiceModel, fetcher: (url, options) => electronNet.fetch(url, options), changed: state => send('voice:state', state) });
     // Download the offline model in the background after installation so dictation works on first use.
@@ -397,7 +397,7 @@ if (!app.requestSingleInstanceLock()) {
     const { listen } = createIpcAdapter({ ipcMain, getWindow: () => window, devUrl, t, report });
     listen('app:role-permissions-notice-shown', terminalId => store.acknowledgeRolePermissionsNotice(terminalId));
     registerApplicationIpc({
-      createIpcAdapter, ipcMain, devUrl, t, report, registerUnavailableNative, registerSkillsIpc, skills, dialog, store,
+      createIpcAdapter, ipcMain, devUrl, t, report, registerUnavailableNative, registerRoutingIpc, routing, dialog, store,
       workerTerminals, registerAgentsIpc, agents, shell, sessions, findProject, dashboard, readingHistory, listAgentCommands, interventions,
       registerSshIpc, getSSHInfo, sshAuth, startTerminal, startupErrors, broadcast, registerUpdatesIpc, updateManager, updateStoreSettings,
       allowEditorClose, liveTerminalCount, registerFilesIpc, remoteFor, fileOperations, clipboardWrites, clipboard, previewResources, affectsEditor,
@@ -451,7 +451,7 @@ registerQuit({
   get quitting() { return quitting; }, set quitting(value) { quitting = value; },
   get window() { return window; }, get dashboardWindow() { return dashboardWindow; }, get labWindow() { return labWindow; },
   get attentionTimer() { return attentionTimer; }, get voiceManager() { return voiceManager; }, get fileOperations() { return fileOperations; },
-  get skills() { return skills; }, get nativeSessions() { return nativeSessions; }, get claudeRuntime() { return claudeRuntime; },
+  get routing() { return routing; }, get nativeSessions() { return nativeSessions; }, get claudeRuntime() { return claudeRuntime; },
   get updateManager() { return updateManager; }, get usageRolloverTimer() { return usageHost.usageRolloverTimer; }, get stateTimer() { return stateTimer; },
   get sshAuth() { return sshAuth; }, get eventServer() { return eventServer; }, get hookServer() { return hookServer; },
   get dispatchControl() { return dispatchControl; }, get tray() { return tray; }, get runtimeDir() { return runtimeDir; },
