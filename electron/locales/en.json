@@ -3890,5 +3890,14 @@
   "修复了一百多处可能出错的地方，包括复制粘贴、输入法回车、慢电脑上的事件提醒和远端连接。": "Over a hundred places that could go wrong are fixed, including copy and paste, Enter in input methods, event notices on slow computers and remote connections.",
   "座位把关": "Seat check",
   "总指挥用 Claude 自带的子代理去做 Codex 座位的活时会被拦下，并提示它改用规定的角色，不再悄悄换成别的模型。": "When the conductor tries to do a Codex seat's work with Claude's own subagent, the call is stopped and the conductor is told to use the assigned role, instead of quietly running on another model.",
-  "角色现在和总指挥使用同一账号和权限运行，可以联网；提交和推送仍由总指挥负责。": "Roles now run with the same account and permissions as the orchestrator and can access the network. The orchestrator remains responsible for commits and pushes."
+  "角色现在和总指挥使用同一账号和权限运行，可以联网；提交和推送仍由总指挥负责。": "Roles now run with the same account and permissions as the orchestrator and can access the network. The orchestrator remains responsible for commits and pushes.",
+  "同一环境": "Same environment",
+  "Codex 角色改用你本人的账号运行，权限和总指挥一样，可以联网，Unity 这类要读许可证的软件也能正常用了。": "Codex roles now run under your own account with the same permissions as the orchestrator and network access, so licensed tools such as Unity work.",
+  "规则把关": "Shared rules",
+  "角色每次跑命令或改文件都按同一份规则检查：不能提交、推送或强制回退，也不能清掉别人还没提交的改动。": "Every command or file change a role makes is checked against one set of rules: no commits, pushes or hard resets, and no wiping changes others have not committed.",
+  "事后核对": "After-run check",
+  "角色结束后，如果分支、标签或远端记录有变化，结果里会写明前后的不同。": "When a role ends, its result shows any change to branches, tags or remote records, before and after.",
+  "Claude Code 重启时丢掉的排队消息会标成“未送达”，可以重新发送或丢弃，不会一直显示“已排队”。": "Queued messages lost when Claude Code restarts are marked not delivered, with send again and discard, instead of staying queued.",
+  "旧沙箱": "Old sandbox",
+  "以前装过 Codex 的 Windows 沙箱，可以在管理员终端运行 codex sandbox uninstall 清理；不清理也不影响使用。": "If you installed the Codex Windows sandbox before, run codex sandbox uninstall in an administrator terminal to remove it; leaving it does no harm."
 }

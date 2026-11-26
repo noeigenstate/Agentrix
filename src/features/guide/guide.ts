@@ -3,12 +3,9 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new"; highlight?: true }[] = [
-  { title: "请更新", text: "请把 Claude Code 更新到最新版本。版本太旧时，开发角色可能停在一个看不见的确认框上，一直等着。", highlight: true },
-  { title: "大白话", text: "新增一个系统技能，所有项目的会话和角色都用日常的话回复，先说结论和需要你做的事，再说细节。" },
-  { title: "座位把关", text: "总指挥用 Claude 自带的子代理去做 Codex 座位的活时会被拦下，并提示它改用规定的角色，不再悄悄换成别的模型。" },
-  { title: "切换提示", text: "会话正忙时改了模型或思考深度，会显示“这一轮结束后切换到 …”，切换完成后这句话消失。" },
-  { title: "数据保护", text: "设置、项目列表、密钥这类文件一时读不出来（比如被杀毒软件锁住）时会重试；文件真的损坏时先备份再提醒，不会用空数据覆盖。" },
-  { title: "失败说明", text: "终端里启动 claude 或 codex 失败时，会说清楚是哪一步出了问题、该怎么办，不再什么都不说就返回。" },
-  { title: "记忆容错", text: "团队记忆里有一行坏数据时只跳过那一行，角色的任务说明照常生成。" },
-  { title: "稳定性", text: "修复了一百多处可能出错的地方，包括复制粘贴、输入法回车、慢电脑上的事件提醒和远端连接。" },
+  { title: "同一环境", text: "Codex 角色改用你本人的账号运行，权限和总指挥一样，可以联网，Unity 这类要读许可证的软件也能正常用了。", highlight: true },
+  { title: "规则把关", text: "角色每次跑命令或改文件都按同一份规则检查：不能提交、推送或强制回退，也不能清掉别人还没提交的改动。" },
+  { title: "事后核对", text: "角色结束后，如果分支、标签或远端记录有变化，结果里会写明前后的不同。" },
+  { title: "未送达", text: "Claude Code 重启时丢掉的排队消息会标成“未送达”，可以重新发送或丢弃，不会一直显示“已排队”。" },
+  { title: "旧沙箱", text: "以前装过 Codex 的 Windows 沙箱，可以在管理员终端运行 codex sandbox uninstall 清理；不清理也不影响使用。" },
 ];
