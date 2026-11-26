@@ -168,11 +168,13 @@ test('skill proposal restoration remains active when N1 leaves a peer ordinary e
   assert.match(y.stdout(), /1 skill proposals restored and awaiting the lead/);
   assert.equal(fs.readFileSync(path.join(f.linked, 'skills/sample/SKILL.md'), 'utf8'), 'Original skill.');
   const { indexPath, proposals: [proposal] } = y.end().result.skillProposalDetails;
-  assert.equal(proposal.path, path.join(f.linked, 'skills/sample/SKILL.md'));
+  // Windows runners hand out the temp folder under an 8.3 alias; compare resolved paths, not their spelling.
+  const real = file => fs.realpathSync.native(file);
+  assert.equal(real(proposal.path), real(path.join(f.linked, 'skills/sample/SKILL.md')));
   assert.equal(proposal.operation, 'edit');
   assert.equal(proposal.text, 'Unapproved worker proposal.');
   assert.equal(proposal.truncated, false);
-  assert.ok(indexPath.startsWith(path.join(f.root, 'profile') + path.sep));
+  assert.ok(real(indexPath).startsWith(real(path.join(f.root, 'profile')) + path.sep));
   assert.equal(fs.readFileSync(proposal.savedPath, 'utf8'), proposal.text);
   assert.equal(fs.readFileSync(path.join(f.linked, 'a/base.txt'), 'utf8'), 'peer edit');
   assert.equal(fs.readFileSync(path.join(f.linked, 'a/new.txt'), 'utf8'), 'peer new file');
