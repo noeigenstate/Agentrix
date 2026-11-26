@@ -57,9 +57,9 @@ function hookHarness(filename, overrides = {}, hookOverrides = {}) {
     useId: () => memo(() => `id-${slots.length}`, []),
     ...hookOverrides,
   };
-  // These hooks share the state slots of the rendered component.
+  // Compile renderer dependencies on the same hooks and overrides as the rendered component.
   const load = rendererLoader({ ...overrides, react: hooks },
-    /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|useHeldTrue|CommandList|composer-hints)(\.tsx?)?$/, false);
+    /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|useHeldTrue|CommandList|composer-hints|NativeToast|IconButton)(\.tsx?)?$/, false);
   const exported = load(filename);
   return {
     render(name, ...args) {

@@ -528,8 +528,8 @@
     "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },
   {
-    "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
-    "id": "integration/dispatch.cjs:2b9c6f710d0d32d63f38f180"
+    "text": "execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
+    "id": "integration/dispatch.cjs:5a29bc4d4754b38d4adb9eb8"
   },
   {
     "text": "launch(process.execPath, ['-e', script, __filename, file], {\n      cwd: options.cwd, env, detached: true, windowsHide: true, stdio: ['ignore', descriptor, descriptor],\n    })",

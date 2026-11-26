@@ -37,7 +37,7 @@
     { "file": "tests/dispatch-control.test.cjs", "rule": "fixed-sleep", "count": 1 },
     { "file": "tests/dispatch-interventions.test.cjs", "rule": "fixed-sleep", "count": 2 },
     { "file": "tests/dispatch-team.test.cjs", "rule": "fixed-sleep", "count": 2 },
-    { "file": "tests/dispatch.test.cjs", "rule": "elapsed-bound", "count": 2 },
+    { "file": "tests/dispatch.test.cjs", "rule": "elapsed-bound", "count": 1 },
     { "file": "tests/dispatch.test.cjs", "rule": "fixed-sleep", "count": 1 },
     { "file": "tests/file-cards.test.cjs", "rule": "fixed-sleep", "count": 2 },
     { "file": "tests/generated-images.test.cjs", "rule": "setImmediate", "count": 1 },
