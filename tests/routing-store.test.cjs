@@ -20,7 +20,10 @@ function fixture(t, setup = () => {}) {
     changed: () => { changes.push(true); }, report: error => errors.push(error) };
   setup({ root, dataDir, projects });
   const store = new RoutingStore(options);
-  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => {
+    store.close();
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
   return { root, dataDir, projects, store, changes, errors, options };
 }
 

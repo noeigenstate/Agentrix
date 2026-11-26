@@ -35,7 +35,7 @@ function fixture(t, routingNote = () => '') {
   const options = { dataDir: root, guideFile: path.join(__dirname, '../resources/routing/model-routing.md'),
     getProjects: () => [project, remote], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }), routingNote, report: assert.fail };
   const store = new RoutingStore(options);
-  t.after(() => {
+  t.after(async () => {
     store.endSession(project.id, 'claude');
     store.endSession(project.id, 'codex');
     store.endSession(project.id, 'new');
@@ -44,7 +44,7 @@ function fixture(t, routingNote = () => '') {
     store.endSession(project.id, 'cmd');
     store.endSession(remote.id, 'remote');
     store.close();
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   const save = (roles = {}, conductor = true) => store.setRouting('template', null, { conductor, roles }, null);
   const saveProject = (roles = {}, conductor = true) =>

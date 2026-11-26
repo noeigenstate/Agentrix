@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createInterface } = require('node:readline');
 const { createEventServer } = require('../electron/events.cjs');
+const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
 const { occupyHookPipe, powershell } = require('./fixtures/busy-hook-pipe.cjs');
 const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { loadWithStubs } = require('./helpers/load-with-stubs.cjs');
@@ -94,6 +95,24 @@ function bridgeArgs(name, kind = 'worker-permission') {
   return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(integration, 'claude-hook.ps1'),
     '-PipeName', name, '-ProjectId', 'project', '-SessionKey', 'session', '-Kind', kind, '-NodePath', process.execPath];
 }
+
+test('the Windows worker permission hook registered on either channel answers without a launch note', { skip: !powershell }, t => {
+  const name = 'agentrix-' + randomUUID();
+  const { settings } = terminalHooks({ port: 4242, terminalId: 'project', sessionKey: 'session', eventServer: { name }, env: {},
+    cwd: integration, shell: { posix: false, powershellPath: powershell, script: path.join(integration, 'claude-hook.ps1'), node: process.execPath },
+    read: () => '{}', workerPermission: true });
+  const hookEnv = env();
+  delete hookEnv.AGENTRIX_READING_NOTE_FILE;
+  for (const channel of ['http', 'fallback']) {
+    const [entry] = JSON.parse(settings[channel]).hooks.PermissionRequest;
+    const [hook] = entry.hooks;
+    assert.equal(hook.type, 'command');
+    assert.equal(hook.async, undefined);
+    const command = hook.shell === 'powershell' ? hook.command : '& ' + hook.command;
+    const args = ['-NoProfile', '-NonInteractive', '-Command', command];
+    assertDeny(runHook(t, powershell, args, { hookEnv, timeout: 3500, checkStderr: stderr => assert.equal(stderr, '') }));
+  }
+});
 
 test('the worker permission decision reaches stdout before a stalled event connection', t => {
   // One stdout pipe records the order. The stand-in never connects, errors or closes.

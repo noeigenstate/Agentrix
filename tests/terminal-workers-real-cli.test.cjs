@@ -25,13 +25,31 @@ function probeReply(data, results, probes) {
     { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
 }
 
+async function workerHookEndpoints(f, terminals, trace) {
+  const { createHookServer } = require('../electron/features/terminal-events/hook-server.cjs');
+  const { createHookIngest } = require('../electron/features/terminal-events/hook-ingest.cjs');
+  const { createEventServer } = require('../electron/events.cjs');
+  let eventServer, hookServer;
+  // Keep the endpoints available until the PTY is gone, even after a setup or assertion failure.
+  f.cleanup(async () => {
+    try { await terminals()?.closeAll(); }
+    finally { await Promise.all([hookServer?.close(), eventServer?.close()]); }
+  });
+  eventServer = await createEventServer(event => {
+    trace(event.hookEvent, event.workerRefused || event.menuTool);
+    return terminals().event(event);
+  });
+  hookServer = await createHookServer(createHookIngest({ keyOf: id => terminals().keyOf(id), deliver: event => {
+    trace(event.event, event.payload.tool_name || event.payload.notification_type);
+    return terminals().hook(event);
+  } }));
+  return { eventServer, hookServer };
+}
+
 for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'writable'} Claude Code worker terminal completes through its hooks`, { skip, timeout: 90000 }, async t => {
   const { createWorkerTerminals } = require('../electron/features/worker-terminals/worker-terminals.cjs');
   const { createEventStream } = require('../electron/features/native-session/events.cjs');
-  const { createHookServer } = require('../electron/features/terminal-events/hook-server.cjs');
-  const { createHookIngest } = require('../electron/features/terminal-events/hook-ingest.cjs');
   const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
-  const { createEventServer } = require('../electron/events.cjs');
   const pty = require('node-pty');
   const probes = readOnly ? permissionProbes : permissionProbes.slice(0, 2);
   const results = new Map(), f = await harness(t, data => probeReply(data, results, probes));
@@ -49,16 +67,10 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   fs.mkdirSync(runtimeDir);
   const bootstrapFile = path.join(runtimeDir, 'bootstrap.json');
   fs.writeFileSync(bootstrapFile, JSON.stringify({ shims: path.join(integration, 'shims') }));
-  let terminals, eventServer, hookServer;
-  // The harness drains these before removing the profile. Also covers setup/assertion failures, while the CLI's hook
-  // endpoints stay available until its PTY and ConPTY resources have actually gone.
-  f.cleanup(async () => {
-    try { await terminals?.closeAll(); }
-    finally { await Promise.all([hookServer?.close(), eventServer?.close()]); }
-  });
-  eventServer = await createEventServer(event => terminals.event(event));
-  hookServer = await createHookServer(createHookIngest({ keyOf: id => terminals.keyOf(id), deliver: event => terminals.hook(event) }));
-  const waits = [];
+  let terminals;
+  const startedAt = performance.now(), waits = [], timeline = [];
+  const trace = (event, tool) => timeline.push([Math.round(performance.now() - startedAt), event, tool]);
+  const { eventServer, hookServer } = await workerHookEndpoints(f, () => terminals, trace);
   let workerPty, exited = false, screen = '';
   terminals = createWorkerTerminals({ spawn: (file, args, options) => {
     workerPty = pty.spawn(file, args, options);
@@ -67,7 +79,7 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
     return workerPty;
   }, claudeFile: () => process.env.AGENTRIX_REAL_CLAUDE,
     parent: () => ({ env, sessionKey: 'offline-owner', bootstrapFile }), runtimeDir: () => runtimeDir,
-    calls: () => ({ setAwaiting(_runId, value) { if (value) waits.push(value); } }),
+    calls: () => ({ setAwaiting(_runId, value) { if (value) { waits.push(value); trace('waiting for ' + value); } } }),
     claudeHome: () => env.CLAUDE_CONFIG_DIR,
     hooks: ({ terminalId, sessionKey, env: workerEnv, cwd }) => terminalHooks({ port: hookServer.port, terminalId, sessionKey, eventServer, env: workerEnv, cwd,
       workerPermission: true,
@@ -86,7 +98,9 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   assert.equal(events.find(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message')?.payload.content.text, 'REAL WORKER ANSWER');
   assert.equal(events.find(event => event.type === 'path.changed').payload.selected, 'terminal-worker');
   assert.ok(f.stats.keys.every(key => key === env.ANTHROPIC_API_KEY), 'the worker used the throwaway profile\'s key only');
-  assert.deepEqual(waits, [], 'running the probes never waits for the owner');
+  if (process.env.AGENTRIX_HOOK_TRACE) t.diagnostic(JSON.stringify(timeline));
+  const waitDetails = events.filter(event => event.type === 'worker.awaiting-owner' && event.payload.detail).map(event => event.payload.detail);
+  assert.deepEqual(waits, [], `running the probes never waits for the owner\n${JSON.stringify(waitDetails)}\n${JSON.stringify(timeline)}\n${JSON.stringify(screen)}`);
   const [ran, git, write] = results.values();
   assert.ok(ran);
   assert.notEqual(ran.is_error, true, JSON.stringify(ran.content));
