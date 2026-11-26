@@ -7,5 +7,6 @@ export const WHATS_NEW: { title: string; text: string; group?: "new"; highlight?
   { title: "规则把关", text: "角色每次跑命令或改文件都按同一份规则检查：不能提交、推送或强制回退，也不能清掉别人还没提交的改动。" },
   { title: "事后核对", text: "角色结束后，如果分支、标签或远端记录有变化，结果里会写明前后的不同。" },
   { title: "未送达", text: "Claude Code 重启时丢掉的排队消息会标成“未送达”，可以重新发送或丢弃，不会一直显示“已排队”。" },
+  { title: "提议留存", text: "角色对技能提出的修改建议会长期保存，并直接写进角色结果，不会再随临时文件一起被清理。" },
   { title: "旧沙箱", text: "以前装过 Codex 的 Windows 沙箱，可以在管理员终端运行 codex sandbox uninstall 清理；不清理也不影响使用。" },
 ];

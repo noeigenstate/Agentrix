@@ -72,7 +72,15 @@ The S0 wire contract is shared by the later migrations. `readEnvelope(input, {ch
 `readSessionMode(text)` returns the mode and `readLeadSeat(text)` returns `{model, effort, fast, ultracode, seatsMap}`.
 The shell file readers take the new format; the migration owns fallback to the old file when the new file is absent.
 The detached run file uses version 2. The future `--events jsonl` path and the in-process callback use `WIRE_FIELDS.dispatch`.
-The default dispatch output stays human-readable. Skill proposal versions live in `<out>.skill-proposals-<run id>/`.
+The default dispatch output stays human-readable and gives the skill proposal index path. Local proposals live in
+`<Agentrix data>/skill-proposals/<project hash>/<batch>/`. Standalone helpers and SSH roles use the account's
+`~/.agentrix/skill-proposals/`, with a per-account folder under system temp as the last fallback. SSH paths refer to the remote host.
+Git worktrees share the hash of their common Git directory. Other projects use their resolved project path.
+Each save keeps the newest 20 completed batches per project and removes incomplete batches older than seven days.
+The detached ending's `result.skillProposalDetails` carries the index path, total and previews of up to 2 KiB per file.
+The 512 KiB receipt budget gives file paths and operations priority over preview text. For larger batches, `role_result`
+reads the full list and previews from the same index. It can find the index by run ID after the role folder and detached
+receipt expire, and keeps inline receipt previews if the proposal archive expires first.
 The wire contract and its baseline are checked by `tests/wire-format.test.cjs` and `tests/self-format-guard.test.cjs`.
 
 ## Owns

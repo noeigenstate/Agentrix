@@ -42,9 +42,9 @@ async function readStamp(folder, name, limit) {
   const handle = await fs.open(file, 'r');
   try {
     if (!sameFile(stat, await handle.stat())) return null;
-    const buffer = Buffer.alloc(limit + 1);
+    const buffer = Buffer.alloc(stat.size + 1);
     const { bytesRead } = await handle.read(buffer);
-    return bytesRead <= limit ? buffer.toString('utf8', 0, bytesRead) : null;
+    return bytesRead === stat.size ? buffer.toString('utf8', 0, bytesRead) : null;
   } finally { await handle.close(); }
 }
 
@@ -150,6 +150,22 @@ function roleResultFields({ format, version, runId, ...result }) {
     ...(result.source === 'legacy-heading' && { legacyNeedsDecision: true }) };
 }
 
+async function readSkillProposalDetails(details, runId, indexPath = details?.indexPath) {
+  if (details && !details.previewsInIndex) return details;
+  if (!indexPath) return details;
+  try {
+    const folder = path.dirname(indexPath);
+    if (path.basename(indexPath) !== 'index.json' || path.basename(path.dirname(path.dirname(folder))) !== 'skill-proposals'
+      || !privateFolder(await fs.lstat(folder)) || path.relative(folder, await fs.realpath(folder))) throw new Error('Invalid skill proposal archive');
+    const archive = JSON.parse(await readStamp(folder, 'index.json', 128 * 1024 * 1024));
+    if (archive.version !== 1 || archive.runId !== runId || !Array.isArray(archive.proposals)
+      || details && archive.proposals.length !== details.count) throw new Error('Invalid skill proposal index');
+    return { indexPath, count: archive.proposals.length, proposals: archive.proposals };
+  } catch {
+    return details && { ...details, notice: 'The full skill proposal index is no longer available.' };
+  }
+}
+
 async function stampRoleArtifacts({ folder, token }, state, now = Date.now()) {
   try {
     if (!NAME.test(path.basename(folder)) || !privateFolder(await fs.lstat(folder)) || await readStamp(folder, MARKER, 36) !== token) return;
@@ -232,4 +248,4 @@ async function sweepRoleArtifacts(root, { now = Date.now(), maxFolders = MAX_FOL
 }
 
 module.exports = { createRoleArtifacts, stampRoleArtifacts, trackRoleProcess, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION,
-  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleResultFields };
+  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleResultFields, readSkillProposalDetails };

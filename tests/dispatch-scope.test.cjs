@@ -56,7 +56,7 @@ function fixture(t) {
     const started = Promise.withResolvers();
     const result = run(['claude', '--role', 'exec', '--title', name, '--model', 'synthetic-model', '--effort', 'high', '--permission', permission,
       '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, '.dispatch', name + '.md'), '--allow', allow, ...flags], {
-      env: { PATH: '', DISPATCH_SCOPE_FIXTURE: configFile }, stdout: { write: text => { stdout += text; } },
+      env: { PATH: '', DISPATCH_SCOPE_FIXTURE: configFile, AGENTRIX_DATA_DIR: path.join(root, 'profile') }, stdout: { write: text => { stdout += text; } },
       onEvent(event) {
         if (event.type === 'dispatch.started') started.resolve();
         if (event.type === 'dispatch.ended') end = event;
@@ -167,8 +167,13 @@ test('skill proposal restoration remains active when N1 leaves a peer ordinary e
   assert.match(y.stdout(), /OUT OF SCOPE: a\/base.txt, a\/new.txt.*left live/);
   assert.match(y.stdout(), /1 skill proposals restored and awaiting the lead/);
   assert.equal(fs.readFileSync(path.join(f.linked, 'skills/sample/SKILL.md'), 'utf8'), 'Original skill.');
-  const proposal = fs.readdirSync(path.join(f.linked, '.dispatch')).find(name => name.startsWith('skill-worker.md.skill-proposals-'));
-  assert.equal(fs.readFileSync(path.join(f.linked, '.dispatch', proposal, '1.SKILL.md'), 'utf8'), 'Unapproved worker proposal.');
+  const { indexPath, proposals: [proposal] } = y.end().result.skillProposalDetails;
+  assert.equal(proposal.path, path.join(f.linked, 'skills/sample/SKILL.md'));
+  assert.equal(proposal.operation, 'edit');
+  assert.equal(proposal.text, 'Unapproved worker proposal.');
+  assert.equal(proposal.truncated, false);
+  assert.ok(indexPath.startsWith(path.join(f.root, 'profile') + path.sep));
+  assert.equal(fs.readFileSync(proposal.savedPath, 'utf8'), proposal.text);
   assert.equal(fs.readFileSync(path.join(f.linked, 'a/base.txt'), 'utf8'), 'peer edit');
   assert.equal(fs.readFileSync(path.join(f.linked, 'a/new.txt'), 'utf8'), 'peer new file');
   fs.writeFileSync(x.release, 'done'); assert.equal(await x.result, 0);

@@ -22,7 +22,7 @@ const { projectTeam, recordFindings } = require(path.join(runtime, 'features/tea
 const { RunInbox, runId, validText, readBoard } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { plainReply, skillFrontMatter } = require(path.join(runtime, 'features/skills/session.cjs'));
-const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
+const { WorkerSkillProposals, findSkillProposalIndex } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
@@ -297,7 +297,7 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
   }
   parts.push(standingRules(options));
   parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
-    + 'Record suggested skill changes in finish_role.skillProposals. Unapproved changes are preserved beside your answer; only an isolated worker worktree is restored. '
+    + 'Record suggested skill changes in finish_role.skillProposals. Unapproved changes are saved in the project’s proposal archive; only an isolated worker worktree is restored. '
     + 'Shared or managed files are report-only because their author is unknown.');
   if (options.ledger || team || options.small) parts.push('# Handing back\n\nRecord the facts, decisions and pitfalls the next worker must know in finish_role.findings '
     + '(file:line where it helps). They are added to the shared context.');
@@ -405,7 +405,8 @@ function renderDispatchEnd(event) {
     + warnings.filter(value => value.code === 'skill_proposal').map(value => ' · ' + value.detail).join('')
     + (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '')
     + (treeStopFailure ? ' · tree stop failed: ' + treeStopFailure : '')
-    + ` · out ${result.out}${fallbackText(fallback)}${routing ? ' · routing ' + routing : ''}${needsDecision ? ' · needs decision' : ''}`;
+    + ` · out ${result.out}${fallbackText(fallback)}${routing ? ' · routing ' + routing : ''}${needsDecision ? ' · needs decision' : ''}`
+    + (result.skillProposalDetails ? ` · skill proposal index ${oneLine(result.skillProposalDetails.indexPath)}` : '');
 }
 
 function renderNotice({ id, code, detail }) {
@@ -1277,7 +1278,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   const ended = ({ exitCode, reason, rate = null, scope = scopeReport(false), bookkeeping, restore,
     resultSource = 'final-text', needsDecision = null, routing = null, treeStopFailure }) => {
     const warnings = [restore, bookkeeping, ...Array.from(skillGuard?.notes ?? [], detail => ({ code: 'skill_proposal', detail }))].filter(Boolean);
-    const result = { source: resultSource, out: options.out };
+    const result = { source: resultSource, out: options.out, ...(skillGuard?.details && { skillProposalDetails: skillGuard.details }) };
     const gitChange = beforeGit && compareGit(beforeGit, gitState(options.cwd));
     signal('ended', { ...reported(), exitCode, reason, rate, scope, needsDecision, routing, result,
       refused: { count: refused.length, ...(refused.length && { first: refused[0] }) }, skillProposals, skillChangesLeftLive, interventions, stops,
@@ -1587,7 +1588,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }
     const inspectScope = () => {
       const after = checking ? snapshot(options.cwd, before) : null;
-      const own = after ? new Set([options.out, `${options.out}.log`, ...(options.readOnly ? [] : [options.ledger, team?.memory]), ...skillGuard.artifacts].filter(Boolean)
+      const own = after ? new Set([options.out, `${options.out}.log`, ...(options.readOnly ? [] : [options.ledger, team?.memory])].filter(Boolean)
         .map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
       const outbox = after && send.directory && path.relative(after.root, send.directory).split(path.sep).join('/');
       const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file) && !(outbox && file.startsWith(outbox + '/')))) ?? null;
@@ -2045,7 +2046,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
 module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, dispatchCompanions,
   dispatchEvent, detachedEnd, renderDispatchLine, renderDispatchStart,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
-  answerDetachedRole };
+  answerDetachedRole, findSkillProposalIndex };
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(error => {
     console.error('[dispatch] ' + oneLine(error.message));

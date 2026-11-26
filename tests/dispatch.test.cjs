@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
-const { readFileSync } = require('node:fs');
+const { readFileSync, writeFileSync } = require('node:fs');
 const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const { createHash, randomUUID } = require('node:crypto');
@@ -217,6 +217,8 @@ run(process.argv.slice(2), {startTimeout:${timeout},
     ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', ...(readOnly ? ['--read-only'] : [])] : ['--permission', readOnly ? 'dontAsk' : 'acceptEdits']),
     ...extra];
   const env = { ...dispatchEnvironment(), CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
+  const profile = root + '-profile';
+  env.AGENTRIX_DATA_DIR = profile;
   Object.assign(env, await environment(directory));
   if (bootstrap) env.AGENTRIX_BOOTSTRAP = config;
   const child = spawn(process.execPath, [runner, ...args], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
@@ -239,6 +241,7 @@ run(process.argv.slice(2), {startTimeout:${timeout},
   t.after(async () => {
     if (child.exitCode === null) { child.send('SIGTERM'); await finished; }
     server.close(); await fs.rm(root, { recursive: true, force: true }); if (release) await fs.rm(release, { force: true });
+    await fs.rm(profile, { recursive: true, force: true });
   });
   return { child, finished, events, visibility, directory, out, capture, args, stdout: () => stdout, releaseOn };
 }
@@ -741,9 +744,12 @@ test('detached Codex and Claude expose engine timing and decisions through the r
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
   const { createRequire } = require('node:module'), { runInNewContext } = require('node:vm');
   const peer = path.join(__dirname, 'fixtures/codex-app-server.cjs'), peerSource = await fs.readFile(peer, 'utf8');
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-timing-'));
+  const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-timing-')));
   t.after(() => fs.rm(cwd, { recursive: true, force: true }));
   const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md');
+  const project = path.join(cwd, 'project'), skill = path.join(project, 'skills/sample/SKILL.md');
+  await fs.mkdir(path.dirname(skill), { recursive: true });
+  await fs.writeFile(skill, 'Original skill');
   await fs.writeFile(brief, 'Synthetic role task');
   const cases = [['codex', 'gpt-6.1-sol'], ['claude', 'claude-sonnet-5-5'], ['claude', 'claude-sonnet-5-5', true]];
   for (const [agent, model, structured] of cases) {
@@ -751,10 +757,11 @@ test('detached Codex and Claude expose engine timing and decisions through the r
     const answer = 'Done.\r\n\r\n## Needs decision\r\n\r\nPrivate options for the lead.';
     const roleArtifacts = await createRoleArtifacts(cwd);
     const id = randomUUID(), out = path.join(roleArtifacts.folder, 'answer.md');
+    const policy = structured ? ['--permission', 'acceptEdits', '--allow', 'skills/**'] : agent === 'claude' ? ['--permission', 'plan'] : ['--read-only'];
     store.create({ id, cwd, out, roleArtifacts, createdAt: Date.now(), argv: [agent, '--role', 'review', '--title', 'Timed role',
-      '--model', model, '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, ...(agent === 'claude' ? ['--permission', 'plan'] : ['--read-only'])] });
+      '--model', model, '--effort', 'high', '--cwd', structured ? project : cwd, '--brief', brief, '--out', out, ...policy] });
     assert.equal(await runDetached(store.file(id), {
-      env: { CODEX_HOME: cwd }, resolveExecutable: (_agent, args) => ({ file: 'synthetic-cli', args }),
+      env: { CODEX_HOME: cwd, AGENTRIX_DATA_DIR: path.join(cwd, 'profile') }, resolveExecutable: (_agent, args) => ({ file: 'synthetic-cli', args }),
       launch: (_file, args) => {
         const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, remote: true,
           stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -766,6 +773,7 @@ test('detached Codex and Claude expose engine timing and decisions through the r
             argv: ['node', peer, 'app-server'], env: {}, cwd: () => cwd, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exit: child.kill,
           } });
         } else if (structured) {
+          writeFileSync(skill, 'Worker proposal');
           assert.ok(args.includes('--strict-mcp-config'));
           const configFile = args[args.indexOf('--mcp-config') + 1];
           const { command, args: serverArgs } = JSON.parse(readFileSync(configFile, 'utf8')).mcpServers.agentrix_role;
@@ -798,13 +806,21 @@ test('detached Codex and Claude expose engine timing and decisions through the r
     }), 0);
     const routing = agent === 'claude' ? { model: 'claude-sonnet-5-5', effort: 'high', fast: false, verdict: 'ok' } : null;
     assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt, ...(needsDecision && { needsDecision }), ...(routing && { routing }) }]);
-    assert.equal(endedLine.endsWith(' · needs decision'), needsDecision);
+    assert.equal(endedLine.includes(' · needs decision'), needsDecision);
     assert.doesNotMatch(endedLine, /Private options/);
     assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
     assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, jsonl: true, stdout: { write: value => { jsonl += value; } } }), 0);
     assert.deepEqual(JSON.parse(jsonl), ended);
     await sweepRoleArtifacts(cwd, { now: endedAt + RETENTION });
     await assert.rejects(fs.stat(roleArtifacts.folder), { code: 'ENOENT' });
+    if (structured) {
+      const { indexPath, count, proposals: [proposal] } = store.read(id, { fresh: true }).ended.result.skillProposalDetails;
+      assert.equal(count, 1);
+      assert.ok(indexPath.startsWith(path.join(cwd, 'profile') + path.sep));
+      assert.equal(proposal.operation, 'edit');
+      assert.equal(proposal.text, 'Worker proposal');
+      assert.equal(await fs.readFile(proposal.savedPath, 'utf8'), proposal.text);
+    }
   }
 });
 
@@ -1337,8 +1353,8 @@ test('dispatch restores unapproved skill edits and reports proposal counts on su
     assert.equal(f.events.at(-1).skillProposals, 1);
     assert.equal(f.events.at(-1).skillChangesLeftLive, 0);
     assert.equal(await fs.readFile(path.join(f.directory, 'skills/sample/SKILL.md'), 'utf8'), 'Pre-run contents.');
-    const folder = (await fs.readdir(f.directory)).find(name => name.startsWith('answer.md.skill-proposals-'));
-    assert.equal(await fs.readFile(path.join(f.directory, folder, '1.SKILL.md'), 'utf8'), 'Worker proposal.');
+    const { proposals } = JSON.parse(await fs.readFile(result.stdout.trimEnd().split(' · skill proposal index ').at(-1), 'utf8'));
+    assert.equal(await fs.readFile(proposals[0].savedPath, 'utf8'), 'Worker proposal.');
     assert.match(JSON.parse(await fs.readFile(f.capture, 'utf8')).brief, /finish_role\.skillProposals/);
   }
 });

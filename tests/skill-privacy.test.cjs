@@ -93,6 +93,11 @@ test('home paths in JSON strings and Windows names with spaces are hidden', () =
     String.raw`{"cwd":"<home>\\Desktop\\projectgrid"}; <home>\code`, { home: 2 });
 });
 
+test('GitHub runner home paths stay visible and similarly named private paths are hidden', () => {
+  check(String.raw`C:\Users\RUNNER~1\AppData; C:/users/RunnerAdmin/work; {"cwd":"C:\\Users\\runner~1\\work"}; C:\Users\runneradmin-local\work`,
+    String.raw`C:\Users\RUNNER~1\AppData; C:/users/RunnerAdmin/work; {"cwd":"C:\\Users\\runner~1\\work"}; <home>\work`, { home: 1 });
+});
+
 test('ordinary technical content is unchanged', () => {
   const text = [
     '# Build / 构建',

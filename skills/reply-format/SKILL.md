@@ -17,6 +17,7 @@ The owner chose this format on 2026-11-15 after comparing five formats rendered 
 
 ## Rules shared with every format
 - Use no internal codes: no lane letters, round or wave numbers, worker nicknames or module jargon. Write the plain description instead, such as "the automatic Codex search".
+- Say what happens in everyday words; do not coin names for things. The owner (2026-11-25, after replies used "权限回归", "钩子" and "门控" without explanation): "请解释直白，不允许每次自己造专有名词". Write "the permission dialog Agentrix should answer by itself now pops up and the role waits" instead of "permission regression". A real product or tool name the owner already uses (Claude Code, SSH) is fine; any other technical word is explained in the same sentence the first time.
 - Use no bold for labels. Bold is allowed only for something the owner must do.
 - A fact appears once per message.
 - If the state changes while you are writing, say so in a new message.
@@ -30,3 +31,4 @@ The owner chose this format on 2026-11-15 after comparing five formats rendered 
 - The first paragraph is 25 words or fewer and says what is needed from the owner.
 - There is exactly one table, with 3–6 rows, and every State comes from the fixed set.
 - There are at most four notes, no nested lists, no label bold and no internal codes.
+- No word in the reply is a name you made up; every technical word is one the owner already uses or is explained where it first appears.

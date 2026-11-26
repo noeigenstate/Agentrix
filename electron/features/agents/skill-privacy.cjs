@@ -75,7 +75,8 @@ function scrubText(text, context = {}) {
       return '<ip>';
     });
 
-    replace(/\b[A-Z]:[\\/]+Users[\\/]+(?:[^\\/\r\n"'`<>:;,()[\]{}]+(?=[\\/])|[^\\/\s"'`<>:;,()[\]{}]+)/gi, 'home', match => /[\\/]Public$/i.test(match) ? match : '<home>');
+    replace(/\b[A-Z]:[\\/]+Users[\\/]+(?:[^\\/\r\n"'`<>:;,()[\]{}]+(?=[\\/])|[^\\/\s"'`<>:;,()[\]{}]+)/gi,
+      'home', match => /[\\/](?:Public|RUNNER~1|runneradmin)$/i.test(match) ? match : '<home>');
     replace(/(?<![\w./:-])\/(?:home|Users)\/[^/\s"'`<>:;,()[\]{}]+/gi, 'home', '<home>');
     for (const pattern of users) replace(pattern, 'user', '<user>');
     for (const pattern of words) replace(pattern, 'word', '<redacted>');

@@ -8,9 +8,9 @@ const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { validateSmallScope, answerDetachedRole,
-  renderDispatchLine, renderDispatchStart } = require('./dispatch.cjs');
+  renderDispatchLine, renderDispatchStart, findSkillProposalIndex } = require('./dispatch.cjs');
 const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, readRoleResultFile, roleResultFields,
-  RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
+  readSkillProposalDetails, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -58,7 +58,7 @@ const TOOLS = [
       wait: text('The current menu id from wait_roles or roles_status'),
       choice: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'string' }] },
     } } },
-  { name: 'role_result', description: 'Read a role’s full status, refusal details, and final answer when available.',
+  { name: 'role_result', description: 'Read a role’s full status, refusal details, final answer and saved skill proposals when available.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', required: ['id'], properties: { id: text('The run id start_role returned') } } },
   { name: 'stop_role', description: 'Stop a running role.',
@@ -273,7 +273,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine,
       if (end) {
         const legacy = end.result.source === 'legacy';
         Object.assign(run, { end: renderDispatchLine(end), endedAt: timestamp(status?.endedAt), observedEndAt: Date.now(),
-          reason: end.reason, legacy, refusedCount: legacy ? null : end.refused.count,
+          reason: end.reason, legacy, refusedCount: legacy ? null : end.refused.count, skillProposalDetails: end.result.skillProposalDetails,
           needsDecision: end.needsDecision === true || legacy && status?.needsDecision === true });
         sweep();
       }
@@ -397,11 +397,14 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine,
     async role_result({ id }) {
       const run = own(id);
       await refresh([run], 1);
+      const index = run.lost ? findSkillProposalIndex(run.cwd, env, id) : undefined;
+      const skillProposalDetails = await readSkillProposalDetails(run.skillProposalDetails, id, index);
+      const status = { ...describe(run), ...(skillProposalDetails && { skillProposalDetails }) };
       const result = run.end && !run.lost ? await readRoleResultFile(run.artifacts.folder, id) : null;
       if (result) {
         run.answerRead = true;
         await stampRoleArtifacts(run.artifacts, 'read');
-        return { ...describe(run), ...roleResultFields(result) };
+        return { ...status, ...roleResultFields(result) };
       }
       const answer = run.end && !run.lost ? await fs.promises.readFile(run.out, 'utf8').catch(error => {
         if (error.code !== 'ENOENT') throw error;
@@ -416,10 +419,10 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine,
         const days = run.cleanupDays !== undefined ? run.cleanupDays : elapsed >= ORPHAN_RETENTION ? 30 : elapsed >= RETENTION ? 7 : null;
         if (run.cleanupDays !== undefined || missing && (days || run.answerRead)) {
           const notice = days ? `Answer removed by cleanup after ${days} days.` : 'Answer removed by cleanup to make room for newer role folders.';
-          return { ...describe(run), answer: notice, answerRemoved: true };
+          return { ...status, answer: notice, answerRemoved: true };
         }
       }
-      return { ...describe(run), answer };
+      return { ...status, answer };
     },
     async stop_role({ id }) {
       const run = own(id);

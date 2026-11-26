@@ -67,6 +67,15 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    guard, the whole suite) and no rerunning files that already passed. A beta dispatch is `build_only=true`; the full
    Windows tests and the full matrix run once, when preparing the stable release. Dispatching every beta with
    `build_only=false` cost 4–6 CI rounds of 25–40 minutes per beta in 1.6.0.
+   The opposite also costs: 1.6.0 ran no full matrix from beta.12 to beta.15, and the stable release then needed
+   five rounds (about 40 stale tests and smokes), because a round shows only the first failing step of each job.
+   So dispatch one full-matrix run on `beta` as soon as the owner mentions the stable release, before the last beta,
+   and when a smoke fails, have the fixer read the rest of that smoke and the later steps of its shard for
+   assertions the same change made stale.
+   Exception: when `node scripts/affected-tests.mjs --base <last release tag>` prints `FULL` (a shared or
+   infrastructure file changed, such as a split of `electron/main.cjs` or a change to the shell wrappers), the beta
+   also goes through `build_only=false`, `full_matrix=true` before it is tagged. In 1.6.4-beta.1 roles ran only their
+   targeted tests, the selector said FULL, and the first full run found about 20 failing tests on every platform.
    To see what a change selects, preview `node scripts/affected-tests.mjs --base <last-tested-ref>` (or
    `npm run test:affected -- --base <last-tested-ref>`). It prints the unit, offline real-CLI and GUI selections with
    reasons. Add `--run --kind unit` to run selected unit tests; `--kind real --locked-prefix <private-directory>` runs
@@ -80,6 +89,10 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    exceptions live in `scripts/affected-tests-map.json`, checked by `tests/affected-tests.test.cjs`. A changed dynamic
    loader requires reviewing its pinned mapping; until classified it cannot narrow coverage. Mixed-provider test files
    stay selected when they exercise the changed provider, regardless of their filename.
+   When parallel branches both changed `scripts/affected-tests-map.json`, never resolve the conflict by taking one side
+   (`git checkout --theirs/--ours`): that silently drops the other branch's new entries. Take the union of the entries
+   (an entry that `tests/affected-tests.test.cjs` then calls stale is removed), and re-pin each changed file with
+   `node scripts/affected-tests.mjs --repin <file>`. In 1.6.5 work, taking one side dropped three entries.
 
    For beta dispatches with `build_only=false`, Windows CI compares the commit against the latest verified **full**
    green beta ancestor, not the previous push

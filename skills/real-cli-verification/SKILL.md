@@ -22,6 +22,8 @@ Run offline. Nothing reaches an account.
 
 Standing checks: `AGENTRIX_REAL_CLAUDE=<path to claude> node --test tests/claude-sdk-real-cli*.test.cjs`. Drive the product's own `queryOptions`, policy and normalizer, not a copy of their options.
 
+A sandboxed role cannot run these: without `AGENTRIX_REAL_CLAUDE` they skip, and a skipped test reads as green. After a role changes what a worker is offered or allowed (`electron/features/claude-runtime/decide.cjs`, `electron/features/claude-sdk/policy.cjs`, the worker launch arguments), the lead runs every `tests/*-real-cli.test.cjs` that names the changed module with the real CLI before pushing. 1.6.2-beta.3 skipped this and the Windows contract step failed on a stale tool list.
+
 ## Compare with the real terminal
 The native view changes the display, never what the agent can do. `tests/claude-parity-real-cli.test.cjs` runs the SDK path and the real terminal through one stub and fails on a new difference. Add a behaviour there before calling it equal. A stub that never triggers a behaviour on either path, such as automatic compaction, proves nothing about it: say so.
 
