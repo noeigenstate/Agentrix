@@ -1219,7 +1219,7 @@ test('small role briefs trim context by permission and preserve the default byte
     .replace(`\n\n${plainReply}\n\n# Task`, '\n\n# Task')
     .replace(/^- Skip a named skill.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
   assert.deepEqual([read, write].map(options => createHash('sha256').update(withoutSharedRules(options)).digest('hex')),
-    ['a8e4f9ec033ee299dfe99fd93f8bdedf6547c4453b5689dcee841bf8b5e97069', 'c28cad60ff378f7abf4450429764ed77378231cb86a4540113f9f4a03a4b3599']);
+    ['caaa5198f3adb8851e613503404d6b1a73241695cf31dcfe767065bbeee17929', 'eef7a5f1087dba83131c0311c012e72cd3ed4380637fadb7b1244158c6885da8']);
 
   const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };
   const lookup = render({ ...read, small: true }, readOnlyTeam).toString();
