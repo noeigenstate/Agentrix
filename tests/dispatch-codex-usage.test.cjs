@@ -148,7 +148,7 @@ test('a dispatched Codex worker reports its app-server account and quota between
   assert.equal(context.nativeSessions.has('t'), false, 'no native session is involved');
   assert.equal(codex.connection.kind, 'subscription'); assert.equal(codex.connection.active, false);
   assert.equal(codex.connection.scopeId, accountScopeId(first, accountKey));
-  assert.equal(codex.limits.limitsById.codex.primary.usedPercent, 25);
+  assert.equal(codex.limits.limitsById.codex.primary.usedPercent, null, 'the pane hides the expired percentage until a fresh reading');
   assert.equal(codex.limits.resetCredits.availableCount, 2);
   assert.equal(codex.limits.accountScopeId, accountScopeId(first, accountKey));
   assert.equal(codex.limits.limitsById.codex.primary.resetsAtMs, 100000, 'a reset time already past is kept for the pane to say it waits for an update');
@@ -282,9 +282,13 @@ test('an accepted account report tells the window which project\'s quota changed
 test('when native sessions are unavailable the usage the pane reads still carries a dispatched Codex worker\'s quota', async t => {
   const { context, fallbackUsage } = await mainAssembly(t), at = Date.now(), id = randomUUID();
   assert.equal((await fallbackUsage()).limits, null, 'before any report there is nothing to show');
-  context.onEvent(start(id)); context.onEvent(report(id, first, 35, at));
+  context.onEvent(start(id)); context.onEvent(report(id, first, 35, at, { codex: {
+    primary: { usedPercent: 35, windowDurationMins: 300, resetsAtMs: at + 3600000 },
+    secondary: { usedPercent: 70, windowDurationMins: 10080, resetsAtMs: at - 1 },
+  } }));
   const codex = await fallbackUsage();
   assert.equal(codex.limits.limitsById.codex.primary.usedPercent, 35); assert.equal(codex.limits.accountScopeId, accountScopeId(first));
+  assert.equal(codex.limits.limitsById.codex.secondary.usedPercent, null, 'the fallback also hides expired percentages');
 });
 
 // Without the native runtime no project's Claude account is read, so the fallback keeps the app-wide reading rather than none.

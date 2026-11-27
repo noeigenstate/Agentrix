@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowCounterClockwise, ArrowsClockwise, BookOpen, Browser, CaretDown, CheckCircle, ClipboardText, DotsThree, Code, Cpu, Database, Desktop, FileText, Flask, Gauge, GitBranch,
-  HardDrives, Infinity as InfinityIcon, LockSimple, MagnifyingGlass, PencilSimple, Person, Plus, Prohibit, ShieldCheck, SidebarSimple, Stack, User, Warning, X,
+  ArrowCounterClockwise, ArrowsClockwise, CaretDown, CheckCircle, DotsThree, LockSimple, MagnifyingGlass, Plus, Prohibit, SidebarSimple, User, Warning, X,
 } from '@phosphor-icons/react';
 import { aliasTarget, modelLabel } from '../../shared/routing-command.ts';
 import { routingNotice, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
@@ -24,20 +23,18 @@ import { adapters, adapterOf, adapterOfModel } from '../../../electron/features/
 import { canLead, support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import { rankByName } from '../../../electron/features/routing/seat-rules.mjs';
 import { roleBrandIcons } from './AgentBrandIcon.ts';
+import { roleIconOf } from '../../shared/routing-role-icons.ts';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/routing/role-rules.mjs';
 import { copyRole, roleName, RoleEditor, sameRoleConfig } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
 import './seats-dialog.css';
 
-const ROLE_ICONS = { orchestrator: GitBranch, product: ClipboardText, architect: Stack, designer: PencilSimple, developer: Code,
-  reviewer: MagnifyingGlass, qa: Flask, researcher: BookOpen, devops: InfinityIcon, security: ShieldCheck,
-  frontend: Browser, backend: HardDrives, desktop: Desktop, database: Database, ai: Cpu, docs: FileText, performance: Gauge, a11y: Person };
 const enabledLimit = () => t('已启用 {limit} 个角色（上限 {limit}）；停用一个后才能再启用', { limit: MAX_ENABLED_ROLES });
 const customLimit = () => t('已创建 {limit} 个项目角色（上限 {limit}）；删除一个后才能新建', { limit: MAX_CUSTOM_ROLES });
 const roleSeparator = () => currentLanguage() === 'en' ? ', ' : '、';
 
 function RoleIcon({ id }: { id: string }) {
-  const Icon = ROLE_ICONS[id as keyof typeof ROLE_ICONS] ?? User;
+  const Icon = roleIconOf(id);
   return <span className="seats-role-icon"><Icon size={18} aria-hidden="true" /></span>;
 }
 const ROLE_NAMES: Record<string, string> = {

@@ -42,7 +42,8 @@ function accountResult(result, at = Date.now()) {
   const left = result?.rateLimitResetCredits?.availableCount;
   // JSON's integer representation must be safe before crossing Electron IPC.
   if (left != null && (!Number.isSafeInteger(left) || left < 0)) throw new Error('invalid-count');
-  const limits = [result?.rateLimits?.primary, result?.rateLimits?.secondary]
+  const codexBucket = result?.rateLimitsByLimitId?.codex;
+  const limits = [codexBucket?.primary ?? result?.rateLimits?.primary, codexBucket?.secondary ?? result?.rateLimits?.secondary]
     .filter(value => value && Number.isFinite(value.usedPercent))
     .map(value => ({ minutes: value.windowDurationMins ?? null, percent: value.usedPercent,
       resetsAt: Number.isFinite(value.resetsAt) ? value.resetsAt * 1000 : null }));
@@ -460,6 +461,9 @@ class CodexAccountUsage {
   }
   watch(options, changed) {
     return this.#subscribe(options, changed, false);
+  }
+  peek(options) {
+    return this.entries.get(this.scopeFor(options).key)?.retained ?? null;
   }
   #subscribe(options, changed, projectCheck) {
     const scope = this.scopeFor(options); options = scope.options;

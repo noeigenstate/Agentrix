@@ -4,13 +4,18 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createEvents, turnItems } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
-const { readActualModel, observedModel, probeModels } = require('./models.cjs');
+const { readActualModel, isCatalogModel, observedModel, probeModels } = require('./models.cjs');
 const { profileOf, createConnection, projectExtensions, initialize, openSession, configure, effectiveOptions, config, modelKey, errorWithCode, SESSION_ID } = require('./session.cjs');
 const { listHistory } = require('./history.cjs');
 const { TurnQueue } = require('./turns.cjs');
 
 const occupied = new Set();
 const errorCode = error => typeof error.code === 'string' ? error.code : error.message;
+
+function configChoices(options, id, map = value => value) {
+  return (config(options, id)?.options ?? []).filter(option => typeof option?.value === 'string')
+    .map(({ value, name }) => ({ value: map(value), label: typeof name === 'string' ? name : value }));
+}
 
 class AgySession {
   state = 'starting';
@@ -155,10 +160,9 @@ class AgySession {
   }
 
   modelOptions() {
-    const choices = (id, map = value => value) => (config(this.options, id)?.options ?? [])
-      .filter(option => typeof option?.value === 'string').map(({ value, name }) => ({ value: map(value), label: typeof name === 'string' ? name : value }));
     const { model, effort } = effectiveOptions(this.options);
-    return { model, effort, models: choices('model', modelKey), efforts: choices('thought_level') };
+    const models = configChoices(this.options, 'model', modelKey).filter(option => isCatalogModel(option.value));
+    return { model, effort, models, efforts: configChoices(this.options, 'thought_level') };
   }
 
   async setModelOptions(patch, betweenTurns = false) {
@@ -166,7 +170,8 @@ class AgySession {
     if ((!betweenTurns && (this.state !== 'idle' || this.routingChanges.length)) || this.configuring)
       throw errorWithCode('agy_session_busy', '请等待当前操作完成后再切换模型或强度。');
     const current = this.modelOptions();
-    if (patch.model !== undefined && !current.models.some(option => option.value === patch.model)) throw errorWithCode('agy_invalid_model');
+    const models = betweenTurns ? configChoices(this.options, 'model', modelKey) : current.models;
+    if (patch.model !== undefined && !models.some(option => option.value === patch.model)) throw errorWithCode('agy_invalid_model');
     if (patch.model === undefined && !current.efforts.some(option => option.value === patch.effort)) throw errorWithCode('agy_invalid_effort');
     if (patch.model === current.model) patch = { ...patch, model: undefined };
     if (patch.model === undefined && (patch.effort === undefined || patch.effort === current.effort)) return current;

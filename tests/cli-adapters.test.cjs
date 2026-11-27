@@ -308,6 +308,21 @@ test('Antigravity compares the observed model and reports usage without a price'
     { usage: { inputTokens: null, cachedTokens: null, outputTokens: null }, cost: null });
 });
 
+test('Antigravity names the quota group each model draws on, with the group keys its usage data carries', () => {
+  const { quotaGroup, quotaGroups } = shared.adapterOf('agy').manifest.usage;
+  const { isUsageGroup } = require('../electron/features/agy-acp/usage-reader.cjs');
+  const models = require('./fixtures/agy-acp/model-options.json').map(({ value }) => value);
+  assert.deepEqual(Object.fromEntries(models.map(model => [model, quotaGroup(model)])), {
+    'gemini-4-neon': 'gemini', 'gemini-4-carbon': 'gemini', 'gemini-4-argon': 'gemini', 'gemini-4-hydrogen': 'gemini',
+    'gemini-pro-orchestrator-neon': 'gemini', 'gemini-pro-orchestrator': 'gemini', 'gemini-pro-orchestrator-argon': 'gemini',
+    'gemini-3.8-flash': 'gemini', 'claude-opus-5-5': '3p', 'claude-sonnet-5-5': '3p', 'gpt-oss-120b-medium': '3p',
+  });
+  assert.deepEqual(['agy:gemini-3.8-flash', 'agy:claude-opus-5-5', 'Gemini-4-Neon'].map(quotaGroup), ['gemini', '3p', 'gemini'], 'a routing key keeps its group');
+  for (const group of Object.keys(quotaGroups)) assert.ok(isUsageGroup(group), group);
+  for (const name of Object.values(quotaGroups)) assert.equal(typeof en[name], 'string', name);
+  for (const { manifest } of shared.adapters().filter(({ manifest }) => manifest.id !== 'agy')) assert.equal(manifest.usage?.quotaGroup, undefined, manifest.id);
+});
+
 test('Antigravity sends role tools and notes in ACP shapes', () => {
   const { roleTools, notes } = adapterOf('agy');
   const server = { command: 'node', args: ['dispatch.cjs', 'mcp-role'], env: { ELECTRON_RUN_AS_NODE: '1' } };

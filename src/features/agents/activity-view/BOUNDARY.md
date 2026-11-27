@@ -1,6 +1,8 @@
 # Boundary: Activity view
 
 Shows the expanded project's usage and quota in the Activity pane. The routing dialog supplies the routing section and host.
+Each agent shows its channel and quota windows as soon as a project opens. An allowance split by model (`usage.quotaGroup`) shows the groups of the models the project runs.
+Session token totals, when available, have their own rows.
 
 ## Owns
 - `src/features/agents/ActivityPane.tsx`
@@ -20,6 +22,7 @@ Shows the expanded project's usage and quota in the Activity pane. The routing d
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/agents/RoutingKeyCard.tsx`
 - `src/features/agents/SeatsHost.tsx`
+- `src/features/agents/routing-seats.ts` (the seat each enabled role runs, for the models in use)
 - `src/features/home/send-to-agent.ts`
 - `src/features/native-session/native-billing-link.ts`
 - `src/features/native-session/native-bridge.ts`

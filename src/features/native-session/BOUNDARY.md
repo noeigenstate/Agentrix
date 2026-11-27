@@ -1,6 +1,8 @@
 # Boundary: Native session view
 
-The view of an agent session that runs without a terminal — Claude through the Agent SDK on the owner's API key, Codex through its app-server. The events the main process publishes are only the data: the conversation is turned into the reading view's entries and drawn by the reading view's own components, with the same scroll, working line, result row and message box. What only this view adds is the requests waiting on the owner, the notice when Claude's session moves to the terminal, and what a run-mode change shows a running session of either kind: the line, the question about background tasks and the owner's draft carried across.
+The view of an agent session that runs without a terminal. Claude uses the Agent SDK with the owner's API key, Codex uses app-server, and Antigravity uses ACP.
+The reading view draws the conversation from the main process's events. This view adds requests waiting on the owner and notices and draft handoff when Claude changes run modes.
+Antigravity takes its model and thinking level from Model Routing, including in an open session.
 
 The events' envelope and types are contract §1 (`src/shared/agent-events.ts`). Item `content`, request and plan payloads are read tolerantly by `native-model.ts` and `native-words.ts` (the field names each one reads are listed at the top of those files), and a field that is absent stays absent.
 

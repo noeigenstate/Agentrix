@@ -4,6 +4,9 @@ const { createInterface } = require('node:readline');
 const { SESSION_ID, config, initialize, openSession, setConfig, modelKey, errorWithCode } = require('./session.cjs');
 const activeCatalogs = new Set();
 
+// ACP lists orchestration modes as model options with only a value and name, so identify them by their ID family.
+const isCatalogModel = model => typeof model === 'string' && !/^(?:agy:)?gemini-pro-orchestrator(?:-|$)/i.test(model);
+
 function transcriptFile(profile, sessionId) {
   if (!profile || !SESSION_ID.test(sessionId)) return null;
   return path.join(profile, 'antigravity-cli', 'brain', sessionId, '.system_generated', 'logs', 'transcript_full.jsonl');
@@ -75,6 +78,7 @@ async function probeModels(connect, { cwd, env, profile, spec, signal, clientVer
     if (!model?.options?.length) throw errorWithCode('agy_config_mismatch');
     const rows = [];
     for (const { value, name } of model.options) {
+      if (!isCatalogModel(value)) continue;
       const options = value === model.currentValue ? session.configOptions : await setConfig(rpc, sessionId, 'model', value);
       const thinking = config(options, 'thought_level');
       const efforts = thinking?.options?.map(option => option.value) || [];
@@ -97,4 +101,4 @@ async function probeModels(connect, { cwd, env, profile, spec, signal, clientVer
   }
 }
 
-module.exports = { observedModel, probeModels, readActualModel, transcriptOffset };
+module.exports = { isCatalogModel, observedModel, probeModels, readActualModel, transcriptOffset };

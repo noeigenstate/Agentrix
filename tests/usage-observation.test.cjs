@@ -55,7 +55,8 @@ test('Codex loading, timeout and 429 retain dated observations, including a late
   rebound.dispose();
 });
 
-function facade(t, remote = false) {
+function facade(t, remote = false, focused = false, now = 1000) {
+  t.mock.timers.enable({ apis: ['Date'], now });
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-usage-observation-'));
   const forbidden = () => assert.fail('no API, credential read or provider process is allowed');
   let connections = { claude: connection(), codex: connection() }, limits = { claude: subscriptionLimits(account(), 'claude', 120000, 1001), codex: subscriptionLimits(account(), 'codex', 120000, 1001) };
@@ -64,10 +65,18 @@ function facade(t, remote = false) {
     claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }], usage: { summary: () => ({}) }, credentials: { status: () => ({ saved: false }), get: forbidden }, create: forbidden },
     codex: { create: forbidden }, resolveSpec: forbidden, emit: forbidden,
     connections: async () => { if (connections instanceof Error) throw connections; return typeof connections === 'function' ? connections() : connections; },
-    usageInputs: async () => { assert.equal(remote, false, 'SSH must not read local accounts'); return { cli, limits }; } });
+    usageInputs: async () => { assert.equal(remote, false, 'SSH must not read local accounts'); return { cli, limits, focused }; } });
   t.after(async () => { await native.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   return { native, set: (nextConnections, nextLimits = {}) => { connections = nextConnections; limits = nextLimits; } };
 }
+
+test('expired focused windows keep their reset timestamp and lose the stale percentage on the wire', async t => {
+  const { native } = facade(t, false, true, 1400);
+  const primary = async () => (await native.usage('p')).agents.codex.limits.limitsById.subscription.primary;
+  assert.equal((await primary()).usedPercent, 42);
+  t.mock.timers.tick(100);
+  assert.deepEqual(await primary(), { usedPercent: null, windowDurationMins: 300, resetsAtMs: 1500 });
+});
 for (const agent of ['claude', 'codex']) test(`${agent} native usage retains observations through restart placeholders and read failures, but accepts logout and account change`, async t => {
   const f = facade(t); await f.native.usage('p');
   for (const value of [{ [agent]: { kind: 'none', observedAt: null, active: false } }, { [agent]: { kind: 'unknown', observedAt: null } }, new Error('offline timeout')]) {
@@ -316,6 +325,7 @@ test('retained observations are bounded: a removed project releases its Codex ca
   accounts.close('twin'); accounts.close('c'); t.mock.timers.tick(5001);
   await accounts.read(project('d'), codexOnly);
   assert.equal(codex.entries.size, 1);
+  t.mock.timers.reset();
   const f = facade(t); await f.native.usage('first');
   f.set(new Error('offline timeout'));
   assert.equal((await f.native.usage('first')).agents.codex.limits.observedAtMs, 1000);
@@ -360,10 +370,14 @@ async function liveCodex(t) {
     return { start: async () => {}, close: async () => {}, snapshot: () => ({ state: 'idle' }) };
   } };
   const native = createNativeSessions({ directory, claude: runtime, codex: runtime, resolveSpec: () => ({ projectId: 'p', terminalId: 't' }), emit() {},
-    connections: async () => ({ codex: live.codex }), usageInputs: async () => ({ cli, limits: live.limits }) });
-  t.after(async () => { await native.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+    connections: async () => ({ codex: live.codex }), usageInputs: async () => {
+      if (live.limits instanceof Error) throw live.limits;
+      return { cli, limits: live.limits };
+    } });
+  t.after(async () => { await native.close(); await fs.promises.rm(directory, { recursive: true, force: true }); });
   await native.start('t', { agent: 'codex' });
   live.shown = async () => (await native.usage('p')).agents.codex.limits;
+  live.native = native;
   live.percent = async () => { const value = await live.shown(); return [value?.state, Object.values(value?.limitsById || {})[0]?.primary.usedPercent]; };
   return live;
 }
@@ -371,6 +385,7 @@ const sessionLimits = (at, percent) => ({ scopeId: 'session-1', billingRoute: 'u
   limitsById: percent == null ? {} : { codex: { primary: { usedPercent: percent, windowDurationMins: 300, resetsAtMs: 9000 } } } });
 
 test('after Codex says the account changed, the reader’s newer reading replaces the session’s empty placeholder', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 });
   const live = await liveCodex(t);
   live.publish(sessionLimits(1000, 42));
   assert.deepEqual(await live.percent(), ['ready', 42]);
@@ -386,6 +401,23 @@ test('after Codex says the account changed, the reader’s newer reading replace
   assert.deepEqual(await live.percent(), ['ready', 12]);
   live.limits = { codex: read('account-a', 5000, 11) };
   assert.deepEqual(await live.percent(), ['ready', 12]);
+});
+
+test('a closed session’s held limit becomes unknown after a failed refresh and switching away and back', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 8999 });
+  const live = await liveCodex(t);
+  const last = sessionLimits(1000, 42);
+  live.publish(last);
+  assert.deepEqual(await live.percent(), ['ready', 42]);
+  await live.native.stop('t', live.native.snapshot('t').runtimeSessionId);
+  live.limits = new Error('fixture timeout');
+  t.mock.timers.tick(1);
+  assert.equal((await live.native.usage('other')).agents.codex.limits, null);
+  const held = await live.shown();
+  assert.equal(held.scopeId, 'session-1');
+  assert.equal(held.observedAtMs, 1000);
+  assert.deepEqual(held.limitsById.codex.primary, { usedPercent: null, resetsAtMs: 9000, windowDurationMins: 300 });
+  assert.equal(last.limitsById.codex.primary.usedPercent, 42);
 });
 
 test('a session’s empty quota payload keeps its own route unless the reader read this subscription account’s quota', async t => {

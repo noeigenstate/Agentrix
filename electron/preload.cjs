@@ -13,7 +13,6 @@ contextBridge.exposeInMainWorld('agentrix', {
     resume: (terminalId, options) => ipcRenderer.invoke('native:resume', terminalId, options),
     history: (terminalId, agent) => ipcRenderer.invoke('native:history', terminalId, agent),
     remoteModels: (terminalId, agent) => ipcRenderer.invoke('native:remote-models', terminalId, agent),
-    modelOptions: (terminalId, runtimeSessionId, patch) => ipcRenderer.invoke('native:model-options', terminalId, runtimeSessionId, patch),
     send: (terminalId, runtimeSessionId, clientMessageId, text, images) => ipcRenderer.invoke('native:send', terminalId, runtimeSessionId, clientMessageId, text, images),
     interrupt: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:interrupt', terminalId, runtimeSessionId),
     stop: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:stop', terminalId, runtimeSessionId),

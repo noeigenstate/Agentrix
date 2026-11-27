@@ -8,6 +8,7 @@ const path = require('node:path');
 // session's environment and spec. `deps` is the app shell (main.cjs), read on every call so its late values are current; these
 // functions are among its members and reach each other through it too.
 function createHostInputs(deps) {
+  let pendingUsage;
   async function readNativeConnections(projectId) {
     const { sessions, projectAccounts, claudeRuntime, liveHost } = deps;
     const result = {}, observed = new Map();
@@ -54,17 +55,38 @@ function createHostInputs(deps) {
     const cli = { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } };
     // Read after the checks: the app can start quitting, or the project close, while they run.
     const { store } = deps, project = store.projects.find(project => project.id === projectId);
-    if (project && project.kind !== 'ssh' && !deps.quitting) {
-      const env = nativeEnvironment('');
-      const accounts = await projectAccounts.read(project, { cli, env });
-      if (accounts && !deps.quitting && deps.store.projects.includes(project)) {
-        for (const { manifest: { id }, usage } of adapters()) {
-          const limits = accounts[id]?.limits;
-          if (usage?.focusedLimits && limits?.length) deps.dashboard.quota(id, limits, deps.quotaScope(id, project, { usageEnv: env }));
-        }
-      }
+    const snapshot = () => readNativeSubscriptionLimits(projectId);
+    if (!project || project.kind === 'ssh' || deps.quitting) return { cli, limits: snapshot() };
+    // A notification can trigger another read while a slower provider is still working.
+    if (pendingUsage?.project === project) {
+      return { cli, ...await (pendingUsage.latest || pendingUsage.first) };
     }
-    return { cli, limits: readNativeSubscriptionLimits(projectId) };
+    const env = nativeEnvironment('');
+    const first = Promise.withResolvers(), reading = pendingUsage = { project, first: first.promise };
+    const current = () => pendingUsage === reading && !deps.quitting && deps.store.projects.includes(project);
+    const publish = (limits, focused) => {
+      const previous = reading.latest;
+      reading.latest = { limits, focused };
+      first.resolve(reading.latest);
+      if (previous && JSON.stringify(limits) !== JSON.stringify(previous.limits)) deps.send?.('agents:usage-changed', { projectId });
+    };
+    void Promise.resolve().then(() => projectAccounts.read(project, { cli, env, onCached: () => {
+      if (!current()) return;
+      const limits = snapshot();
+      if (reading.latest || Object.values(limits).some(value => Object.keys(value?.limitsById || {}).length)) publish(limits, true);
+    } })).then(accounts => {
+      if (!accounts || !current()) return;
+      publish(snapshot(), true);
+      for (const { manifest: { id }, usage } of adapters()) {
+        const limits = accounts[id]?.limits;
+        if (usage?.focusedLimits && limits?.length) deps.dashboard.quota(id, limits, deps.quotaScope(id, project, { usageEnv: env }));
+      }
+    }).then(() => {
+      if (!reading.latest) first.resolve({ limits: snapshot(), focused: false });
+    }).catch(error => first.reject(error)).finally(() => {
+      if (pendingUsage === reading) pendingUsage = null;
+    });
+    return { cli, ...await first.promise };
   }
 
   function connectionSpec(projectId) {

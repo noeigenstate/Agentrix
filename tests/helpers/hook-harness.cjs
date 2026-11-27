@@ -59,7 +59,7 @@ function hookHarness(filename, overrides = {}, hookOverrides = {}) {
   };
   // Compile renderer dependencies on the same hooks and overrides as the rendered component.
   const load = rendererLoader({ ...overrides, react: hooks },
-    /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|useHeldTrue|CommandList|composer-hints|NativeToast|IconButton|Select|NativeModelControls|native-words|native-panel)(\.tsx?)?$/, false);
+    /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|useHeldTrue|CommandList|composer-hints|NativeToast|IconButton|Select|native-words|native-panel)(\.tsx?)?$/, false);
   const exported = load(filename);
   return {
     render(name, ...args) {

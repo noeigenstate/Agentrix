@@ -379,9 +379,6 @@ export type NativeRunOptionsPatch = {
 };
 export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean; permissions?: Settings['codexPermissions'] };
 export type NativeHistorySession = { id: string; title: string | null; at: number | null };
-export type NativeModelOptionsPatch = { model?: string; effort?: string };
-export type NativeModelOptions = { model: string | null; effort: string | null; models: NativeModelChoice[]; efforts: NativeModelChoice[] };
-type NativeModelChoice = { value: string; label: string };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
 type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<AgentProvider, NativeUsage['agents'][AgentProvider] & {
   connection: BillingConnection; next: { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
@@ -392,7 +389,6 @@ type Bridge = {
     resume(terminalId: string, options: { agent: AgentProvider; sessionId?: string }): Promise<Result<{ runtimeSessionId: string }>>;
     history(terminalId: string, agent: AgentProvider): Promise<Result<NativeHistorySession[]>>;
     remoteModels(terminalId: string, agent: AgentProvider): Promise<Result<Pick<SeatModel, 'model' | 'label' | 'efforts' | 'defaultEffort' | 'fast' | 'isDefault'>[]>>;
-    modelOptions(terminalId: string, runtimeSessionId: string, patch?: NativeModelOptionsPatch): Promise<Result<NativeModelOptions>>;
     send(terminalId: string, runtimeSessionId: string, clientMessageId: string, text: string, images?: string[]): Promise<Result<unknown>>;
     interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
     stop(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;

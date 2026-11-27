@@ -45,7 +45,9 @@ rl.on('line', line => {
   process.stdout.write('{"method":"account/rateLimits/updated","params":{}}\n{"id":99,"result":{}}\n');
   const response = JSON.stringify({ id: 3, result: { accountId: 'must-not-escape',
     rateLimits: mode === 'limits' ? { primary: { usedPercent: 80, windowDurationMins: 300 } } : {},
-    rateLimitResetCredits: mode === 'null' || mode === 'limits' ? null : { availableCount: Number(mode), credits: null } } }) + '\n';
+    ...(mode === 'grouped' && { rateLimitsByLimitId: { codex: { primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1200 },
+      secondary: { usedPercent: 37, windowDurationMins: 10080, resetsAt: 2400 } } } }),
+    rateLimitResetCredits: ['null', 'limits', 'grouped'].includes(mode) ? null : { availableCount: Number(mode), credits: null } } }) + '\n';
   process.stdout.write(response.slice(0, 17));
   setTimeout(() => process.stdout.write(response.slice(17)), 5);
 });
@@ -103,6 +105,12 @@ test('API and signed-out account reads never request subscription quotas or refr
     assert.equal(value.connection.active, false);
     assert.equal(value.limits, undefined);
   }
+});
+
+test('a fresh app-server reads the grouped five-hour and weekly windows without a thread or turn', async t => {
+  const value = await fakeRead(t, 'grouped');
+  assert.equal(value.connection.kind, 'subscription');
+  assert.deepEqual(value.limits, [{ minutes: 300, percent: 25, resetsAt: 1200000 }, { minutes: 10080, percent: 37, resetsAt: 2400000 }]);
 });
 
 test('valid account limits survive missing reset credits without inventing a reset count', () => {

@@ -1147,7 +1147,8 @@ test('Antigravity has its own reading identity, approval and usage, without a Cl
   assert.match(html, /data-agent="agy"/);
   assert.match(html, /agent-brand-agy/);
   assert.match(html, /reading-step-label">Antigravity/);
-  assert.match(html, /上下文 400 \/ 2k · 20%/);
+  assert.match(html, /^<div class="reading-view" data-agent="agy" data-native-session="[^"]+"><div class="reading-scroll-area">/, 'the conversation starts at the top, as in Codex');
+  assert.doesNotMatch(html, /native-model|native-context|select-trigger|上下文/, 'no model, effort or context bar of its own: those are in the Agent panel');
   assert.match(html, /输入 35 · 输出 8/);
   const { composerAction } = load('features/native-session/native-composer.ts');
   for (const command of ['/usage', '/status', '/cost', '/context', '/permissions', '/fast']) assert.equal(composerAction(command, 'agy'), null);
@@ -1164,48 +1165,6 @@ test('Antigravity has its own reading identity, approval and usage, without a Cl
     ['agy_cli_outdated', /版本过低/],
     ['agy_auth_required', /请先登录 Google Antigravity CLI/],
   ]) assert.match(render(ev => [ev('session.state', { state: 'failed', reason: code })]), message);
-});
-
-test('Antigravity model choices write to their session between turns and replace the effort choices', async t => {
-  const Select = () => null, read = Promise.withResolvers(), changed = Promise.withResolvers(), effortChanged = Promise.withResolvers();
-  const calls = [], busy = [];
-  const model = 'gemini-3-flash', collision = 'agy:claude-opus-5-5';
-  const models = [{ value: model, label: 'Flash' }, { value: collision, label: 'Collision' }];
-  const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
-  stubGlobals(t, { window: { agentrix: { nativeSession: { modelOptions: (...args) => {
-    calls.push(args);
-    const patch = args[2];
-    return !patch ? read.promise : patch.model ? changed.promise : effortChanged.promise;
-  } } } } });
-  const ui = hookHarness('src/features/native-session/NativeModelControls.tsx', {
-    './Select': { Select }, './feed-parts': { AgentMark() {} }, './i18n': { t: fill }, './native-words.ts': words(),
-  });
-  t.after(() => ui.dispose());
-  const props = { terminalId: 't', sessionId: 'a1', kind: 'agy', agent: 'Antigravity', idle: true, routingRevision: null,
-    busy: false, onBusy: value => busy.push(value), onError: message => { if (message) assert.fail(message); } };
-  const picks = () => elements(ui.render('NativeModelControls', props).result).filter(node => node.type === Select).map(node => node.props);
-  assert.deepEqual(picks(), []);
-  read.resolve({ ok: true, value: { model, effort: 'high', models, efforts: [{ value: 'high', label: 'High' }] } });
-  await read.promise;
-  const [modelsMenu, effortMenu] = picks();
-  assert.equal(modelsMenu.value, model);
-  assert.deepEqual(modelsMenu.options.map(option => option.label), [model, 'claude-opus-5-5']);
-  assert.equal(effortMenu.value, 'high');
-  modelsMenu.onChange(collision);
-  assert.deepEqual(calls, [['t', 'a1'], ['t', 'a1', { model: collision }]]);
-  const efforts = [{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }];
-  changed.resolve({ ok: true, value: { model: collision, effort: 'low', models, efforts } });
-  await changed.promise;
-  assert.deepEqual(busy, [true, false]);
-  assert.deepEqual(picks().map(menu => menu.value), [collision, 'low']);
-  assert.deepEqual(picks()[1].options, efforts);
-  picks()[1].onChange('medium');
-  assert.deepEqual(calls.at(-1), ['t', 'a1', { effort: 'medium' }]);
-  effortChanged.resolve({ ok: true, value: { model: collision, effort: 'medium', models, efforts } });
-  await effortChanged.promise;
-  assert.equal(picks()[1].value, 'medium');
-  props.idle = false;
-  assert.ok(picks().every(menu => menu.disabled));
 });
 
 // The session component with real hooks, the heavy neighbours stood in. `show` replaces the model's events; `change` is the terminal's SwitchState.
@@ -1838,9 +1797,8 @@ test('the requests and the switch question stand at the end of the timeline on t
 test('only what the reading view does not have stays in native-session.css', () => {
   const css = readCss('src/features/native-session/native-session.css');
   const classes = new Set(css.blocks.flatMap(({ selector }) => selector.match(/\.native-[a-z-]+/g) ?? []));
-  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-context-usage', '.native-ended', '.native-error', '.native-model-agent', '.native-model-controls',
-    '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
-    'session model controls have their own styles; the feed, steps, receipts, diffs and plans use the reading view');
+  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
+    'no header, step, receipt, diff or plan style of its own');
 });
 
 test('a new request pulls the view to it even when the owner had scrolled up; an ordinary step does not', () => {
@@ -1905,8 +1863,8 @@ async function usageHtml(bridge, terminal = quietTerminal, projectId = 'p1') {
   } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
 }
 
-// The connection row of a connection observed at 1 (usageOf and the tests' own): what it says, with its source and when it was observed in the tooltip.
-const connectionRow = (source, text) => `<dt>连接</dt><dd><span title="${source} · ${load('features/agents/Metric.tsx').resetTime(1)} 更新">${text}</span></dd>`;
+// What the block no longer shows for any agent: a connection row, its words or its source.
+const NO_CONNECTION = /<dt>连接<\/dt>|已连接 API|订阅（Claude Code 登录）|ChatGPT 订阅|Antigravity 登录|account\/read|session init/;
 const usageSection = (html, agent) => {
   const section = html.match(new RegExp(`<section class="api-agent" aria-label="${agent}">([\\s\\S]*?)</section>`));
   assert.ok(section, `${agent} has its own named section`);
@@ -1959,19 +1917,19 @@ test('a burst of quota changes is read at most once a second and never moves the
   } finally { harness.dispose(); store.disposeNativeStore(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
 });
 
-test('Codex billing keeps ChatGPT subscriptions while legacy terminal snapshots require app-server restoration', async () => {
+test('Codex shows no connection row while legacy terminal snapshots require app-server restoration', async () => {
   const usage = async () => ({ ok: true, value: usageOf() });
   for (const sessionId of ['legacy-pty', null]) {
     const html = await usageHtml({ usage }, terminal('codex-billing', { agent: 'codex', cliActive: true, sessionId }));
     const codex = usageSection(html, 'Codex');
-    assert.match(codex, /ChatGPT 订阅/);
+    assert.doesNotMatch(codex, NO_CONNECTION);
     assert.doesNotMatch(codex, /<span>终端<\/span>/);
     assert.match(codex, sessionId ? /需用原生模式恢复/ : /<span>原生模式<\/span>/);
     assert.doesNotMatch(codex, /app-server|SDK/);
   }
 });
 
-test('the usage block groups Claude and Codex separately: only a connection row, and one spend row under an API connection, the subscription bars under a subscription, the last switch under its agent', async () => {
+test('the usage block groups Claude and Codex separately: only a channel row, and one spend row under an API connection, the subscription bars under a subscription, the last switch under its agent', async () => {
   const asked = [];
   const html = await usageHtml({ usage: async projectId => { asked.push(projectId); return { ok: true, value: usageOf() }; } });
   const claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
@@ -1980,14 +1938,12 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.match(html, /<h3 class="activity-card-title">运行方式与额度<\/h3>/);
   assert.match(claude, /<h4[^>]*><svg[^>]*agent-brand-claude[^>]*>.*<\/svg>Claude<\/h4>/);
   assert.match(codex, /<h4[^>]*><svg[^>]*agent-brand-codex[^>]*>.*<\/svg>Codex<\/h4>/);
-  assert.deepEqual(labels(claude), ['通道', '连接']); assert.deepEqual(labels(codex), ['通道', '连接']);
-  assert.ok(claude.indexOf('<dt>通道</dt>') < claude.indexOf('<dt>连接</dt>'), '通道 precedes 连接');
+  assert.deepEqual(labels(claude), ['通道']); assert.deepEqual(labels(codex), ['通道']);
   assert.ok(codex.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'), 'who pays and which way it runs are told apart');
   assert.ok(claude.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'));
   assert.doesNotMatch(html, /最近切换/, 'the owner asked for no last-switch row, even after a switch');
   assert.doesNotMatch(html, /新会话/, 'the new-session row is gone, and so is the route it showed');
-  assert.ok(claude.includes(connectionRow('session init: ANTHROPIC_API_KEY', '已连接 API')), 'the connection source stays in its tooltip, with when it was observed');
-  assert.ok(codex.includes(connectionRow('account/read: ChatGPT login', 'ChatGPT 订阅')));
+  assert.doesNotMatch(claude + codex, NO_CONNECTION, 'the connection row is gone, and its source with it');
   // An API connection: the spend of today and this month as one row of information, with no bar and no limit, never the subscription windows.
   assert.match(claude, /<span class="activity-metric-label">API 花费<\/span><small>今天 \$1\.23 · 本月 \$12\.40<\/small>/);
   assert.doesNotMatch(claude, /role="meter"|月预算|未设置|今日|估算|在控制台核对/, 'no budget, no bar, and no standalone console button');
@@ -1999,12 +1955,12 @@ test('the usage block groups Claude and Codex separately: only a connection row,
 });
 
 test('the usage block says 未知 for what nobody gave and keeps a real zero as $0.00', async () => {
-  // Connection not known (an older main, or nothing running): the connection and the allowance both say so, and nothing is measured.
+  // Connection not known (an older main, or nothing running): the allowance says so, no channel is guessed, and nothing is measured.
   const unknown = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: 0, monthUsdMicros: null, agents: {
     claude: { path: null, reason: null, next: { path: null, reason: null }, limits: null }, codex: { path: 'terminal', reason: null, limits: { state: 'rate_limited' } } } }) }) });
   for (const agent of ['Claude', 'Codex']) {
     const section = usageSection(unknown, agent);
-    assert.match(section, /<dt>连接<\/dt><dd><span>未知<\/span><\/dd>/);
+    assert.doesNotMatch(section, /<dt>(?:连接|通道)<\/dt>/, 'no connection row, and no channel nobody gave');
     assert.match(section, /<dt>额度<\/dt><dd><span>未知<\/span><\/dd>/, 'not connected or not known: 额度 未知');
     assert.doesNotMatch(section, /activity-metrics|role="meter"|API 花费|5 小时额度/);
   }
@@ -2031,7 +1987,7 @@ test('the usage block distinguishes no API records from records with unknown or 
   assert.doesNotMatch(codex, /API 花费|API 用量记录|5 小时额度|每周额度|role="meter"/);
 });
 
-test('the allowance of each agent follows its connection: the current session’s agent leads with the context and ends with the round, windows come from main with the session’s own as fallback', async () => {
+test('the allowance of each agent follows its connection: the current session’s agent shows its windows and ends with the round, windows come from main with the session’s own as fallback', async () => {
   const future = Date.now() + 3600_000, tokens = { input: 496000, cached: 476000, output: 5100 };
   const current = (agent, extra = {}) => ({ id: 't1', agent, cliActive: true, sessionId: 's1', agentStartedAt: 1, agentUsage: { provider: null, limits: [], context: { used: 170000, window: 1000000 }, round: tokens, total: null, ...extra } });
   const usage = usageOf(), sub = { kind: 'subscription', source: null, observedAt: 1 };
@@ -2039,10 +1995,10 @@ test('the allowance of each agent follows its connection: the current session’
   // The session's agent without windows from main falls back to what its own records gave; the other agent has neither context nor round.
   const fallback = await usageHtml({ usage: async () => ({ ok: true, value: usage }) }, current('claude', { limits: [{ minutes: 300, percent: 20, resetsAt: future }, { minutes: 10080, percent: 26, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code' }));
   const claude = usageSection(fallback, 'Claude'), codex = usageSection(fallback, 'Codex');
-  const order = ['上下文长度', '5 小时额度', '每周额度', '>本轮<'].map(text => claude.indexOf(text));
-  assert.ok(order.every((position, i) => position >= 0 && (!i || position > order[i - 1])), 'context, the two windows, then the round');
+  const order = ['<dt>通道</dt><dd><span>终端模式</span>', '5 小时额度', '每周额度', '>本轮<'].map(text => claude.indexOf(text));
+  assert.ok(order.every((position, i) => position >= 0 && (!i || position > order[i - 1])), 'the channel, the two windows, then the round');
   assert.doesNotMatch(claude, /额度来自|本次对话的总量/, 'no line says where the numbers come from or that the total is in earlier records');
-  assert.match(claude, /aria-valuenow="20"/); assert.match(claude, /aria-valuenow="26"/); assert.match(claude, /aria-valuenow="17"/);
+  assert.match(claude, /aria-valuenow="20"/); assert.match(claude, /aria-valuenow="26"/); assert.doesNotMatch(claude, /aria-valuenow="17"|上下文长度/, 'no context length');
   assert.doesNotMatch(claude, /API 花费/, 'a subscription has no spend');
   assert.doesNotMatch(codex, /上下文长度|>本轮<|>本次对话</, 'the other agent has no context or round');
   assert.match(codex, /5 小时额度/);
@@ -2050,44 +2006,44 @@ test('the allowance of each agent follows its connection: the current session’
   const main = usageOf({  }); main.agents.claude = { ...main.agents.claude, connection: sub, limits: { state: 'ready', observedAtMs: Date.now(), limitsById: { five: { primary: { usedPercent: 33, windowDurationMins: 300, resetsAtMs: future }, secondary: null } } } };
   const preferred = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: main }) }, current('claude', { limits: [{ minutes: 300, percent: 20, resetsAt: future }] })), 'Claude');
   assert.match(preferred, /aria-valuenow="33"/); assert.doesNotMatch(preferred, /aria-valuenow="20"/); assert.doesNotMatch(preferred, /额度来自/);
-  // A window nobody measured says 未知 (never 0), and one past its reset time keeps the percent last observed while it waits for its next reading.
+  // A window nobody measured or past its reset time shows 未知 while it waits for a fresh reading.
   const odd = usageOf({  }); odd.agents.codex.limits = { state: 'stale', limitsById: { a: { primary: { usedPercent: null, windowDurationMins: 300, resetsAtMs: null }, secondary: { usedPercent: 50, windowDurationMins: 10080, resetsAtMs: Date.now() - 1000 } } } };
   const staleHtml = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: odd }) }), 'Codex');
   assert.match(staleHtml, /<span class="activity-metric-label">5 小时额度<\/span><b[^>]*>未知<\/b>/); assert.doesNotMatch(staleHtml, /<b[^>]*>0%<\/b>/);
-  assert.match(staleHtml, /<span class="activity-metric-label">每周额度<\/span><span class="activity-meter" role="meter"[^>]*aria-valuenow="50"[^>]*>[\s\S]*?<b[^>]*>50%<\/b><small>已到重置时间，等待更新<\/small>/);
+  assert.match(staleHtml, /<span class="activity-metric-label">每周额度<\/span><b>未知<\/b><small>已到重置时间，等待更新<\/small>/);
   assert.doesNotMatch(staleHtml, /已重置，等待更新/, 'a reset time alone is no reset'); assert.match(staleHtml, /数据可能已过期/);
-  // Not connected: the connection and 额度 未知 and nothing to measure, even for the session's own agent.
+  // Not connected: 额度 未知 and nothing to measure, even for the session's own agent.
   const idle = usageOf({  }); idle.agents.codex = { ...idle.agents.codex, connection: { kind: 'none', source: null, observedAt: 1 }, limits: null };
   const none = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: idle }) }), 'Codex');
-  assert.match(none, /<dt>连接<\/dt><dd><span[^>]*>未连接<\/span><\/dd>/); assert.match(none, /<dt>额度<\/dt><dd><span>未知<\/span><\/dd>/); assert.doesNotMatch(none, /role="meter"|5 小时额度/);
+  assert.doesNotMatch(none, /<dt>连接<\/dt>|未连接/); assert.match(none, /<dt>额度<\/dt><dd><span>未知<\/span><\/dd>/); assert.doesNotMatch(none, /role="meter"|5 小时额度/);
   assert.equal(words().nextPathWord, undefined, 'the route of the next session is not drawn any more, so its words are gone');
 });
 
-test('the connection in use reads in words per agent: Claude API / subscription / not connected, Codex ChatGPT subscription / API, and unknown as 未知', async () => {
-  const { connectionWord } = words(), c = (kind, source = null) => ({ kind, source, observedAt: 1 });
-  const kinds = ['api', 'subscription', 'none', 'unknown'];
-  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind)).text), ['已连接 API', '订阅（Claude Code 登录）', '未连接', '未知']);
-  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind)).text), ['API', 'ChatGPT 订阅', '未连接', '未知']);
-  assert.deepEqual([connectionWord('claude', undefined), connectionWord('codex', null), connectionWord('claude', c('api', 'init'))], [{ text: '未知', source: null }, { text: '未知', source: null }, { text: '已连接 API', source: 'init' }]);
-  const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: {
-    claude: { path: 'terminal', reason: null, next: { path: 'terminal', reason: 'set_terminal' }, limits: null, connection: c('subscription', 'terminal: Claude Code login') },
-    codex: { path: 'terminal', reason: null, next: { path: 'terminal', reason: 'set_terminal' }, limits: null, connection: c('api', 'account/read: API key') } } }) }) });
-  assert.ok(usageSection(html, 'Claude').includes(connectionRow('terminal: Claude Code login', '订阅（Claude Code 登录）')));
-  assert.ok(usageSection(html, 'Codex').includes(connectionRow('account/read: API key', 'API')));
+test('Claude’s channel says how it runs: 终端模式 or 原生模式 for the session in view, else for its next session; no agent has a connection row', async () => {
+  assert.equal(words().connectionWord, undefined, 'the connection words are gone with their row');
+  const c = kind => ({ kind, source: 'terminal: Claude Code login', observedAt: 1 });
+  const channel = async (next, terminal) => {
+    const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: {
+      claude: { path: next, reason: null, next: { path: next, reason: null }, limits: null, connection: c('subscription') },
+      codex: { path: 'native', reason: null, next: { path: 'native', reason: null }, limits: null, connection: c('api') } } }) }) }, terminal);
+    assert.doesNotMatch(html, NO_CONNECTION);
+    return /<dt>通道<\/dt><dd><span>([^<]+)<\/span>/.exec(usageSection(html, 'Claude'))?.[1] ?? null;
+  };
+  const session = nativeMode => ({ id: 't1', agent: 'claude', cliActive: true, sessionId: 's1', nativeMode, agentUsage: { limits: [] } });
+  assert.equal(await channel('api', session(undefined)), '终端模式', 'the session in view runs in the terminal, whatever the next one would do');
+  assert.equal(await channel('terminal', session('claude-sdk')), '原生模式');
+  assert.equal(await channel('terminal'), '终端模式', 'no Claude session: how the next one starts');
+  assert.equal(await channel('api'), '原生模式');
+  assert.equal(await channel(null), null, 'nobody said: no channel row');
 });
 
 test('an account signed in while the agent has no main session names its plan and never claims 已连接; none and unknown never read as signed in; the bars and spend stay, the context and tokens are not made up', async () => {
-  const { connectionWord } = words(), c = (kind, active) => ({ kind, source: 'src', observedAt: 1, ...(active === undefined ? {} : { active }) });
-  const kinds = ['api', 'subscription', 'none', 'unknown'];
-  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, false)).text), ['API', '订阅（Claude Code 登录）', '未连接', '未知']);
-  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind, false)).text), ['API', 'ChatGPT 订阅', '未连接', '未知']);
-  assert.deepEqual(kinds.map(kind => connectionWord('claude', c(kind, true)).text), ['已连接 API', '订阅（Claude Code 登录）', '未连接', '未知'], 'an active connection reads as before');
-  assert.deepEqual(kinds.map(kind => connectionWord('codex', c(kind)).text), ['API', 'ChatGPT 订阅', '未连接', '未知'], 'a field that is missing (older data) reads as before');
+  const c = (kind, active) => ({ kind, source: 'src', observedAt: 1, ...(active === undefined ? {} : { active }) });
   const base = usageOf(), idle = usageOf({ agents: {
     claude: { ...base.agents.claude, connection: c('api', false) },
     codex: { ...base.agents.codex, connection: c('subscription', false), limits: { ...base.agents.codex.limits, observedAtMs: Date.now() - 60_000 } } } });
   const html = await usageHtml({ usage: async () => ({ ok: true, value: idle }) }), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
-  assert.match(claude, /<dd><span[^>]*>API<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅<\/span><\/dd>/);
+  assert.doesNotMatch(claude + codex, NO_CONNECTION, 'the plan is told by its bars or spend, not by a connection row');
   assert.doesNotMatch(html, /未开会话/, 'a sub-agent may be running on this account, so no session is not something the pane can say');
   assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.doesNotMatch(codex, /额度来自/);
   assert.match(claude, /API 花费/); assert.doesNotMatch(claude, /月预算/);
@@ -2190,18 +2146,20 @@ test('in English the sentences main writes for a console balance and a billing m
   } finally { i18n.applyLanguage('zh'); }
 });
 
-test('when main gives no usage (a read that failed or has not come back, a project it cannot answer for, no bridge) the current session’s context, bars and tokens stay, and the connection and the allowance read 未知', async () => {
+test('when main gives no usage (a read that failed or has not come back, a project it cannot answer for, no bridge) the current session’s channel, bars and tokens stay, and the allowance reads 未知', async () => {
   const future = Date.now() + 3600_000, round = { input: 496000, cached: 476000, output: 5100 };
   const session = { id: 't1', agent: 'claude', cliActive: true, sessionId: null, agentStartedAt: 1, agentUsage: { provider: null, limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code', context: { used: 170000, window: 1000000 }, round, total: null } };
   for (const bridge of [{ usage: async () => ({ ok: false, error: 'native sessions are local only' }) }, { usage: async () => new Promise(() => {}) }, null]) {
     const html = await usageHtml(bridge, session), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
-    assert.match(claude, /上下文长度/); assert.match(claude, /aria-valuenow="17"/); assert.match(claude, /5 小时额度/); assert.match(claude, />本轮</, 'its context, bar and round are the session’s own');
-    assert.match(claude, /连接<\/dt><dd><span>未知<\/span>/); assert.doesNotMatch(codex, /上下文长度|>本轮</); assert.match(codex, /连接<\/dt><dd><span>未知<\/span>/);
+    assert.match(claude, /<dt>通道<\/dt><dd><span>终端模式<\/span>/); assert.match(claude, /5 小时额度/); assert.match(claude, />本轮</, 'its channel, bar and round are the session’s own');
+    assert.doesNotMatch(claude + codex, /上下文长度|<dt>连接<\/dt>/); assert.doesNotMatch(codex, />本轮</); assert.match(codex, /<dt>额度<\/dt><dd><span>未知<\/span>/);
     assert.equal((html.match(/role="alert"/g) ?? []).length, bridge?.usage.toString().includes('local only') ? 1 : 0, 'an error is one line, not the whole block');
   }
   assert.match(await usageHtml({ usage: async () => ({ ok: false, error: 'locked' }) }), /role="alert">无法读取额度：locked/, 'a failed read says so');
   assert.equal(await usageHtml(null), '', 'a window without the bridge and without a session shows no card');
-  assert.match(await usageHtml(null, { ...session, agentUsage: null }), /上下文长度/, 'a session that has not answered yet says its context comes with the first reply');
+  const unanswered = await usageHtml(null, { ...session, agentUsage: null });
+  assert.match(unanswered, /<dt>通道<\/dt><dd><span>终端模式<\/span>/, 'a session that has not answered yet still names its channel');
+  assert.doesNotMatch(unanswered, /上下文长度|第一次回复后显示/);
 });
 
 test('a failed read says so, a window without the bridge shows no card, and limits read as their provider gave them', async () => {

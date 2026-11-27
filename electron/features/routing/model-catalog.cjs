@@ -1,8 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
+const { adapterOfModel } = require('../cli-adapters/registry.cjs');
 const { adapters, agentIds, canonicalModelId } = require('../cli-adapters/registry.mjs');
-const { adapterOfModel, EFFORT, validModel, rankByName: rankOf } = require('./seat-rules.mjs');
+const { EFFORT, validModel, rankByName: rankOf } = require('./seat-rules.mjs');
 
 const RETAIN = 30 * 24 * 60 * 60 * 1000;
 const FAILED_RETRY = 60_000;
@@ -26,7 +27,8 @@ function modelRow(raw, source = 'live') {
   const id = raw.resolvedModel || raw.model || raw.value;
   if (!validModel(id) || id === 'default' || raw.value === 'default') return null;
   const model = canonicalModelId(id);
-  const { id: family, models: { efforts: baseEfforts } } = adapterOfModel(model).manifest;
+  const { manifest: { id: family, models: { efforts: baseEfforts } }, nativePolicy } = adapterOfModel(model);
+  if (nativePolicy?.isCatalogModel?.(model) === false) return null;
   const supplied = raw.efforts ?? raw.supportedEffortLevels ?? raw.supportedReasoningEfforts?.map(item => item.reasoningEffort);
   const efforts = Array.isArray(supplied) ? [...new Set(supplied.filter(value => typeof value === 'string' && EFFORT.test(value)))].slice(0, 32) : [];
   const levels = efforts.length ? efforts : [...baseEfforts];

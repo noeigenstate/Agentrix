@@ -108,6 +108,7 @@ test('a sub-agent view opens only on the owner’s click on a row, reads the sub
 test('the API usage card only reads the main process, and the parent relay can no longer type into a terminal', () => {
   const card = 'src/features/agents/ApiUsage.tsx';
   assert.deepEqual([...new Set(bridgeMembers(card, 'bridge'))], ['usage']);
+  assert.deepEqual([...new Set(bridgeMembers(card, 'api'))].sort(), ['onRouting', 'routingSeats'], 'the routing it reads for the models in use, nothing it saves');
   assert.deepEqual(identifiers(card, [...terminalWrites, 'setSettings', 'keySave', 'keyClear', 'answer', 'interrupt', 'send', 'start']), []);
   assert.equal(fs.existsSync(path.join(__dirname, '../src/features/agents/parent-relay.ts')), false);
   const ApiUsage = () => null;
@@ -118,7 +119,7 @@ test('the API usage card only reads the main process, and the parent relay can n
   const terminal = { id: 'terminal', cliActive: true, agent: 'codex' };
   const installations = { agy: { installed: false } };
   const nodes = elements(view.render('ActivityPane', { terminal, projectId: 'project', installations }).result);
-  assert.deepEqual(nodes.find(node => node.type === ApiUsage).props, { terminal, projectId: 'project', installations });
+  assert.deepEqual(nodes.find(node => node.type === ApiUsage).props, { terminal, terminals: [terminal], projectId: 'project', installations });
 });
 
 // The left bar's Agent tab shows the called models without the files module knowing the agents module: the node and the running count come from the agents module and the app only passes them.

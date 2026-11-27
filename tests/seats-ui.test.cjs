@@ -7,6 +7,9 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { AntigravityLogo } = require('../src/features/agents/AgentBrandIcon.ts');
+const seatModels = require('../electron/features/routing/model-seats.cjs');
+const { workerModelKey } = require('../electron/features/cli-adapters/workers.cjs');
+const agyOptions = require('./fixtures/agy-acp/model-options.json');
 const seatsLib = require('../src/features/agents/routing-seats.ts');
 const { paletteGroups, lineOf, shortLabel, menuPlacement, withInstalled, canonicalModel, sameModel, assignModel, assignCustom,
   rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, baselineFor,
@@ -110,6 +113,7 @@ function compile(file, hooks, stubs = {}) {
     if (name === 'react') return { ...React, ...hooks };
     if (name === 'react-dom') return { createPortal: node => node, flushSync: fn => fn() };
     if (name === '../workspace/useProjectReorder') return compile('../workspace/useProjectReorder.ts', hooks, stubs);
+    if (name === '../../shared/routing-role-icons.ts') return compile('../../shared/routing-role-icons.ts', hooks, stubs);
     if (name === '../../shared/motion') return { motionReduced: () => true, observeMotion: () => () => {} };
     if (name === '@phosphor-icons/react') return icon;
     if (name === '../../shared/i18n') return {
@@ -859,19 +863,18 @@ test('the palette shows the newest of each line, folds earlier versions once per
 });
 
 test('agy is grouped with an icon and its models can be assigned to the orchestrator and workers', t => {
-  const model = 'gemini-3.8-flash', collision = 'agy:claude-opus-5-5';
-  const models = [...catalog(), row(model, 'Gemini 3.8 Flash', 'agy', 3, { efforts: ['low', 'high'] }),
-    row(collision, 'Claude Opus 5.5', 'agy', 3)];
-  assert.equal(rowFor(models, 'agy:gemini-3.8-flash').model, model);
-  assert.equal(sameModel(models, 'agy:gemini-3.8-flash', model), true);
+  const model = 'gemini-4-neon', collision = 'agy:claude-opus-5-5';
+  const installed = { claude: true, agy: true, codex: true };
+  const models = seatModels.catalog(installed, [...catalog(), ...agyOptions.map(({ value, name }) => ({
+    model: workerModelKey(value, 'agy'), label: name, efforts: ['low', 'high'], fast: false,
+  }))]);
+  assert.equal(rowFor(models, `agy:${model}`).model, model);
+  assert.equal(sameModel(models, `agy:${model}`, model), true);
   assert.equal(sameModel(models, collision, 'claude-opus-5-5'), false);
-  assert.equal(assignCustom(clone(DEFAULTS), 'architect', 'agy:gemini-3.8-flash', models).map.architect.model, model);
-  const h = dialogHarness(t, seatsInfo({
-    catalog: models,
-    installed: { claude: true, agy: true, codex: true },
-  }));
+  assert.equal(assignCustom(clone(DEFAULTS), 'architect', `agy:${model}`, models).map.architect.model, model);
+  const h = dialogHarness(t, seatsInfo({ catalog: models, installed }));
   const group = byAttr(h.render(), 'data-group', 'agy');
-  assert.match(textOf(group), /agy · 2/);
+  assert.match(textOf(group), /agy · 8/);
   assert.equal(textOf(byAttr(group, 'data-chip', model)), model);
   assert.equal(textOf(byAttr(group, 'data-chip', collision)), 'claude-opus-5-5');
   assert.ok(find(group, node => node.type === AntigravityLogo));
@@ -887,6 +890,44 @@ test('agy is grouped with an icon and its models can be assigned to the orchestr
   assert.ok(byAttr(controls, 'data-pop-effort', 'low'));
   assert.equal(byAttr(controls, 'data-tile-fast', 'architect'), undefined);
   assert.equal(byAttr(controls, 'data-ultracode', 'architect'), undefined);
+});
+
+test('an agy session is set from the routing key as Codex is: it shows the running lead and opens model routing, whose lead takes agy models and efforts', async t => {
+  const installed = { claude: true, agy: true, codex: true }, model = 'gemini-4-neon';
+  const models = seatModels.catalog(installed, [...catalog(), ...agyOptions.map(({ value, name }) => ({
+    model: workerModelKey(value, 'agy'), label: name, efforts: ['low', 'high'], fast: false,
+  }))]);
+  const info = seatsInfo({ catalog: models, installed, current: { ...DEFAULTS, orchestrator: { model, effort: 'high' } },
+    currentRoles: team.roles.map(role => shipped(role)) });
+  const h = dialogHarness(t, info);
+  byAttr(openMenu(h, 'orchestrator'), 'data-assign', model).props.onClick();
+  const lead = openMenu(h, 'orchestrator');
+  assert.deepEqual(['low', 'high'].map(effort => !!byAttr(lead, 'data-pop-effort', effort)), [true, true], 'the lead offers the agy model’s own efforts');
+  const opened = [];
+  // The dialog's window stays in place, with the open request recorded, so both mounts tear down on the globals they started with.
+  globalThis.window = { ...globalThis.window, dispatchEvent: event => opened.push(event.detail) };
+  const key = mount(t, 'RoutingKeyCard.tsx', 'RoutingKeyCard', { projectId: 'p1', terminalId: 't1', sessionId: 's1' }, {});
+  key.render();
+  await settle();
+  const tree = key.render();
+  assert.match(textOf(byAttr(tree, 'data-seat', 'orchestrator')), /gemini-4-neonhigh/i, 'the key shows the agy lead the session runs');
+  tree.props.onClick();
+  assert.deepEqual(opened, [{ projectId: 'p1', terminalId: 't1' }], 'the key opens model routing for this terminal');
+});
+
+test('an agy orchestration mode saved for a seat is shown as unlisted and keeps its ID', t => {
+  const installed = { claude: true, agy: true, codex: true };
+  const model = 'gemini-pro-orchestrator', project = { architect: { model, effort: 'default' } };
+  const models = seatModels.catalog(installed, [...catalog(), { model }, { model: 'gemini-4-carbon' }]);
+  const issues = seatModels.seatIssues(project, models);
+  assert.deepEqual(issues, [{ slot: 'architect', code: 'model-unlisted', substitute: model }]);
+  assert.deepEqual(seatModels.resolveSeat(project.architect, DEFAULTS.architect, installed, models), project.architect);
+  const h = dialogHarness(t, seatsInfo({ project, installed, catalog: models, issues }));
+  const seat = byAttr(h.render(), 'data-seat', 'architect');
+  assert.match(textOf(byAttr(seat, 'data-pick', 'architect')), /gemini-pro-orchestrator/);
+  const warning = find(seat, node => node.props.className?.startsWith('seats-state'));
+  assert.match(warning.props.title, /not in the current list; it runs as gemini-pro-orchestrator/);
+  assert.equal(byAttr(openMenu(h, 'architect'), 'data-assign', model), undefined);
 });
 
 test('Antigravity settings show the official instructions when missing and the version and path when installed', t => {

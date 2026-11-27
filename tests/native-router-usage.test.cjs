@@ -269,3 +269,19 @@ test('a quit that starts while the usage checks run blocks the account read', as
   check.resolve({ status: 'ok' }); await reading;
   assert.equal(reads.length, 1, 'without a quit the same checks lead to the read');
 });
+
+test('project usage returns held windows while refresh is pending and tells only that project when they change', async () => {
+  const refresh = Promise.withResolvers(), event = Promise.withResolvers();
+  const project = { id: 'p', kind: 'local' }, at = Date.now();
+  const reading = percent => subscriptionLimits({ at, limits: [{ minutes: 300, percent, resetsAt: at + 3600000 }] }, 'fixture', 60000, at);
+  let limits = { codex: reading(15) };
+  const deps = { store: { projects: [project] }, nativeEnvironment: () => ({}),
+    checkClaude: async () => ({ status: 'missing' }), codexExecutable: async () => 'fixture-codex',
+    readNativeSubscriptionLimits: () => limits, send: (...args) => event.resolve(args),
+    projectAccounts: { read: async (_project, { onCached }) => { onCached(); await refresh.promise; return {}; } } };
+  const initial = await createHostInputs(deps).readNativeUsageInputs(project.id);
+  assert.equal(initial.limits.codex.limitsById.subscription.primary.usedPercent, 15);
+  limits = { codex: reading(27) };
+  refresh.resolve();
+  assert.deepEqual(await event.promise, ['agents:usage-changed', { projectId: project.id }]);
+});

@@ -24,7 +24,6 @@ import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { BillingLink } from './native-billing-link.ts';
 import { NativeRequestCard } from './NativeRequestCard';
-import { NativeModelControls } from './NativeModelControls';
 import { NativePanel } from './NativePanel';
 import { NativeToast } from './NativeToast';
 import { useComposerActions } from './useComposerActions.ts';
@@ -46,8 +45,6 @@ type SessionProps = {
 export function NativeSession({ terminalId, projectId, entry, autoFocus, switchState = null, handoff, onError, onOpenLink }: SessionProps) {
   const { model } = entry, identity = model.identity!, kind = identity.provider, sessionId = identity.runtimeSessionId, change = resolveSwitch(switchState, entry);
   const manifest = adapterOf(kind)!.manifest, agent = manifest.label;
-  const sessionControls = identity.transport === 'agy-acp' && support(manifest, 'liveModel').ok;
-  const [settingModel, setSettingModel] = useState(false);
   const [text, setText] = useState(''), [sent, setSent] = useState<SentMessage[]>([]), [discarded, setDiscarded] = useState<ReadonlySet<string>>(new Set()), [error, setError] = useState<string | null>(null);
   // What a switch carries in: pictures that go with the next message, and messages the previous session never delivered. Neither is ever sent by itself.
   const [carried, setCarried] = useState<string[]>([]), [unsent, setUnsent] = useState<NativePendingInput[]>([]);
@@ -60,12 +57,11 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   useLayoutEffect(() => { if (caret.current !== null) { box.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
   // Both providers use the same native controls; a new conversation shuts this binding's box until its replacement arrives.
   const actions = useComposerActions({ projectId, terminalId, sessionId, agent: kind, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
-  const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing && !settingModel, over = isOver(model);
+  const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model);
   const working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
   const pending = useMemo(() => nativePending(model, sent, discarded), [model, sent, discarded]);
-  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : actions.renewing ? t('正在开始新的对话')
-    : settingModel ? t('正在应用会话设置…') : t('会话已结束，不能再发消息')];
+  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : actions.renewing ? t('正在开始新的对话') : t('会话已结束，不能再发消息')];
   const hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
 
   // The box's helpers, the reading view's own: ↑↓ through what was sent (the replayed history included), the "/" list of the commands the session runs without
@@ -233,9 +229,6 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   </>;
 
   return <div className={`reading-view${dropping ? ' is-dropping' : ''}`} data-agent={kind} data-native-session={sessionId} onDragOver={dragOver} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false); }} onDrop={drop}>
-    {sessionControls && <NativeModelControls terminalId={terminalId} sessionId={sessionId} kind={kind} agent={agent} context={model.context}
-      idle={model.session?.state === 'idle' && !model.turn.running && !locked && !actions.renewing && !pending.prompts.some(prompt => !pending.lost.has(prompt.id))}
-      routingRevision={model.routingRevision} busy={settingModel} onBusy={setSettingModel} onError={setError} />}
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}>
         <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,

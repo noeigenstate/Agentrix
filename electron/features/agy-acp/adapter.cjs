@@ -2,6 +2,7 @@ const { inspectAgy, locateAgy } = require('./locator.cjs');
 const { TRANSPORT } = require('./session.cjs');
 const { workerManifest } = require('../cli-adapters/workers.cjs');
 const { remoteAgyLimits } = require('./usage.cjs');
+const { isCatalogModel } = require('./models.cjs');
 
 const remoteMinimum = workerManifest('agy').install.minVersion;
 const remoteMessages = {
@@ -25,8 +26,8 @@ const nativePolicy = {
   observationCommands: [],
   launchOptions: true,
   historyList: true,
-  liveRouting: true,
   rememberModelOptions: true,
+  isCatalogModel,
   remoteProcessOptions: purpose => ({ purpose, minimumVersion: remoteMinimum }),
   remoteQuotaUnavailable: '暂时无法读取远端 agy 的额度。',
   remoteLimits: remoteAgyLimits,

@@ -200,9 +200,9 @@ async function credentialsFrom({ env, home, platform, readFile, execute, nativeR
 }
 
 function retryAfter(value, now) {
-  if (typeof value !== 'string' || !value.trim()) return 0;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
   const seconds = /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - now;
-  return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : undefined;
 }
 
 // Only sanitized outcomes leave this function, including errors thrown by fetch,
@@ -252,9 +252,34 @@ async function readClaudeAccount({ env = process.env, home = os.homedir(), platf
   finally { clear(timer); signal?.removeEventListener('abort', cancel); }
 }
 
+const transientRead = result => result?.state === 'error'
+  && (result.status === 429 || result.status >= 500 || ['query', 'timeout'].includes(result.reason));
+
+function createClaudeReadSchedule(now = Date.now) {
+  let failures = 0, nextAt = -Infinity, pending = false;
+  return {
+    get nextAt() { return nextAt; },
+    // Claim the interval only after the reader verifies the route and credentials.
+    begin() {
+      const started = now();
+      if (pending || started < nextAt) return null;
+      pending = true;
+      nextAt = started + POLL_INTERVAL;
+      return result => {
+        pending = false;
+        if (!result || result.reason === 'cancelled') return;
+        failures = transientRead(result) ? failures + 1 : 0;
+        const backoff = Math.min(300000, POLL_INTERVAL * 2 ** Math.min(Math.max(0, failures - 1), 3));
+        const delay = transientRead(result) ? result.retryAfterMs ?? backoff : 0;
+        nextAt = Math.max(nextAt, now() + delay);
+      };
+    },
+  };
+}
+
 class ClaudeAccountUsage {
-  constructor({ read = readClaudeAccount, changed = () => {}, now = Date.now, setTimeout: later = setTimeout, clearTimeout: clear = clearTimeout } = {}) {
-    this.read = read; this.changed = changed; this.now = now; this.later = later; this.clear = clear;
+  constructor({ read = readClaudeAccount, changed = () => {}, now = Date.now, setTimeout: later = setTimeout, clearTimeout: clear = clearTimeout, schedule } = {}) {
+    this.read = read; this.changed = changed; this.now = now; this.later = later; this.clear = clear; this.schedule = schedule;
     this.active = false; this.disposed = false; this.generation = 0; this.timer = null; this.controller = null;
     this.nextAt = 0; this.requestAt = -Infinity; this.failures = 0; this.account = null;
   }
@@ -268,31 +293,37 @@ class ClaudeAccountUsage {
   }
   refresh() {
     if (!this.active || this.disposed || this.controller || this.timer !== null) return;
-    this.timer = this.later(() => { this.timer = null; void this.poll(); }, Math.min(2147483647, Math.max(250, this.nextAt - this.now())));
+    const nextAt = Math.max(this.nextAt, this.schedule?.nextAt ?? -Infinity);
+    this.timer = this.later(() => { this.timer = null; void this.poll(); }, Math.min(2147483647, Math.max(250, nextAt - this.now())));
     this.timer.unref?.();
   }
   async poll() {
     if (!this.active || this.disposed || this.controller) return;
-    if (this.now() < this.nextAt) { this.refresh(); return; }
+    if (this.now() < Math.max(this.nextAt, this.schedule?.nextAt ?? -Infinity)) { this.refresh(); return; }
     const generation = this.generation, controller = this.controller = new AbortController();
     this.nextAt = this.now() + POLL_INTERVAL;
+    let finishRequest, result;
     try {
-      const result = await Promise.resolve().then(() => this.read({ signal: controller.signal, beforeRequest: () => {
-        if (controller.signal.aborted || generation !== this.generation || !this.active || this.disposed || this.now() - this.requestAt < POLL_INTERVAL) return false;
+      result = await Promise.resolve().then(() => this.read({ signal: controller.signal, beforeRequest: () => {
+        if (controller.signal.aborted || generation !== this.generation || !this.active || this.disposed) return false;
+        if (this.schedule) return !!(finishRequest = this.schedule.begin());
+        if (this.now() - this.requestAt < POLL_INTERVAL) return false;
         this.requestAt = this.now(); this.nextAt = Math.max(this.nextAt, this.requestAt + POLL_INTERVAL);
         return true;
       } })).catch(() => ({ state: 'error', reason: 'query' }));
       if (generation !== this.generation || controller.signal.aborted || !this.active || this.disposed) return;
-      const transient = result?.state === 'error' && (result.status === 429 || result.status >= 500 || ['query', 'timeout'].includes(result.reason));
-      this.failures = transient ? this.failures + 1 : 0;
-      const delay = Math.max(Math.min(900000, POLL_INTERVAL * 2 ** Math.min(this.failures ? this.failures - 1 : 0, 4)), result?.retryAfterMs || 0);
-      this.nextAt = Math.max(this.nextAt, this.now() + delay);
+      if (!this.schedule) {
+        this.failures = transientRead(result) ? this.failures + 1 : 0;
+        const delay = Math.max(Math.min(900000, POLL_INTERVAL * 2 ** Math.min(Math.max(0, this.failures - 1), 4)), result?.retryAfterMs || 0);
+        this.nextAt = Math.max(this.nextAt, this.now() + delay);
+      } else if (result?.state === 'skipped' && result.reason === 'throttled') this.nextAt = this.schedule.nextAt;
       if (result?.state === 'ready' && result.account) { this.account = result.account; this.changed(this.account); }
     } finally {
+      finishRequest?.(result);
       if (this.controller === controller) { this.controller = null; this.refresh(); }
     }
   }
   dispose() { this.setActive(false); this.disposed = true; }
 }
 
-module.exports = { ClaudeAccountUsage, readClaudeAccount, claudeUsageResult, POLL_INTERVAL, DIRECT_USAGE_FRESH_MS };
+module.exports = { ClaudeAccountUsage, createClaudeReadSchedule, readClaudeAccount, claudeUsageResult, POLL_INTERVAL, DIRECT_USAGE_FRESH_MS };

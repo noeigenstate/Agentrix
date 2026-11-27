@@ -9,10 +9,13 @@ const { nativePolicy } = require('../electron/features/agy-acp/adapter.cjs');
 const { remoteAgyLimits } = require('../electron/features/agy-acp/usage.cjs');
 const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
 const { recordEvents } = require('./helpers/agy-runtime.cjs');
+const modelOptions = require('./fixtures/agy-acp/model-options.json');
 
 const cwd = '/remote/项目', sessionId = '670f1895-da18-4940-b596-4e80e0c3c387';
 const otherId = '3fae06d2-2995-4784-a0a0-2ea80260aa02';
 const neon = 'gemini-4-neon', flash = 'gemini-3.8-flash';
+const modelIds = [neon, 'gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', flash,
+  'agy:claude-opus-5-5', 'agy:claude-sonnet-5-5', 'agy:gpt-oss-120b-medium'];
 const roleServer = { command: '/remote/bin/node', args: ['/remote/dispatch.cjs', 'mcp', 'agy'], env: {} };
 const info = { root: '/remote', cwd, context: 'Remote project instructions', roleServer };
 
@@ -21,7 +24,7 @@ class Peer {
   effort = 'high';
   methods = [];
   configOptions = () => [
-    { id: 'model', currentValue: this.model, options: [neon, flash].map(value => ({ value, name: value })) },
+    { id: 'model', currentValue: this.model, options: modelOptions },
     { id: 'thought_level', currentValue: this.effort, options: ['low', 'high'].map(value => ({ value, name: value })) },
     { id: 'mode', currentValue: 'default', options: [{ value: 'default', name: 'default' }] },
   ];
@@ -116,6 +119,7 @@ test('SSH agy uses remote ACP for owner turns, approval, interruption, history a
     assert.deepEqual(await runtime.start(), { providerSessionId: sessionId });
     assert.equal(requests[0].nativeAgent, 'agy');
     assert.equal(peers[0].methods.find(row => row.method === 'session/new').params.mcpServers[0].name, 'agentrix_role');
+    assert.deepEqual(runtime.modelOptions().models.map(option => option.value), modelIds);
     assert.equal((await runtime.setModelOptions({ model: flash, effort: 'low' })).effort, 'low');
     for (const decision of ['allow', 'deny', 'interrupt']) {
       const approval = events.wait(event => event.type === 'request.opened');
@@ -136,7 +140,7 @@ test('SSH agy uses remote ACP for owner turns, approval, interruption, history a
     assert.ok(resumed.snapshot().events.some(event => event.replay && event.payload.content?.text === 'Replayed remotely'));
     assert.ok(!peers[2].methods.some(row => row.method === 'session/prompt'));
   } finally { await resumed.close(); }
-  assert.deepEqual((await factory.models(spec)).map(row => row.model), [neon, flash]);
+  assert.deepEqual((await factory.models(spec)).map(row => row.model), modelIds);
   assert.deepEqual(requests.filter(request => request.op === 'agy-open').map(request => request.purpose), ['session', 'history', 'session', 'catalog']);
   assert.ok(!peers[3].methods.some(row => row.method === 'session/prompt'));
   assert.equal(requests.filter(request => request.op === 'agy-close').length, 4);

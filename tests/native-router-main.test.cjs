@@ -151,6 +151,21 @@ function historyReader({ project, spec, restore = {} }) {
   const { readHistory } = createNativeHost(context).nativeRouterOptions(null, null, context.codexFactory);
   return { read: readHistory, folders, lookups };
 }
+
+test('eligible SSH quota reads use the connected project channel before a native conversation starts', async () => {
+  const project = { id: 'p', kind: 'ssh' }, remote = { closed: false };
+  let eligible = false, reads = 0, current = remote;
+  const context = { store: { projects: [project] }, liveHost: () => null,
+    projectAccounts: { eligible: (candidate, agent) => candidate === project && agent === 'agy' && eligible },
+    remoteFor: id => { assert.equal(id, project.id); return current; } };
+  const { remoteLimits } = createNativeHost(context).nativeRouterOptions();
+  const load = async channel => { assert.equal(channel, remote); ++reads; return { limitsById: {} }; };
+  assert.equal(await remoteLimits(project.id, 'agy', load), undefined);
+  assert.equal(reads, 0);
+  eligible = true;
+  assert.deepEqual(await remoteLimits(project.id, 'agy', load), { limitsById: {} });
+  assert.equal(await remoteLimits(project.id, 'agy', async () => { current = { closed: false }; return {}; }), null);
+});
 test('a local Claude native session reads its folder history: the restored cwd, else the project folder', async () => {
   const project = { kind: 'local', id: 'p', path: '/project' };
   for (const [spec, restore, folder] of [[{ agent: 'claude' }, { cwd: '/project/restored' }, '/project/restored'], [{ agent: 'claude' }, {}, '/project'], [null, {}, '/project']]) {

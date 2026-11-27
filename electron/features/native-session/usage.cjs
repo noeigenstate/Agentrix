@@ -45,4 +45,12 @@ function subscriptionLimits(account, scopeId, staleAfterMs, now = Date.now()) {
   return Object.defineProperty(result, 'accountConnection', { value: connection });
 }
 
-module.exports = { nextPath, subscriptionLimits };
+function expireQuotaWindows(limits, now) {
+  if (!limits) return limits;
+  const limitsById = Object.fromEntries(Object.entries(limits.limitsById || {}).map(([id, group]) => [id,
+    Object.fromEntries(Object.entries(group).map(([slot, window]) => [slot,
+      Number.isFinite(window?.resetsAtMs) && window.resetsAtMs <= now ? { ...window, usedPercent: null } : window]))]));
+  return { ...limits, limitsById };
+}
+
+module.exports = { nextPath, subscriptionLimits, expireQuotaWindows };

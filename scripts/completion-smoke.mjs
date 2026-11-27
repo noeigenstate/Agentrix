@@ -93,13 +93,13 @@ async function checkPaneFit(pane) {
     fixture.setAttribute('aria-hidden', 'true');
     document.body.append(fixture);
     try {
-      for (const height of [1000, 900, 800]) {
-        fixture.style.height = `${height - titleHeight}px`;
+      for (const height of [1000 - titleHeight, 900 - titleHeight, 760]) {
+        fixture.style.height = `${height}px`;
         routingRows.removeAttribute('data-dense');
         routingRows.toggleAttribute('data-dense', fixture.scrollHeight > fixture.clientHeight);
-        problems.push(...inspect(fixture, `340×${height - titleHeight}`));
+        problems.push(...inspect(fixture, `340×${height}`));
         const columns = getComputedStyle(routingRows).gridTemplateColumns.split(' ');
-        if (columns.length !== 1) problems.push(`${height}px window has ${columns.length} routing columns`);
+        if (columns.length !== 1) problems.push(`340×${height} pane has ${columns.length} routing columns`);
       }
     } finally { fixture.remove(); }
     return problems;
@@ -203,16 +203,14 @@ try {
   const main = await openAgentTab(page);
   const overview = main.locator('.activity-main-tasks'); await overview.waitFor();
   assert.equal(await pane.locator('.activity-main').count(), 0);
-  assert.equal(await pane.locator('.api-agent .activity-figure').count(), 0, 'no context before Claude Code counts one');
   // One reply's count: what it read (new, written to the cache, read from the cache) and what it wrote.
   const used = (fresh, cached, output) => ({ input_tokens: fresh, cache_creation_input_tokens: 0, cache_read_input_tokens: cached, output_tokens: output });
   await fs.appendFile(transcript, replied([{ type: 'text', text: '先看登录页。' }], used(30000, 290000, 4200)));
   const text = selector => pane.locator(selector).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\s+/g, ' ').trim()));
   await waitFor(async () => await main.locator('.activity-call-head p').innerText() === 'Opus 5.5', 'the main model section names the model');
   assert.equal(await main.locator('.activity-call-note').count(), 0);
-  await waitFor(async () => (await text('.api-agent .activity-figure > small')).join() === '共 1M tokens · 还可容纳 676k', 'the context shows how full the window is');
-  assert.deepEqual(await text('.api-agent .activity-figure > .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
-  assert.deepEqual(await text('.api-agent .activity-figure > b'), ['32%']);
+  await waitFor(async () => (await text('.api-agent .activity-tokens[title] > small')).join() === '输入 320k · 缓存命中 91% · 输出 4.2k', 'the round counts the reply');
+  assert.deepEqual(await text('.api-agent[aria-label="Claude"] .api-row'), ['通道终端模式'], 'Claude names its channel');
   assert.deepEqual(await text('.activity-limit > .activity-metric-label'), ['5 小时额度', '每周额度'], 'the plan windows are named by their length');
   assert.deepEqual(await text('.activity-limit > b'), ['34%', '92%']);
   assert.deepEqual(await pane.locator('.activity-limit').evaluateAll(nodes => nodes.map(node => node.classList.contains('is-warn'))), [false, true], 'only the window from 90% takes the warning colour');
@@ -225,6 +223,7 @@ try {
   assert.equal((await state()).codexActivity, 'working'); assert.equal(await notices(), 0);
   await limits(Date.now(), 35, 93, Date.now() + 2000);
   await waitFor(async () => (await text('.activity-limit > small')).includes('已到重置时间，等待更新'), 'a passed reset expires without another agent record', 8000);
+  assert.deepEqual(await text('.activity-limit > b'), ['未知', '93%'], 'the expired window hides its old percentage');
   await limits(Date.now(), 36, 93);
   await waitFor(async () => (await text('.activity-limit > b')).join() === '36%,93%', 'fresh limits replace the expired window', 4000);
   console.log('PASS: limits-only updates reach an open round; older snapshots lose; reset expiry waits for fresh data without completion notices');
@@ -278,7 +277,6 @@ try {
   // Each count Claude Code writes updates the figures.
   await fs.appendFile(transcript, replied([{ type: 'text', text: '再看验证码。' }], used(10000, 70000, 800)));
   await waitFor(async () => (await text('.api-agent .activity-tokens[title] > small')).join() === '输入 400k · 缓存命中 90% · 输出 5k', 'a later count updates the tokens');
-  assert.deepEqual(await text('.api-agent .activity-figure > small'), ['共 1M tokens · 还可容纳 919k']);
   const key = pane.locator('.activity-routing-key');
   await key.waitFor();
   assert.equal(await key.locator('.activity-routing-row').count(), 10, 'the routing key lists all team seats');

@@ -123,7 +123,7 @@ async function run() {
   const expand = page.getByRole('button', { name: /进入 Dispatch probe|Full screen.*Dispatch probe/i }).first();
   if (await expand.isVisible().catch(() => false)) await expand.click();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
-  const worker = page.locator('.activity-calls [data-role="developer"] .agent-team-row').filter({ hasText: title });
+  const worker = page.locator('.activity-calls [data-role="developer"] .activity-main-tasks > li[class^="is-"]').filter({ hasText: title });
   const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
   await write('claude --dangerously-skip-permissions AGENTRIX_DISPATCH_PROBE\r');
   const answered = new Set();

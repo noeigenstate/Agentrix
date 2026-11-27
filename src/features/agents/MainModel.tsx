@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { CaretDown, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
+import { CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
 import type { CliState, ProjectTerminal, SeatsInfo } from '../../shared/types';
 import { currentLanguage, t } from '../../shared/i18n';
 import { modelLabel, modelName } from '../../shared/model-name';
@@ -8,7 +8,7 @@ import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../termi
 import { screenAgent, screenLabel, screenOf } from '../cli-screens/index.ts';
 import { useNativeEntries } from '../native-session/native-store.ts';
 import { actionText } from './action-text';
-import { CALL_STATES, ModelHead } from './AgentCalls';
+import { CALL_STATES, ModelHead, TaskList, taskRow } from './AgentCalls';
 import { resetTime } from './Metric';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { leadRoutingFailure, leadRoutingPending, leadRoutingScope, pendingRoutingWords, routingNotice, subscribeLeadRouting } from '../../shared/lead-routing-notices.ts';
@@ -106,9 +106,6 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   const native = useNativeEntries().get(terminal.id)?.model;
   const failedEnd = activity === 'interrupted' && !!terminal.nativeRuntimeSessionId
     && native?.identity?.runtimeSessionId === terminal.nativeRuntimeSessionId && native.turn.status === 'failed';
-  const [fold, setFold] = useState<string | null>(null);
-  const foldSession = terminal.sessionId ?? terminal.id;
-  const expanded = fold === foldSession;
   const action = terminal.action, running = !!action && !action.done && activity === 'working';
   const endedAt = terminal.mainTurn?.updatedAt ?? terminal.lastCompletedAt;
   const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : activity === 'ready' ? t('已就绪')
@@ -117,9 +114,7 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
     <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
   </li>;
   const task = (icon: ReactNode, className: string, word: string, summary: string, text: string, time: string, key = className) =>
-    <li key={key} className={className} title={`${text}\n${word}${time ? ` · ${time}` : ''}`}>
-      <span className="activity-row-icon">{icon}</span><p>{word && <span className="activity-call-role">{word}</span>}{summary}</p><time>{time}</time>
-    </li>;
+    taskRow({ key, icon, className, word, subject: summary, title: `${text}\n${word}${time ? ` · ${time}` : ''}`, time });
   const rows = [
     cli.waiting && <li key="waiting" className="is-idle" role="status">
       <span className="activity-row-icon"><WarningCircle size={14} /></span><p>{cli.message || t('等待你确认')}</p><span />
@@ -137,7 +132,6 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
     return task(active ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, active ? 'is-working' : waiting ? 'is-idle' : 'is-queued',
       t(active ? '处理中' : waiting ? '等待你确认' : '排队中'), prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '', prompt.id);
   }
-  const hidden = Math.max(0, rows.length - 4);
   return <section className="activity-card activity-main agent-team-group" aria-label={t('主模型')}>
     <h4>{seats?.conductor === false ? t('主模型') : currentLanguage() === 'en' ? t('Agent 面板 · 总指挥') : '总指挥'}</h4>
     <ul className="activity-call-rows">
@@ -146,11 +140,7 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
       <LeadModelNotice terminal={terminal} seats={seats} actual={actual} />
     </ul>
-    <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>
-      {expanded ? rows : rows.slice(0, 4)}
-      {hidden > 0 && <li className="activity-task-fold"><button type="button" aria-expanded={expanded} onClick={() => setFold(expanded ? null : foldSession)}>
-        <CaretDown size={14} aria-hidden="true" />{expanded ? t('收起') : t('还有 {count} 条', { count: hidden })}
-      </button></li>}
+    <TaskList rows={rows} foldKey={terminal.sessionId ?? terminal.id} label={t('提示')}>
       {!prompts.length && !background && (activity === 'ready' || unknownEnd) && <li className="is-idle">
         <span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span />
       </li>}
@@ -161,6 +151,6 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
           activity === 'complete' && endedAt ? resetTime(endedAt) : '')
         : <li className="is-idle"><span className="activity-row-icon">{failedEnd ? <WarningCircle size={14} aria-hidden="true" />
           : <Circle size={14} aria-hidden="true" />}</span><p>{state}</p><span /></li>)}
-    </ul>
+    </TaskList>
   </section>;
 }

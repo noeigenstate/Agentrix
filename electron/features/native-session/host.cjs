@@ -1,6 +1,7 @@
 const { remoteGuide } = require('../routing/store.cjs');
 const { canLead, support } = require('../cli-adapters/capabilities.mjs');
 const { adapters } = require('../cli-adapters/registry.cjs');
+const { expireQuotaWindows } = require('./usage.cjs');
 
 // A role the conductor started has ended: a native conductor hears it as its next message, so it can report without polling.
 function roleEnded(deps, s, project, event) {
@@ -158,14 +159,15 @@ function registerUnavailableNative(deps, handle) {
     const globalLimits = deps.readNativeSubscriptionLimits(), projectLimits = deps.readNativeSubscriptionLimits(projectId);
     const summary = deps.claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
+    const now = Date.now();
     const agents = Object.fromEntries(adapters().map(({ manifest }) => {
       const { id } = manifest, path = support(manifest, 'terminal').ok ? 'terminal' : null;
-      const reason = 'native_unavailable', limits = (path ? globalLimits : projectLimits)[id] || null;
+      const reason = 'native_unavailable', limits = expireQuotaWindows((path ? globalLimits : projectLimits)[id], now) ?? null;
       return [id, { path, reason, next: { path, reason }, limits, connection: connections[id] }];
     }));
     return { ...summary, switches: { waiting: 0 }, agents };
   });
-  for (const name of ['send', 'interrupt', 'stop', 'answer', 'commands', 'history', 'remote-models', 'model-options', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
+  for (const name of ['send', 'interrupt', 'stop', 'answer', 'commands', 'history', 'remote-models', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
   }
   handle('native:test-connection', (...args) => {
@@ -277,11 +279,17 @@ function nativeRouterOptions(deps, directory, codex, codexFactory, providers = {
     },
     connections: deps.readNativeConnections, usageInputs: deps.readNativeUsageInputs,
     remoteLimits: async (projectId, agent, read) => {
-      const host = deps.liveHost(projectId, agent);
-      const remote = host?.remoteConnection;
+      const live = deps.liveHost(projectId, agent);
+      const project = deps.store.projects.find(entry => entry.id === projectId);
+      if (!live && (!project || !deps.projectAccounts?.eligible?.(project, agent))) return undefined;
+      const channel = () => {
+        if (live) return deps.liveHost(projectId, agent) === live ? live.remoteConnection : null;
+        try { return deps.remoteFor(projectId); } catch { return null; }
+      };
+      const remote = channel();
       if (!remote) return null;
       const result = await read(remote);
-      return deps.liveHost(projectId, agent) === host && !remote.closed ? result : null;
+      return channel() === remote && !remote.closed ? result : null;
     },
     validateProject: projectId => {
       const project = projectId && deps.store.projects.find(project => project.id === projectId);

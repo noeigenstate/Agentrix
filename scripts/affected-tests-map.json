@@ -502,7 +502,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "21f65ae18594b66e7ba2a4f2c7559510c2b2871ef8d79e5e38a7105375005b16",
+      "digest": "fe85111dbf7fadfd1fbb55bbb5b1d55c2142a181d0adac3cac8ce8424c7f91ea",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

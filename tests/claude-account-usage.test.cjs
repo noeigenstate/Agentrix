@@ -368,7 +368,8 @@ test('Windows helper cancellation/timeout aborts the owned child signal and igno
 });
 
 test('429 Retry-After seconds/dates and 5xx metadata are sanitized; error bodies are never read', async () => {
-  for (const [value, delay] of [['120', 120000], ['Thu, 01 Jan 1970 00:04:00 GMT', 140000], ['Thu, 01 Jan 1970 00:00:00 GMT', 0], [token, 0]]) {
+  const hints = [['120', 120000], ['Thu, 01 Jan 1970 00:04:00 GMT', 140000], ['Thu, 01 Jan 1970 00:00:00 GMT', 0], ['0', 0], [token, undefined], [null, undefined]];
+  for (const [value, delay] of hints) {
     const h = fake({ fetch: async () => ({ ...response(null, 429, value), json: () => assert.fail('read error body') }) });
     assert.deepEqual(await h.read(), { state: 'error', reason: 'http', status: 429, retryAfterMs: delay });
   }

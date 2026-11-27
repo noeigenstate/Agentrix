@@ -34,6 +34,7 @@ function compileFile(filename, language, hooks, overrides = {}) {
     if (name === './routing-seats.ts' || name === './routing-seats') return require('../src/features/agents/routing-seats.ts');
     if (name === './RoutingKeyCard') return loadAgentsFile('RoutingKeyCard.tsx', language);
     if (name === './SeatsHost') return loadAgentsFile('SeatsHost.tsx', language);
+    if (name === '../../shared/routing-role-icons.ts') return compileFile(path.join(__dirname, '../src/shared/routing-role-icons.ts'), language);
     if (name === '../../shared/call-model-name') return compileFile(path.join(__dirname, '../src/shared/call-model-name.ts'), language);
     if (name === './i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
     if (name === './model-name') return require('../src/shared/model-name.ts');
@@ -141,22 +142,74 @@ function groupedCallsMarkup(items, language = 'en', otherCalls = []) {
     React.createElement(CallsCard, { calls, terminalId: 't1', terminals: [terminal] })));
 }
 
-test('a role heading lists each model setting once while its rows retain their own specialties', () => {
+test('a role group has the Orchestrator’s model line for each model setting, and its rows keep their own specialties', () => {
   const item = { state: 'running', seat: 'developer', seatSource: 'declared' };
   const html = groupedCallsMarkup([
     { ...item, id: 'one', specialty: 'backend', title: 'Build parser' },
     { ...item, id: 'two', specialty: 'frontend', title: 'Build UI' },
-  ], 'en', [{ agent: 'Codex', model: 'gpt-6.2-sol', effort: 'medium', fast: true, items: [{ ...item, id: 'three', title: 'Build fixture' }] }]);
-  const heading = /<h4 class="agent-team-heading"><span>Developer<\/span><span class="agent-team-model"[^>]*>([^<]+)<\/span><\/h4>/.exec(html);
-  assert.ok(heading);
-  assert.deepEqual(heading[1].split(' / ').sort(), ['GPT-6.2-Sol · medium · Fast', 'Opus · high · Standard']);
-  assert.equal((html.match(/Developer/g) ?? []).length, 1);
-  assert.equal((html.match(/class="agent-team-model"/g) ?? []).length, 1);
-  assert.match(html, /<b>Backend<\/b>/);
-  assert.match(html, /<b>Frontend<\/b>/);
+  ], 'en', [{ agent: 'Codex', model: 'gpt-6.2-sol', effort: 'medium', fast: true, rate: { samples: 2, outputTokens: 900, activeMs: 10000 },
+    items: [{ ...item, id: 'three', title: 'Build fixture' }] }]);
+  assert.match(html, /<h4 class="agent-team-heading"><span class="activity-row-icon"><svg data-icon="Code"><\/svg><\/span><span>Developer<\/span><\/h4>/,
+    'the role group leads with the role card’s own mark in the 16px icon column');
+  const head = /<li class="activity-call-head"[^>]*><span class="activity-row-icon">.*?<\/span><p><b>([^<]+)<\/b>/.source
+    + /<span class="activity-call-settings">([^<]+)<\/span><\/p>(.*?)<\/li>/.source;
+  const heads = [...html.matchAll(new RegExp(head, 'g'))].map(([, name, settings, end]) => [name, settings, end]);
+  assert.deepEqual(heads, [
+    ['Opus', 'high · Standard', ''],
+    ['GPT-6.2-Sol', 'medium · Fast', '<span class="activity-row-end activity-rate is-live" title="Average output rate over the last 2 replies: 900 tokens in 10.0 s">90 token/s</span>'],
+  ], 'one line per model, the rate only where one is known');
+  assert.equal((html.match(/>Developer</g) ?? []).length, 1);
+  assert.match(html, /<li class="activity-call-note" title="Backend"><span><\/span><p>Backend<\/p><span><\/span><\/li>/);
+  assert.match(html, /<li class="activity-call-note" title="Frontend"><span><\/span><p>Frontend<\/p><span><\/span><\/li>/);
 });
 
-test('grouped call rows lead with a labelled status icon and show only actionable routing notes', () => {
+test('a role group is built like the Orchestrator’s block: heading, model line, task lines with state words and the same fold', () => {
+  const now = Date.now();
+  const items = Array.from({ length: 6 }, (_, index) => ({ id: `t${index}`, title: `Task ${index} `.repeat(index ? 1 : 30).trim(),
+    state: index === 1 ? 'preparing' : 'running', seat: 'developer', seatSource: 'declared', startedAt: now - 65000, viewable: index === 0 }));
+  const group = /<li class="agent-team-group" data-role="developer">(.*?)<\/li><\/ul><\/section>/s.exec(groupedCallsMarkup(items, 'zh'))[1];
+  const main = /<section class="activity-card activity-main agent-team-group"[^>]*>(.*)<\/section>/s.exec(mainMarkup([], 'zh', {
+    prompts: Array.from({ length: 6 }, (_, index) => ({ id: `p${index}`, state: 'queued', summary: `Prompt ${index}`, text: `Prompt ${index}`, at: now - 1000 })),
+  }))[1];
+  // The Orchestrator's head keeps its dash where no rate is known; the Agent tab's role lines leave the column empty.
+  const shape = html => html.replace(/ (?:title|aria-label|data-icon|data-role)="[^"]*"/g, '').replace(/>[^<]+</g, '><')
+    .replace(/<span class="activity-row-end activity-rate"><\/span>/, '')
+    .replace(/<h4( class="agent-team-heading")?>.*?<\/h4>/, '<h4>').replace(/(<li class="is-[\w-]+">.*?<\/li>)+/, '<task>');
+  assert.equal(shape(group), shape(main), 'the same elements and classes: an h4, a model line, task lines and the fold');
+  assert.match(group, /<span class="activity-row-icon"><svg class="loading-spinner" data-icon="CircleNotch"><\/svg><\/span><p><span class="activity-call-role">运行中<\/span>Task 0 Task 0/);
+  assert.match(group, /<li class="is-preparing" title="Task 1\n准备中 · 1:0\d\nOpus · high · 普通\n没有可打开的工作会话"><span class="activity-row-icon">/);
+  assert.match(group, /<button type="button" class="activity-call-open activity-task-open" aria-label="开发 Task 0[^"]*，运行中">/, 'a viewable task is one button');
+  assert.equal((group.match(/<li class="is-/g) ?? []).length, 4, 'four tasks before the fold');
+  assert.match(group, /<li class="activity-task-fold"><button type="button" aria-expanded="false"><svg data-icon="CaretDown"><\/svg>还有 2 条<\/button><\/li>/);
+  const css = readCss('src/features/agents/agent-calls.css');
+  assertRule(css, '.activity-call-rows li > .activity-task-open', { 'grid-column': '1 / -1', display: 'grid', 'grid-template-columns': 'subgrid' });
+});
+
+test('each role group leads with its role card’s mark, a custom role with the dialog’s default person', () => {
+  const html = groupedCallsMarkup([
+    { id: 'qa', title: 'Run checks', state: 'running', seat: 'qa', seatSource: 'declared' },
+    { id: 'mine', title: 'Own task', state: 'running', seat: 'custom-lab', seatName: 'Lab role', offTeam: true, seatSource: 'declared' },
+  ]);
+  const marks = [...html.matchAll(/<h4 class="agent-team-heading"><span class="activity-row-icon"><svg data-icon="(\w+)"><\/svg><\/span><span>([^<]+)</g)]
+    .map(([, icon, name]) => [name, icon]);
+  assert.deepEqual(marks, [['QA / Tester', 'Flask'], ['Lab role · Off team', 'User']]);
+  const { roleIconOf } = compileFile(path.join(__dirname, '../src/shared/routing-role-icons.ts'), 'en');
+  assert.equal(roleIconOf('frontend'), roleIconOf('frontend'), 'one mark per role, the one the routing dialog draws');
+  assert.notEqual(roleIconOf('frontend'), roleIconOf('backend'));
+  const css = readCss('src/features/agents/agent-calls.css');
+  assertRule(css, '.agent-team-heading > .activity-row-icon', { flex: 'none', 'align-self': 'center' });
+});
+
+test('spacing alone separates the role rows and the folded 最近完成 list: no line under a row or above the fold', () => {
+  const sheets = ['src/features/agents/agent-calls.css', 'src/features/agents/activity-pane.css'].map(readCss);
+  const borders = sheets.flatMap(sheet => sheet.declarations)
+    .filter(({ selectors, property, value }) => /^border(?:-(?:top|bottom))?$/.test(property) && value !== '0'
+      && selectors.some(selector => /(?:agent-team-group|activity-task-open|activity-call-note|activity-finished)\b/.test(selector)));
+  assert.deepEqual(borders, []);
+  assertRule(sheets[1], '.activity-finished', { 'margin-top': '8px' }, 'with the card’s 8px gap, 16px as between two role groups');
+});
+
+test('grouped call rows show the status icon and the state word on the task line, and only actionable routing notes', () => {
   const { toggleFinished } = require('../src/features/agents/subagent-splits.ts');
   const endedAt = Date.now(), worktree = '/workspace/worker-runs/a-long-worktree-name-that-needs-truncation';
   const cases = [
@@ -173,27 +226,26 @@ test('grouped call rows lead with a labelled status icon and show only actionabl
   toggleFinished('t1');
   try {
     for (const language of ['zh', 'en']) {
-      const html = groupedCallsMarkup(items, language);
-      const rows = [...html.matchAll(/<li class="agent-team-call">(.*?)<\/li>/gs)].map(match => match[1]);
+      // Two renders, since a role shows four tasks before its fold. A task is its line and the note lines under it, up to the next task.
+      const pages = [items.slice(0, 4), items.slice(4)].map(page => groupedCallsMarkup(page, language)), html = pages.join('');
+      const rows = pages.flatMap(page => page.split(/(?=<li class="is-)/).slice(1).map(markup => markup.split(/<\/ul>/)[0]));
       assert.equal(rows.length, cases.length);
+      assert.ok(pages.every(page => !page.includes('activity-task-fold')));
       for (const [state, icon, key] of cases) {
         const word = language === 'en' ? en[key] : key;
-        const subject = `<span class="agent-team-title">Task ${state}</span>`;
-        const row = rows.find(markup => markup.includes(subject));
-        assert.ok(row);
-        assert.ok(row.includes(`data-state="${state}" role="img" aria-label="${word}" title="${word}"`));
-        assert.ok(row.includes(`data-icon="${icon}"></svg></span>${subject}<time>`));
-        assert.ok(!row.includes(`>${word}<`), `${word} appears in the label and tooltip only`);
+        const row = rows.find(markup => markup.startsWith(`<li class="is-${state}" title="Task ${state}\n${word} · `));
+        assert.ok(row, state);
+        assert.ok(row.includes(`data-icon="${icon}"></svg></span><p><span class="activity-call-role">${word}</span>Task ${state}</p><time>`));
       }
-      const [running, awaiting, failed, stopped] = ['running', 'awaiting', 'failed', 'stopped'].map(state => rows.find(row => row.includes(`data-state="${state}"`)));
-      assert.ok(running.includes(`\n${worktree}"><span class="agent-team-subject">`));
+      const [running, awaiting, failed, stopped, done] = ['running', 'awaiting', 'failed', 'stopped', 'done'].map(state => rows.find(row => row.startsWith(`<li class="is-${state}"`)));
+      assert.ok(running.includes(`\n${worktree}\n`));
       assert.equal(running.split(worktree).length, 2, 'the path appears only in the tooltip');
-      assert.doesNotMatch(awaiting, /agent-team-line/, 'no empty metadata line or premature routing note');
-      const done = rows.find(row => row.includes('data-state="done"'));
+      assert.doesNotMatch(awaiting, /activity-call-note/, 'no empty note line or premature routing note');
+      assert.match(awaiting, /<button type="button" class="activity-call-open activity-task-open"/);
       const seat = language === 'en' ? 'Developer' : '开发';
       const mode = language === 'en' ? en['普通'] : '普通';
-      assert.ok(done.includes(`<b>${seat}</b><span class="agent-team-model" title="Opus · high · ${mode}">Opus · high · ${mode}</span>`));
-      assert.match(failed, /data-routing-verdict="mismatch"/);
+      assert.ok(done.includes(`<p>${seat} · Opus · high · ${mode}</p>`), 'in 最近完成 the note says the role and model');
+      assert.match(failed, /<li class="activity-call-note"[^>]*><span><\/span><p><span data-routing-verdict="mismatch">/);
       assert.match(stopped, /data-routing-verdict="unknown"/);
       assert.match(stopped, /<time>1:05<\/time>/);
       assert.equal((html.match(/data-routing-verdict=/g) ?? []).length, 2);
@@ -211,7 +263,7 @@ function usageMarkup(language = 'zh', terminal = {}, options = {}) {
     limits: options.limits?.[agent] ?? null, connection: connection(options[agent] ?? 'subscription') });
   const agents = { claude: state('claude'), codex: state('codex'), ...(options.agy && { agy: state('agy') }) };
   const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, agents, ...options.usage };
-  return renderToStaticMarkup(React.createElement(AgentSections, { usage, installations: options.installations, terminal: {
+  return renderToStaticMarkup(React.createElement(AgentSections, { usage, installations: options.installations, models: options.models, terminal: {
     id: 'placeholder', agent: 'claude', cliActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false }, agentUsage: { provider: 'Anthropic', limits: [] }, ...terminal } }));
 }
 const agentSection = (html, name) => new RegExp('<section class="api-agent" aria-label="' + name + '">[\\s\\S]*?</section>').exec(html)[0];
@@ -510,7 +562,7 @@ test("Claude's usage keeps plan limits and tokens without a source line, reset c
   }
 });
 
-test('expired limits retain observed percentages until an actual reset observation arrives', t => {
+test('expired terminal limits display unknown while waiting for a fresh observation', t => {
   const now = new Date(2030, 4, 5, 12).getTime(), past = now - 86400000;
   t.mock.timers.enable({ apis: ['Date'], now });
   const pastTime = new Date(past).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -523,15 +575,15 @@ test('expired limits retain observed percentages until an actual reset observati
       assert.equal(limits.length, 2);
       for (const [, limit] of limits) {
         assert.ok(limit.includes(language === 'en' ? 'Reset time reached; waiting for an update' : '已到重置时间，等待更新'));
-        assert.match(limit, /aria-valuenow="(?:81|92)"/);
-        assert.match(limit, /(?:81|92)%/);
+        assert.ok(limit.includes(language === 'en' ? 'Unknown' : '未知'));
+        assert.doesNotMatch(limit, /aria-valuenow|(?:81|92)%/);
         assert.ok(!limit.includes(pastTime));
       }
     }
   }
 });
 
-test('the app clock never replaces an observed percentage with a guessed reset', t => {
+test('the app clock hides a percentage at expiry and retains the underlying observation', t => {
   const now = new Date(2030, 4, 5, 12).getTime(), resetsAt = now + 5000;
   t.mock.timers.enable({ apis: ['Date'], now });
   const terminal = { agentUsage: { limits: [{ minutes: 300, percent: 81.34, resetsAt }], limitsAt: now } };
@@ -543,7 +595,8 @@ test('the app clock never replaces an observed percentage with a guessed reset',
   t.mock.timers.tick(5000);
   const after = agentSection(usageMarkup('en', terminal), 'Claude');
   assert.match(after, /Reset time reached; waiting for an update/);
-  assert.match(after, /81%/); assert.match(after, /aria-valuenow="81"/);
+  assert.match(after, />Unknown</);
+  assert.doesNotMatch(after, /81%|aria-valuenow/);
   assert.equal(terminal.agentUsage.limits[0].percent, 81.34);
 });
 
@@ -561,8 +614,8 @@ test('an unknown round explains earlier history when context is known; an unknow
       assert.equal((html.match(/class="activity-metric activity-tokens" title=/g) || []).length, Number(!!round) + Number(!!total));
     }
     const empty = agentSection(usageMarkup(language, { agentUsage: { limits: [], context: null, round: null, total: null } }), 'Claude');
-    assert.ok(empty.includes(first));
-    assert.ok(empty.includes(`<div class="activity-metric activity-tokens"><span class="activity-metric-label">`), 'the empty context hint sits on the label line, not stacked under it');
+    assert.ok(!empty.includes(first), 'no context length, so no hint that it comes with the first reply');
+    assert.doesNotMatch(empty, /上下文|Context|activity-tokens" title=/, 'no context length and no round or conversation rows');
     assert.ok(!empty.includes(roundNote)); assert.ok(!empty.includes(totalNote));
   }
 });
@@ -579,7 +632,7 @@ test('hover titles give exact token counts, one-decimal limit percentages and th
         round: { input: 1230010, cached: 456789, output: 98765 }, total: { input: 123456789, cached: 90123456, output: 2000000 },
       } };
       const html = usageMarkup(language, terminal);
-      assert.ok(html.includes('class="activity-metric activity-figure" title="1,230,010 / 2,000,000 tokens"'));
+      assert.doesNotMatch(html, /activity-figure|2,000,000 tokens/, 'the context length is not shown');
       const titles = language === 'en'
         ? ['1,328,775 tokens · Input 1,230,010 · Cache read 456,789 · Output 98,765', '125,456,789 tokens · Input 123,456,789 · Cache read 90,123,456 · Output 2,000,000']
         : ['1,328,775 tokens · 输入 1,230,010 · 缓存命中 456,789 · 输出 98,765', '125,456,789 tokens · 输入 123,456,789 · 缓存命中 90,123,456 · 输出 2,000,000'];
@@ -650,7 +703,7 @@ test('Codex reset count arrives automatically, shows zero and bounded query stat
   for (const gone of ['尚未查询', '还没有查询过这个账号的重置次数', '正在查询剩余次数…', '点击后有 10 秒可以取消，然后由 {agent} 自己完成重置']) assert.ok(!(gone in en), `${gone} is no longer used`);
 });
 
-test('the lead shows the current prompt while Codex usage lists context, limit bars and reset controls in order', () => {
+test('the lead shows the current prompt while Codex usage lists its channel, limit bars and reset controls in order', () => {
   const terminal = { agent: 'codex', codexActivity: 'working',
     prompts: [{ id: 'work', text: 'Continue responding while usage hangs', summary: 'Continue responding while usage hangs', state: 'working' }],
     agentUsage: { provider: 'OpenAI', context: { used: 25000, window: 100000 }, limits: [{ minutes: 300, percent: 60 }], resets: { left: 2 }, resetQuery: { state: 'ready' }, calls: [{ agent: 'Codex', provider: 'OpenAI', model: 'gpt-6.1-sol', effort: null, fast: null, preparing: 0, running: 1, reviewing: 0, tasks: [], items: [{ state: 'running', role: '执行', title: 'one' }] }] },
@@ -659,9 +712,9 @@ test('the lead shows the current prompt while Codex usage lists context, limit b
   assert.match(/<section class="activity-card activity-main agent-team-group"[\s\S]*?<\/section>/.exec(html)[0], /Continue responding while usage hangs/);
   assert.doesNotMatch(html, /activity-calls|activity-context|activity-usage|activity-gauges|activity-tasks|正在处理的任务|activity-progress/, 'the called models and the figures are not blocks of the pane');
   const codex = agentSection(usageMarkup('zh', terminal), 'Codex');
-  const positions = ['上下文长度', '5 小时额度', 'activity-estop'].map(name => codex.indexOf(name));
-  assert.ok(positions.every((position, i) => position >= 0 && (!i || position > positions[i - 1])), 'context, then the limit bars, then the reset controls');
-  assert.match(codex, /剩余 2 次/); assert.match(codex, /aria-valuenow="25"/); assert.match(codex, /aria-valuenow="60"/);
+  const positions = ['<dt>通道</dt>', '5 小时额度', 'activity-estop'].map(name => codex.indexOf(name));
+  assert.ok(positions.every((position, i) => position >= 0 && (!i || position > positions[i - 1])), 'the channel, then the limit bars, then the reset controls');
+  assert.match(codex, /剩余 2 次/); assert.doesNotMatch(codex, /上下文长度|aria-valuenow="25"/); assert.match(codex, /aria-valuenow="60"/);
   assert.match(html, /class="loading-spinner"/);
   const css = readCss('src/features/agents/activity-pane.css');
   const removed = /activity-progress|activity-tasks|activity-prompts|activity-prompt-state|activity-task-quiet|activity-gauges|activity-count/;
@@ -670,7 +723,7 @@ test('the lead shows the current prompt while Codex usage lists context, limit b
 
 test('the inactive pane shows its usage and routing hint; only the sidebar lists can scroll', () => {
   const html = rightMarkup({ cliActive: false }, 'en');
-  assert.ok(html.includes('class="activity-empty"') && html.includes('model route, context length and usage'));
+  assert.ok(html.includes('class="activity-empty"') && html.includes('model route and usage here'));
   assert.doesNotMatch(html, /activity-main|activity-calls|activity-tasks|No task yet/);
   const css = readCss('src/features/agents/activity-pane.css');
   // Expanded tasks and called model groups can scroll in the sidebar.
@@ -685,9 +738,12 @@ test('the inactive pane shows its usage and routing hint; only the sidebar lists
   }
   assertRule(css, '.activity-calls', { flex: '0 1 auto', 'min-height': '0' }, 'the called models take what the left bar gives and their list scrolls');
   assert.deepEqual(css.declarations.filter(({ property }) => property === 'max-height'), []);
-  const selector = '.activity-main-tasks[data-expanded], .activity-call-groups';
+  assertRule(css, '.activity-main > .activity-call-rows, .activity-call-groups', {
+    'scrollbar-gutter': 'stable', margin: '0 -8px', padding: '0 8px',
+  });
+  const selector = '.activity-main > .activity-main-tasks[data-expanded], .activity-call-groups';
   assertRule(css, selector, {
-    flex: '0 1 auto', 'min-height': '0', 'overflow-y': 'auto', 'scrollbar-gutter': 'stable', 'animation-timeline': 'scroll(self)',
+    flex: '0 1 auto', 'min-height': '0', 'overflow-y': 'auto', 'animation-timeline': 'scroll(self)',
   });
   assert.ok(Object.hasOwn(css.rule(selector), 'mask-image'));
   assert.ok(css.atRules.includes('@keyframes activity-fade'));
@@ -754,8 +810,9 @@ test('each task row is on the 32px grid: its state icon, the role word and the t
   assertRule(css, '.activity-call-rows li.is-step p', { color: 'var(--flow-faint)' }, 'the step is quieter');
 });
 
-test('the main card shows the parent review source, clock and step before queued prompts, and ends with the parent', () => {
-  const at = Date.now() - 65000;
+test('the main card shows the parent review source, clock and step before queued prompts, and ends with the parent', t => {
+  const now = new Date(2030, 4, 5, 12).getTime(), at = now - 65000;
+  t.mock.timers.enable({ apis: ['Date'], now });
   const background = { text: 'Parser worker completed verification.', summary: 'Parser verification completed', count: 2, at };
   const action = { kind: 'read', tool: 'Read', target: 'report.txt', detail: '', done: false };
   const prompts = [{ id: 'q', text: 'Next human request', summary: 'Next human request', state: 'queued', at: at + 60000 }];
@@ -797,22 +854,23 @@ test('the clock reads m:ss and h:mm:ss', () => {
   assert.deepEqual([0, 999, 9000, 134000, 3600000, 3909000, -5].map(elapsedClock), ['0:00', '0:00', '0:09', '2:14', '1:00:00', '1:05:09', '0:00']);
 });
 
-test('metrics are label | meter | figure blocks: one number format, a warning colour only from 90% and a dash for an unknown window', () => {
+test('metrics are label | meter | figure blocks: one number format, a warning colour only from 90% and 未知 for an unknown allowance', () => {
   const metric = html => /<div class="activity-metric[^"]*"[^>]*>[\s\S]*?<\/div>/.exec(html)[0];
-  const at = used => agentSection(usageMarkup('zh', { agentUsage: { limits: [], context: { used, window: 1000000 }, round: { input: 186000, cached: 0, output: 2000 }, total: { input: 2300000, cached: 0, output: 80000 } } }), 'Claude');
-  assert.doesNotMatch(metric(at(894999)), /is-warn/);
-  assert.match(metric(at(900000)), /activity-metric is-warn activity-figure/);
-  const full = at(930000);
-  assert.ok(full.includes('>93%<') && full.includes('共 1M tokens · 还可容纳 70k') && !full.includes('<b>930k</b>'), 'the note stands alone: no figure beside the meter');
-  assert.ok(/<div class="activity-metric is-warn activity-figure"[^>]*><span class="activity-metric-label">上下文长度<\/span><span class="activity-meter"/.test(full), 'the title is the label of the meter line, on the limit rows grid, with no separate heading');
+  const at = percent => agentSection(usageMarkup('zh', { agentUsage: { limits: [{ minutes: 300, percent, resetsAt: null }], limitsAt: 1,
+    round: { input: 186000, cached: 0, output: 2000 }, total: { input: 2300000, cached: 0, output: 80000 } } }), 'Claude');
+  assert.doesNotMatch(metric(at(89.4)), /is-warn/);
+  assert.match(metric(at(90)), /activity-metric is-warn activity-limit/);
+  const full = at(93);
+  assert.ok(/<div class="activity-metric is-warn activity-limit"[^>]*><span class="activity-metric-label">5 小时额度<\/span><span class="activity-meter"/.test(full), 'the title is the label of the meter line, with no separate heading');
+  assert.ok(full.includes('>93%<'));
   const tokenRows = [...full.matchAll(/<div class="activity-metric activity-tokens"[^>]*>[\s\S]*?<\/div>/g)].map(match => match[0]).filter(row => /本轮|本次对话/.test(row));
   assert.equal(tokenRows.length, 2);
   for (const row of tokenRows) assert.doesNotMatch(row, /<b|role="meter"/, 'a token row is its label and its breakdown on one line: no total, no meter');
   assert.ok(tokenRows[0].endsWith('<span class="activity-metric-label">本轮</span><small>输入 186k · 输出 2k</small></div>'));
   assert.ok(tokenRows[1].endsWith('<span class="activity-metric-label">本次对话</span><small>输入 2.3M · 输出 80k</small></div>'));
-  const unknown = usageMarkup('zh', { agentUsage: { limits: [], context: { used: 4200, window: 0 }, round: null, total: null } });
-  assert.ok(unknown.includes('>—</b>') && unknown.includes('已用 4.2k tokens，窗口大小未知'));
-  assert.doesNotMatch(unknown, /0%|还可容纳 0|role="meter"/);
+  const unknown = agentSection(usageMarkup('zh', { agentUsage: { limits: [{ minutes: 300, percent: null, resetsAt: null }], limitsAt: 1, round: null, total: null } }), 'Claude');
+  assert.ok(unknown.includes('>未知</b>'));
+  assert.doesNotMatch(unknown, /0%|role="meter"/);
   const css = readCss('src/features/agents/activity-pane.css');
   assertRule(css, '.activity-metric', { 'grid-template-columns': '88px minmax(0, 1fr) 48px', 'grid-template-rows': '32px' });
   assertRule(css, '.activity-metric.activity-tokens > small', { 'grid-area': '1 / 2 / auto / -1' }, 'the breakdown starts in the meters column, on the label line');
@@ -821,8 +879,8 @@ test('metrics are label | meter | figure blocks: one number format, a warning co
   // Compact bar rows leave room for the routing key below both accounts.
   assertRule(css, '.api-agent .activity-metrics', { gap: '2px' });
   assertRule(css, '.api-agent .activity-metric', { 'grid-template-rows': '20px' });
-  assert.doesNotMatch(full, /<h4[^>]*>用量<\/h4>/);
-  assert.ok(full.indexOf('上下文长度') < full.indexOf('>本轮<') && full.indexOf('>本轮<') < full.indexOf('>本次对话<'), 'context first, then this round, then this conversation');
+  assert.doesNotMatch(full, /<h4[^>]*>用量<\/h4>|上下文长度/);
+  assert.ok(full.indexOf('5 小时额度') < full.indexOf('>本轮<') && full.indexOf('>本轮<') < full.indexOf('>本次对话<'), 'the bars first, then this round, then this conversation');
 });
 
 test('the reset action is a 32px row on the task grid and keeps unknown, failed and zero counts apart', () => {
@@ -929,6 +987,17 @@ test('the main model section: the model its latest reply records (the setting on
   assert.ok(main(mainMarkup([], 'en', { agentUsage: usage({}) })).includes('<h4>Orchestrator</h4>'));
 });
 
+test('an agy session shows its model and effort in the Orchestrator head; its usage card names the channel and shows no context length, as Codex does', () => {
+  const agy = { id: 'placeholder', agent: 'agy', cliActive: true, prompts: [], agentSettings: { model: 'gemini-4-neon', effort: 'high', fast: null },
+    agentUsage: { provider: 'Google Antigravity', limits: [], calls: [], model: 'gemini-4-neon', context: { used: 17400, window: 1000000 } } };
+  const head = /<li class="activity-call-head" title="([^"]*)">[\s\S]*?<p><b>([^<]*)<\/b><span class="activity-call-settings">([^<]*)<\/span>/.exec(mainMarkup([], 'zh', agy));
+  assert.ok(head, 'the Orchestrator head names the model and how it runs');
+  assert.deepEqual(head.slice(1), ['Antigravity / Google Antigravity / gemini-4-neon\nhigh', 'gemini-4-neon', 'high']);
+  const markup = usageMarkup('zh', agy, { agy: 'subscription' }), section = agentSection(markup, 'Antigravity');
+  assert.match(section, /<dt>通道<\/dt><dd><span>原生模式<\/span><\/dd>/);
+  assert.doesNotMatch(markup, /上下文长度|17,400|<dt>连接<\/dt>|Antigravity 登录/, 'neither the context length nor the connection row');
+});
+
 test('the main model shows Ultracode only when the session reports it is on', () => {
   const markup = ultracode => mainMarkup([], 'zh', { agentSettings: { model: 'opus', effort: 'high', fast: false, ultracode } });
   assert.match(markup(true), /activity-call-settings">high · 普通 · Ultracode<\/span>/);
@@ -991,11 +1060,11 @@ test('an agent’s sections follow the connection: a session that reports plan w
   // Unknown connection, but the session's own windows: the bars show without a source line, and no 额度 未知 row.
   const plan = agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: own }, { codex: 'unknown' }), 'Codex');
   assert.match(plan, /5 小时额度/); assert.doesNotMatch(plan, /额度来自/); assert.doesNotMatch(plan, /<dt>额度<\/dt>/);
-  // Without any window, from main or from the session: 额度 未知, and the context and the round (the session's own) are all there is.
+  // Without any window, from main or from the session: 额度 未知, and the round (the session's own) is all there is.
   for (const kind of ['unknown', 'none']) {
     const none = agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: { limits: [], context: { used: 100, window: 1000 }, round: { input: 10, cached: 0, output: 1 } } }, { codex: kind }), 'Codex');
     assert.match(none, /<dt>额度<\/dt><dd><span>未知<\/span><\/dd>/); assert.doesNotMatch(none, /5 小时额度|每周额度|API 花费|月预算|activity-estop/);
-    assert.ok(none.indexOf('上下文长度') < none.indexOf('>本轮<'), 'the current session still has its context and round');
+    assert.match(none, />本轮</, 'the current session still has its round'); assert.doesNotMatch(none, /上下文长度/);
   }
   // The other agent never borrows the session's windows.
   assert.doesNotMatch(agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: own }, { claude: 'unknown' }), 'Claude'), /5 小时额度/);
@@ -1028,26 +1097,47 @@ test('the activity pane leaves room for routing when agy is absent or has no usa
   }
 });
 
-test('agy shows separate five-hour and weekly quota windows for Gemini and third-party models', () => {
+test('agy lists only the quota group of the models the project runs on it, inline like Claude and Codex, each group named only when several show', () => {
   const window = (windowDurationMins, usedPercent) => ({ windowDurationMins, usedPercent, resetsAtMs: null });
   const agy = { state: 'ready', limitsById: {
     '3p': { primary: window(300, 51), secondary: window(10080, 77) },
     gemini: { primary: window(300, 0), secondary: window(10080, 26) },
   } };
+  const values = html => [...html.matchAll(/aria-valuenow="(\d+)"/g)].map(([, percent]) => Number(percent));
+  const headings = html => [...html.matchAll(/<h5 class="api-quota-group-title">([^<]+)<\/h5>/g)].map(([, label]) => label);
   for (const [language, gemini, thirdParty] of [['zh', 'Gemini 模型', '第三方模型'], ['en', 'Gemini models', 'Third-party models']]) {
-    const html = agentSection(usageMarkup(language, {}, { agy: 'subscription', limits: { agy } }), 'Antigravity');
-    const target = html.match(/popovertarget="([^"]+)"/i)?.[1];
-    assert.ok(target && html.includes(`id="${target}" popover="auto"`));
-    const headings = [...html.matchAll(/<h5 class="api-quota-group-title">([^<]+)<\/h5>/g)];
-    assert.deepEqual(headings.map(([, label]) => label), [gemini, thirdParty]);
-    const values = group => [...group.matchAll(/aria-valuenow="(\d+)"/g)].map(([, percent]) => Number(percent));
-    const groups = [html.slice(headings[0].index, headings[1].index), html.slice(headings[1].index)];
-    assert.deepEqual(groups.map(values), [[0, 26], [51, 77]]);
     const labels = language === 'zh' ? ['5 小时额度', '每周额度'] : ['5-hour limit', 'Weekly limit'];
-    for (const group of groups) {
-      assert.deepEqual([...group.matchAll(/<span class="activity-metric-label">([^<]+)<\/span>/g)].map(([, label]) => label), labels);
+    const section = models => agentSection(usageMarkup(language, {}, { agy: 'subscription', limits: { agy }, models: models && { agy: models } }), 'Antigravity');
+    for (const html of [section(['gemini-3.8-flash']), section(['gemini-4-neon', 'agy:gemini-3.8-flash'])]) {
+      assert.deepEqual(values(html), [0, 26], 'a Gemini model in use: the Gemini group only');
+      assert.deepEqual(headings(html), [], 'one group: no group name, the rows sit in the block as Claude and Codex rows do');
+      assert.deepEqual([...html.matchAll(/<span class="activity-metric-label">([^<]+)<\/span>/g)].map(([, label]) => label), labels);
+      assert.doesNotMatch(html, /popover|api-quota-trigger|<button/, 'no quota button and no pop-up');
     }
+    assert.deepEqual(values(section(['agy:claude-opus-5-5'])), [51, 77], 'a third-party model in use: its group only');
+    const both = section(['gemini-3.8-flash', 'agy:claude-opus-5-5']);
+    assert.deepEqual(headings(both), [gemini, thirdParty], 'both kinds in use: both groups, each named');
+    assert.deepEqual(values(both), [0, 26, 51, 77]);
+    assert.deepEqual(headings(section()), [gemini, thirdParty], 'no model of agy known: every reported group, each named');
+    const onlyGemini = agentSection(usageMarkup(language, {}, { agy: 'subscription', limits: { agy: { state: 'ready', limitsById: { gemini: agy.limitsById.gemini } } },
+      models: { agy: ['agy:claude-opus-5-5'] } }), 'Antigravity');
+    assert.deepEqual(headings(onlyGemini), [gemini], 'the group in use was not reported: what was reported keeps its name, so it is not read as that model');
   }
+});
+
+test('the models a project runs on each agent: its main sessions by the agent that runs them, and the enabled roles seats with the team on', () => {
+  const { modelsInUse } = loadAgentsFile('ApiUsage.tsx');
+  const terminals = [
+    { id: 'a', cliActive: true, agent: 'agy', agentUsage: { model: 'claude-opus-5-5' } },
+    { id: 'b', cliActive: true, agent: 'claude', agentSettings: { model: 'claude-sonnet-5-5' } },
+    { id: 'c', cliActive: false, agent: 'agy', agentUsage: { model: 'gemini-4-neon' } },
+  ];
+  const roles = [{ id: 'orchestrator', enabled: true }, { id: 'frontend', enabled: true }, { id: 'qa', enabled: false }];
+  const effective = { orchestrator: { model: 'opus', effort: 'high' }, frontend: { model: 'agy:gemini-3.8-flash', effort: 'low' }, qa: { model: 'gpt-6.2-sol', effort: 'low' } };
+  const seats = conductor => ({ conductor, lead: 'orchestrator', roles, effective, current: null });
+  assert.deepEqual(modelsInUse(terminals, seats(true)), { agy: ['claude-opus-5-5', 'agy:gemini-3.8-flash'], claude: ['claude-sonnet-5-5', 'opus'] });
+  assert.deepEqual(modelsInUse(terminals, seats(false)), { agy: ['claude-opus-5-5'], claude: ['claude-sonnet-5-5'] }, 'with the team off no role runs');
+  assert.deepEqual(modelsInUse(terminals, null), { agy: ['claude-opus-5-5'], claude: ['claude-sonnet-5-5'] });
 });
 
 test('agy reports unreadable allowance without a zero or a window from any terminal', () => {

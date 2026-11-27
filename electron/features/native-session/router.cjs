@@ -386,15 +386,6 @@ function createRouter({
       if (permissions && result.permissions !== undefined) record.spec.permissions = result.permissions;
       return result;
     },
-    async modelOptions(id, runtimeSessionId, patch) {
-      const record = current(id, runtimeSessionId);
-      requireStarted(record);
-      if (!record.nativePolicy.liveRouting) throw new Error('此会话由模型分工设置模型和强度。');
-      if (!Object.keys(patch).length) return record.runtime.modelOptions();
-      const result = await record.runtime.setModelOptions(patch);
-      current(id, runtimeSessionId);
-      return result;
-    },
     async applyRouting(id, seat) {
       const record = sessions.get(id);
       if (!record?.runtime.applyRouting || ended.has(record.runtime.snapshot().state)) return null;

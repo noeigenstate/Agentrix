@@ -1,12 +1,13 @@
 import { modelLabel, routingModelName, routingRoleName } from '../../shared/routing-command.ts';
-import { createContext, useEffect, useState, type ReactNode } from 'react';
-import { CaretRight, CheckCircle, Circle, CircleNotch, DotsThreeCircle, Record as RecordDot, Stop, Terminal, WarningCircle } from '@phosphor-icons/react';
+import { createContext, Fragment, useEffect, useState, type ReactNode } from 'react';
+import { CaretDown, CaretRight, CheckCircle, Circle, CircleNotch, DotsThreeCircle, Record as RecordDot, Stop, Terminal, WarningCircle } from '@phosphor-icons/react';
 import type { AgentCall, ProjectTerminal, SeatsInfo, SeatRole, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { brandIconOf } from './AgentBrandIcon';
+import { roleIconOf } from '../../shared/routing-role-icons.ts';
 import { agentIdForLabel } from '../../shared/agent-label.ts';
 import { exactCount } from './Metric';
 import { callSeatRole, modelRow, roleGroups, routeVerdict } from './routing-seats.ts';
@@ -60,6 +61,30 @@ const AWAITING_WORD = '等待你确认';
 const awaitingIcon = <DotsThreeCircle size={14} aria-hidden="true" />;
 const MAX_CALL_ITEMS = 4;
 
+// One task line, the same in the Orchestrator's block and in a role group (a plain function, so the element tree stays one level): the state icon in the 16px column,
+// the state word and a one-line subject (whole in the tooltip), the time at the right. With `onOpen` the line is one button whose cells keep the row's columns.
+export function taskRow({ key, icon, className, word, subject, title, time, label, onOpen }: {
+  key: string; icon: ReactNode; className: string; word: string; subject: string; title: string; time: string; label?: string; onOpen?: () => void;
+}) {
+  const cells = <><span className="activity-row-icon">{icon}</span><p>{word && <span className="activity-call-role">{word}</span>}{subject}</p><time>{time}</time></>;
+  return <li key={key} className={className} title={title}>
+    {onOpen ? <button type="button" className="activity-call-open activity-task-open" aria-label={label} onClick={onOpen}>{cells}</button> : cells}
+  </li>;
+}
+
+// A block's tasks: the first four, the rest folded into 「还有 N 条」; a new `foldKey` (another conversation) folds them again. `children` follow the fold.
+export function TaskList({ rows, foldKey, label, children }: { rows: ReactNode[]; foldKey: string; label: string; children?: ReactNode }) {
+  const [fold, setFold] = useState<string | null>(null);
+  const expanded = fold === foldKey, hidden = Math.max(0, rows.length - MAX_CALL_ITEMS);
+  return <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={label}>
+    {expanded ? rows : rows.slice(0, MAX_CALL_ITEMS)}
+    {hidden > 0 && <li className="activity-task-fold"><button type="button" aria-expanded={expanded} onClick={() => setFold(expanded ? null : foldKey)}>
+      <CaretDown size={14} aria-hidden="true" />{expanded ? t('收起') : t('还有 {count} 条', { count: hidden })}
+    </button></li>}
+    {children}
+  </ul>;
+}
+
 // A dispatched worker that did not finish cleanly, in words in the state column (skills/agent-dispatch).
 export function failureWord(failure: NonNullable<AgentCall['items'][number]['failure']>) {
   if (failure.reason === 'unconfirmed') return t('未能启动');
@@ -75,6 +100,19 @@ async function stopWorker(terminalId: string, callId: string) {
   setStopState(terminalId, callId, { pending: true });
   const result = await window.agentrix.stopAgent(terminalId, callId).catch((error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
   setStopState(terminalId, callId, result.ok ? null : { pending: false, refusal: result.error });
+}
+
+// The 15-second notice under a starting worker, with 停止 and 再等等.
+function lateNotice(terminalId: string, callId: string, now: number) {
+  const stop = stopState(terminalId, callId);
+  return <div className="activity-call-notice" role="status">
+    <WarningCircle size={14} aria-hidden="true" /><span>{t('已等 15 秒仍未确认，可能没有启动。')}</span>
+    <span className="activity-call-notice-actions">
+      <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, callId)}>{t('停止')}</button>
+      <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => waitMore(terminalId, callId, now)}>{t('再等等')}</button>
+    </span>
+    {stop?.refusal && <span role="alert">{t('没能停止它：{message}', { message: stop.refusal })}</span>}
+  </div>;
 }
 
 // A model's row for one call (a plain function, so the card's element tree stays one level): its state in words (a starting or waiting one says so), the tags 继续 and 自启动, and, in the project's list, the terminal it belongs to.
@@ -95,19 +133,11 @@ function callItem({ row, open, now, label }: { row: CallRow; open: ReturnType<ty
   </>;
   const hint = item.viewable ? t(opened ? '点击关闭旁边的分屏' : '点击在旁边查看它在做什么') : null;
   const title = [item.title, failure, outside, declared, hint].filter(Boolean).join('\n');
-  const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
   return <li key={label ? `${terminalId}/${item.id}` : item.id} className={`activity-call-item is-${state}${failure ? ' is-failed' : ''}${awaiting ? ' is-awaiting' : ''}`} title={title}>
     {item.viewable
       ? <button type="button" className={`activity-call-open activity-call-body${label ? ' has-terminal' : ''}`} aria-pressed={opened} aria-label={t('{role} {title}，{state}', { role: t(item.role), title: item.title, state: word })} onClick={() => toggleSplit(terminalId, item.id)}>{cells}</button>
       : <div className={`activity-call-body${label ? ' has-terminal' : ''}`} title={`${title}\n${t('没有可打开的工作会话')}`}>{cells}</div>}
-    {late && <div className="activity-call-notice" role="status">
-      <WarningCircle size={14} aria-hidden="true" /><span>{t('已等 15 秒仍未确认，可能没有启动。')}</span>
-      <span className="activity-call-notice-actions">
-        <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
-        <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
-      </span>
-      {stop?.refusal && <span role="alert">{t('没能停止它：{message}', { message: stop.refusal })}</span>}
-    </div>}
+    {noticeShown(terminalId, item, now) && lateNotice(terminalId, item.id, now)}
   </li>;
 }
 
@@ -164,13 +194,14 @@ const TEAM_STATUS_ICONS = {
   stopped: <Stop size={14} weight="fill" aria-hidden="true" />,
 };
 
-function TeamCallStatus({ item }: { item: CallRow['item'] }) {
+// A role call's state: its class (the icon's colour), icon and word, the words the rest of the Agent tab uses.
+function teamCallState(item: CallRow['item']) {
   const { failure } = item;
   const state = failure ? (failure.reason === 'killed' ? 'stopped' : 'failed')
     : item.awaiting === 'owner' && item.state !== 'done' ? 'awaiting' : item.state;
   const word = failure ? failureWord(failure) : t(state === 'awaiting' ? AWAITING_WORD : CALL_STATES[item.state].word);
   const icon = state === 'awaiting' || state === 'failed' || state === 'stopped' ? TEAM_STATUS_ICONS[state] : CALL_STATES[state].icon;
-  return <span className="agent-team-status" data-state={state} role="img" aria-label={word} title={word}>{icon}</span>;
+  return { state, word, icon };
 }
 
 function teamCallModel({ call }: CallRow, info?: SeatsInfo | null) {
@@ -179,45 +210,46 @@ function teamCallModel({ call }: CallRow, info?: SeatsInfo | null) {
   return { name, label: [name, call.effort ?? '—', call.fast == null ? '—' : t(call.fast ? '快速' : '普通')].join(' · ') };
 }
 
-function TeamCallRow({ row, roles, info, now, labels, heading, model }: {
+// A role call: the Orchestrator's task line (a click opens its worker session), then a quiet note line only for what the line cannot say — its specialty or other
+// seat, the model in 最近完成, the terminal when the project has several, an actionable routing check — and the 15-second notice of a starting worker.
+function teamTask({ row, roles, info, now, labels, heading, model }: {
   row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean; heading?: string; model: ReturnType<typeof teamCallModel>;
 }) {
-  const { item, terminalId } = row;
+  const { item, terminalId } = row, { state, word, icon } = teamCallState(item);
   const age = item.startedAt == null ? '—' : elapsedClock(Math.max(0, (item.endedAt ?? now) - item.startedAt));
   const verdict = routeVerdict(row, info);
-  const routingNote = verdict === 'mismatch' || verdict === 'unknown' && (item.endedAt != null || item.state === 'done') ? VERDICTS[verdict] : null;
-  const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
-  const { role, inferred } = callSeatRole(roles, item);
+  const routingNote = verdict === 'mismatch' || verdict === 'unknown' && (item.endedAt != null || item.state === 'done') ? t(VERDICTS[verdict]) : null;
+  const { role, inferred } = callSeatRole(roles, item), seat = item.seatName ?? routingRoleName(role.name, t);
   const showName = !heading || (item.seatName && item.seatName !== heading);
   const specialty = item.specialty;
   const specialtyRole = specialty && (info?.currentRoles ?? info?.roles ?? roles).find(role => role.id === specialty);
   const specialtyLabel = specialty && (specialtyRole ? routingRoleName(specialtyRole.name, t) : specialty[0].toUpperCase() + specialty.slice(1));
-  const roleLabel = [
-    showName && (item.seatName ?? routingRoleName(role.name, t)), specialtyLabel, !heading && item.offTeam && t('未在团队中'), inferred && t('推断'),
-  ].filter(Boolean).join(' · ');
-  const title = [item.viewable ? t('打开工作会话') : t('没有可打开的工作会话'), heading && model.label, item.worktree].filter(Boolean).join('\n');
-  const cells = <>
-      <span className="agent-team-subject"><TeamCallStatus item={item} /><span className="agent-team-title">{item.title || model.name}</span><time>{age}</time></span>
-      {(roleLabel || !heading) && <span className="agent-team-line">
-        {roleLabel && <b>{roleLabel}</b>}{!heading && <span className="agent-team-model" title={model.label}>{model.label}</span>}
-      </span>}
-      {(labels || routingNote) && <span className="agent-team-line">
-        {labels && <span className="agent-team-terminal" title={row.title}>{row.title ?? t('终端 {number}', { number: row.number })}</span>}
-        {routingNote && <span data-routing-verdict={verdict}>{t(routingNote)}</span>}
-      </span>}
-  </>;
-  return <li className="agent-team-call">
-    {item.viewable
-      ? <button type="button" className="agent-team-row" title={title}
-          onClick={() => openSplit(terminalId, item.id)}>{cells}</button>
-      : <div className="agent-team-row" title={title}>{cells}</div>}
-    {late && <div className="activity-call-notice" role="status">
-      <span>{t('已到 15 秒未确认，可能没有启动')}</span>
-      <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
-      <button type="button" className="button secondary small" onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
-      {stop?.refusal && <span role="alert">{t('没能停止：{message}', { message: stop.refusal })}</span>}
-    </div>}
-  </li>;
+  const facts = [showName && seat, specialtyLabel, !heading && item.offTeam && t('未在团队中'), inferred && t('推断'), !heading && model.label,
+    labels && (row.title ?? t('终端 {number}', { number: row.number }))].filter(Boolean).join(' · ');
+  const subject = item.title || model.name;
+  const title = [subject, `${word} · ${age}`, routingNote, facts, heading && model.label, item.worktree,
+    t(item.viewable ? '打开工作会话' : '没有可打开的工作会话')].filter(Boolean).join('\n');
+  const key = JSON.stringify([terminalId, item.id]);
+  return <Fragment key={key}>
+    {taskRow({ key: 'task', icon, className: `is-${state}`, word, subject, title, time: age,
+      label: t('{role} {title}，{state}', { role: seat, title: subject, state: word }), onOpen: item.viewable ? () => openSplit(terminalId, item.id) : undefined })}
+    {(facts || routingNote) && <li className="activity-call-note" title={[routingNote, facts].filter(Boolean).join('\n')}><span /><p>
+      {routingNote && <span data-routing-verdict={verdict}>{routingNote}</span>}{routingNote && facts && ' · '}{facts}
+    </p><span /></li>}
+    {noticeShown(terminalId, item, now) && <li className="activity-task-notice">{lateNotice(terminalId, item.id, now)}</li>}
+  </Fragment>;
+}
+
+// A role group's model lines, as the Orchestrator's: one per model setting its calls run (mark, name, effort and mode), with the rate once one is known.
+function roleHeads(entries: readonly { row: CallRow; model: ReturnType<typeof teamCallModel> }[]) {
+  const heads = new Map<string, { call: CallRow['call']; name: string; rate: TokenRate | null | undefined }>();
+  for (const { row: { call }, model } of entries) {
+    const head = heads.get(model.label);
+    if (!head) heads.set(model.label, { call, name: model.name, rate: call.rate });
+    else head.rate ??= call.rate;
+  }
+  return [...heads].map(([label, { call, name, rate }]) => <ModelHead key={label} agent={call.agent} name={name} effort={call.effort} fast={call.fast}
+    provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={rate} quiet />);
 }
 
 export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]; terminalId: string; terminals?: readonly ProjectTerminal[] }) {
@@ -237,20 +269,21 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
     const named = (row: CallRow) => row.item.seatName || row.item.offTeam;
     const team = !!info && (roles.length > 0 || groups.some(group => group.rows.some(named)) || recent.some(entry => entry.call && named(entry.call)));
     const modelOf = (row: CallRow) => teamCallModel(row, info?.[row.terminalId]);
-    const renderRow = (row: CallRow, heading?: string, model = modelOf(row)) => <TeamCallRow key={JSON.stringify([row.terminalId, row.item.id])} row={row}
-      roles={roles} info={info?.[row.terminalId]} now={now} labels={label} heading={heading} model={model} />;
+    const renderRow = (row: CallRow, heading?: string, model = modelOf(row)) => teamTask({ row, roles, info: info?.[row.terminalId], now, labels: label, heading, model });
     return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
       {team ? roleGroups(roles, groups.flatMap(group => group.rows), selectedRoles).map(({ role, rows, offTeam, recordedName }) => {
         const entries = rows.map(row => ({ row, model: modelOf(row) }));
-        const settings = [...new Set(entries.map(({ model }) => model.label))].join(' / ');
-        return <li key={JSON.stringify([role.id, offTeam])} className="agent-team-group" data-role={role.id} data-off-team={offTeam || undefined}>
+        const key = JSON.stringify([role.id, offTeam]), RoleMark = roleIconOf(role.id);
+        const name = role.source === 'custom' || recordedName && !role.source ? role.name : routingRoleName(role.name, t);
+        return <li key={key} className="agent-team-group" data-role={role.id} data-off-team={offTeam || undefined}>
           <h4 className="agent-team-heading">
-            <span>{role.source === 'custom' || recordedName && !role.source ? role.name : routingRoleName(role.name, t)}{offTeam && <> · {t('未在团队中')}</>}</span>
-            <span className="agent-team-model" title={settings}>{settings}</span>
+            <span className="activity-row-icon"><RoleMark size={16} aria-hidden="true" /></span>
+            <span>{name}{offTeam && <> · {t('未在团队中')}</>}</span>
           </h4>
-          <ul>{entries.map(({ row, model }) => renderRow(row, role.name, model))}</ul>
+          <ul className="activity-call-rows">{roleHeads(entries)}</ul>
+          <TaskList rows={entries.map(({ row, model }) => renderRow(row, role.name, model))} foldKey={projectKey + key} label={name} />
         </li>;
       }) : groups.map(({ call, rate, rows }) => {
         const name = callModelName({ model: call.model }); // the head does not repeat 「未确认」: the starting row says it

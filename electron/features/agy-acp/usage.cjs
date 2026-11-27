@@ -31,18 +31,19 @@ function remoteAgyLimits(remote, now = Date.now) {
   if (!remote || remote.closed) return Promise.resolve(null);
   const at = now(), previous = remoteReads.get(remote);
   if (previous && at - previous.at < QUOTA_INTERVAL) return previous.reading;
-  const reading = remote.request('agy-usage', {}, { timeout: 16000 }).then(rows => {
-    if (remote.closed || !Array.isArray(rows)) return null;
+  const entry = { at, value: previous?.value ?? null };
+  entry.reading = Promise.resolve().then(() => remote.request('agy-usage', {}, { timeout: 16000 })).then(rows => {
+    if (!Array.isArray(rows)) return entry.value;
     const limits = rows.slice(0, 64).flatMap(row => {
       if (!row || !isUsageGroup(row.id)
         || !Number.isFinite(row.percent) || row.percent < 0 || row.percent > 100) return [];
       return [{ id: row.id, percent: row.percent, minutes: [300, 10080].includes(row.minutes) ? row.minutes : null,
         resetsAt: Number.isSafeInteger(row.resetsAt) && row.resetsAt > 0 ? row.resetsAt : null }];
     });
-    return limits.length ? { ...agyAccountLimits({ limits, at: now(), source }), scopeId: 'agy-ssh-account' } : null;
-  }).catch(() => null);
-  remoteReads.set(remote, { at, reading });
-  return reading;
+    return entry.value = limits.length ? { ...agyAccountLimits({ limits, at: now(), source }), scopeId: 'agy-ssh-account' } : null;
+  }).catch(() => entry.value).then(value => remote.closed ? null : value);
+  remoteReads.set(remote, entry);
+  return entry.reading;
 }
 
 module.exports = { readAgyAccount, agyAccountLimits, remoteAgyLimits, isUsageGroup, QUOTA_INTERVAL };

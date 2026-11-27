@@ -5,7 +5,9 @@ const api = new Set(['native', 'resume', 'liveModel', 'liveEffort', 'transcript'
 
 export default Object.freeze({
   id: 'agy', label: 'Antigravity', shortLabel: 'agy', command: 'agy', brand: 'antigravity',
-  usage: { provider: 'Google Antigravity', inputExcludesCache: true, hideWithoutUsage: true, quotaUnavailable: '暂时读不到 agy 的额度（未登录或版本过低时会这样）。' },
+  usage: { provider: 'Google Antigravity', inputExcludesCache: true, hideWithoutUsage: true, quotaUnavailable: '暂时读不到 agy 的额度（未登录或版本过低时会这样）。',
+    // Gemini models draw on one allowance and every other provider's model on another, each with its 5-hour and weekly window.
+    quotaGroup: model => /^(?:agy:)?gemini-/i.test(model) ? 'gemini' : '3p', quotaGroups: { gemini: 'Gemini 模型', '3p': '第三方模型' } },
   install: {
     page: 'https://antigravity.google/docs/getting-started?tab=cli',
     commands: { windows: 'irm https://antigravity.google/cli/install.ps1 | iex', unix: 'curl -fsSL https://antigravity.google/cli/install.sh | bash' },

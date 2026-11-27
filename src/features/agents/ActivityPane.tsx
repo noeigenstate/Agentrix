@@ -18,9 +18,9 @@ export function ActivityPane({ terminal, terminals = [terminal], projectId, inst
   }
   return <aside className="activity-pane" aria-label={t('活动')}>
     {!terminal.cliActive && <section className="activity-card">
-      <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的模型路由、上下文长度和用量。')}</p>
+      <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的模型路由和用量。')}</p>
     </section>}
-    <ApiUsage terminal={terminal} projectId={projectId} installations={installations} />
+    <ApiUsage terminal={terminal} terminals={terminals} projectId={projectId} installations={installations} />
     <RoutingKeyCard projectId={projectId} terminalId={terminal.id} sessionId={terminal.sessionId} workingSeats={workingSeats} leadWorking={leadWorking} />
   </aside>;
 }

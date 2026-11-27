@@ -7,6 +7,7 @@ const { overlay, testFacts } = require('../claude-runtime/resolver.cjs');
 const { accountChanged, retainConnection, retainLimits, quotaRead } = require('../agents/agent-usage.cjs');
 const { support } = require('../cli-adapters/capabilities.mjs');
 const { adapters } = require('../cli-adapters/registry.cjs');
+const { expireQuotaWindows } = require('./usage.cjs');
 // Nothing tells this module that a project was removed, so it holds the last usage of the most recently read ones.
 const HELD_PROJECTS = 64;
 function createNativeSessions(options) {
@@ -54,7 +55,8 @@ function createNativeSessions(options) {
           usage.agents[agent].next = next;
           if (nativePolicy?.remoteQuotaUnavailable) {
             const state = usage.agents[agent];
-            const remoteLimits = await options.remoteLimits?.(projectId, agent, nativePolicy.remoteLimits);
+            const remoteLimits = await Promise.resolve().then(() => options.remoteLimits?.(projectId, agent, nativePolicy.remoteLimits)).catch(() => null);
+            if (remoteLimits === undefined && !connections?.[agent]?.active) continue;
             state.limits = remoteLimits ?? { scopeId: `${agent}-ssh-account`, state: 'unavailable', source: 'ssh', limitsById: {},
               billingRoute: 'unknown', observedAtMs: null, resetCredits: null, ordinaryUsageAllowed: null, reason: nativePolicy.remoteQuotaUnavailable };
             state.connection = { kind: remoteLimits ? 'subscription' : 'unknown', active: !!connections?.[agent]?.active,
@@ -66,6 +68,10 @@ function createNativeSessions(options) {
         // What the account reader named and what main read from the session, oldest first: each is an observation of its
         // own, so the session's (which may name no account) does not hide the reader's by being the later of the two.
         const session = connections?.[agent], account = inputs?.limits?.[agent]?.accountConnection;
+        if (inputs?.focused && manifest.usage?.hideWithoutUsage && !inputs.limits?.[agent] && !session?.active) {
+          state.limits = null;
+          continue;
+        }
         const observed = (session?.kind === 'api' && session.active) || !Number.isFinite(account?.observedAt) ? [session]
           : [{ ...account, active: session?.active ?? false }, session].sort((a, b) => (a?.observedAt ?? -Infinity) - (b?.observedAt ?? -Infinity));
         state.connection = observed.reduce((connection, next) => retainConnection(connection, next), held?.connection)
@@ -90,6 +96,8 @@ function createNativeSessions(options) {
       }
       if (remote) usage.switches = { waiting: 0 };
       project.usage = structuredClone(usage);
+      const now = Date.now();
+      for (const state of Object.values(usage.agents)) state.limits = expireQuotaWindows(state.limits, now);
       return usage;
     },
   };

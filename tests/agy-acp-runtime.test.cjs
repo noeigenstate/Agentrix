@@ -212,9 +212,9 @@ test('a busy catalog directory does not discard probed rows and is removed on th
     return rm(folder, options);
   });
   try {
-    assert.equal((await factory.models({ cwd: dataDir })).length, 3);
+    assert.equal((await factory.models({ cwd: dataDir })).length, 8);
     assert.ok(fs.existsSync(leftover));
-    assert.equal((await factory.models({ cwd: dataDir })).length, 3);
+    assert.equal((await factory.models({ cwd: dataDir })).length, 8);
     assert.deepEqual(await fs.promises.readdir(path.dirname(leftover)), []);
   } finally { mock.mock.restore(); }
 });
@@ -295,12 +295,24 @@ test('a process exit after the prompt response preserves the completed turn', { 
 
 test('probes model choices without a prompt and verifies models from transcripts', { timeout: 10000 }, async t => {
   const { factory, runtime, events, dataDir, wire } = await fake(t, { ...flash, model: 'agy:gemini-3.8-flash' });
-  assert.deepEqual(await factory.models({ cwd: dataDir }), [
-    { model: 'gemini-4-neon', label: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', fast: false, isDefault: true },
-    { model: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', fast: false, isDefault: false },
-    { model: 'agy:gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium)', efforts: ['default'], defaultEffort: 'default', fast: false, isDefault: false },
-  ]);
-  assert.deepEqual(wire().slice(1).map(row => row.method), ['initialize', 'session/new', 'session/set_config_option', 'session/set_config_option', 'session/close']);
+  const standard = ['low', 'medium', 'high'], extended = [...standard, 'xhigh'];
+  const expected = [
+    ['gemini-4-neon', 'Gemini 4 Neon', extended],
+    ['gemini-4-carbon', 'Gemini 4 Carbon', standard],
+    ['gemini-4-argon', 'Gemini 4 Argon', standard],
+    ['gemini-4-hydrogen', 'Gemini 4 Hydrogen', extended],
+    ['gemini-3.8-flash', 'Gemini 3.8 Flash', standard],
+    ['agy:claude-opus-5-5', 'Claude Opus 5.5', standard],
+    ['agy:claude-sonnet-5-5', 'Claude Sonnet 5.5', standard],
+    ['agy:gpt-oss-120b-medium', 'GPT-OSS 120B (Medium)', ['default']],
+  ];
+  assert.deepEqual(await factory.models({ cwd: dataDir }), expected.map(([model, label, efforts], index) => ({
+    model, label, efforts, defaultEffort: efforts.includes('high') ? 'high' : 'default', fast: false, isDefault: index === 0,
+  })));
+  const probeRequests = wire().slice(1);
+  const probedIds = ['gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', flash.model, 'claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-oss-120b-medium'];
+  assert.deepEqual(probeRequests.map(row => row.method), ['initialize', 'session/new', ...probedIds.map(() => 'session/set_config_option'), 'session/close']);
+  assert.deepEqual(probeRequests.slice(2, -1).map(row => row.params.value), probedIds);
   assert.deepEqual(await fs.promises.readdir(path.join(dataDir, 'agy')), []);
   await runtime.start();
   assert.equal(wire().findLast(row => row.params?.configId === 'model').params.value, flash.model);

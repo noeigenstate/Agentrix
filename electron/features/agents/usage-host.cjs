@@ -23,31 +23,42 @@ function createCodexServices(host) {
     const previous = readNativeJson(file, []);
     writeNativeJson(file, [...(Array.isArray(previous) ? previous : []), event].slice(-500));
   } });
-  const projectAccounts = withFocusedAccountReaders(createProjectAccounts({ codex: codexAccounts, readClaude: readClaudeAccountCache }), {
+  const canRead = !env.AGENTRIX_DATA_DIR || env.AGENTRIX_TEST_AGENTS === '1';
+  const readClaudeUsage = canRead && host.fetch ? options => adapterOf('claude').usage.accountReader({ ...options, fetch: host.fetch }) : null;
+  const projectAccounts = withFocusedAccountReaders(createProjectAccounts({
+    codex: codexAccounts, readClaude: readClaudeAccountCache, readClaudeUsage, claudeSchedule: host.claudeSchedule,
+  }), {
     cwd: () => app.getPath('userData'), seats: projectId => host.routing?.seatsInfo(projectId)?.effective,
-    registered: () => [...host.agents.installers.keys()].map(adapterOf),
+    registered: () => [...host.agents.installers.keys()].filter(id => host.agents.installers.get(id).peek()?.installed !== false).map(adapterOf),
+    canRead,
   });
 
   return { codexLocator, codexExecutable, codexAccounts, projectAccounts };
 }
 
 // The visible usage pane supplies the refresh signal. Share one recent reading per provider and CLI home across panes.
-function withFocusedAccountReaders(base, { cwd, seats = () => null, now = Date.now, registered }) {
+function withFocusedAccountReaders(base, { cwd, seats = () => null, now = Date.now, registered, canRead = true }) {
   const focusedReaders = () => registered().filter(({ usage }) => usage?.focusedLimits);
   const cache = new Map();
   let focus;
+
+  function eligibleAgents(project) {
+    const saved = [project, ...(project.terminals ?? [])].flatMap(({ restore }) => restore?.threadId ? [restore.agent] : []);
+    const selected = Object.values(seats(project.id) ?? {}).map(({ model }) => agentOfModel(model));
+    return new Set([...(project.quotaAgents ?? []), ...saved, ...selected]);
+  }
 
   async function load({ manifest: { id }, usage }, env) {
     const key = usage.quotaHome({}, env), held = cache.get(id);
     if (held && held.key === key && !held.abort.signal.aborted) {
       if (held.pending) return held.pending;
-      if (held.value && now() < held.nextReadAt) return held.value;
+      if (now() < held.nextReadAt) return held.value;
     }
     held?.abort?.abort();
-    const entry = { key, abort: new AbortController() };
+    const entry = { key, value: held?.key === key ? held.value : null, abort: new AbortController() };
     cache.set(id, entry);
     entry.pending = Promise.allSettled([held?.pending]).then(() => entry.abort.signal.aborted ? null
-      : usage.accountReader({ env, cwd: cwd(), now, signal: entry.abort.signal }))
+      : usage.accountReader({ env, cwd: cwd(), now, signal: entry.abort.signal })).catch(() => null)
       .then(value => {
         if (entry.abort.signal.aborted) return null;
         entry.nextReadAt = now() + usage.focusedInterval;
@@ -58,6 +69,7 @@ function withFocusedAccountReaders(base, { cwd, seats = () => null, now = Date.n
 
   return {
     ...base,
+    eligible: (project, agent) => eligibleAgents(project).has(agent),
     snapshot(id) {
       const original = base.snapshot(id);
       return focus?.id === id && focus.accounts ? { ...original, ...focus.accounts } : original;
@@ -83,17 +95,24 @@ function withFocusedAccountReaders(base, { cwd, seats = () => null, now = Date.n
     },
     async read(project, options) {
       const env = options.env;
-      if (!project || project.kind === 'ssh' || (env.AGENTRIX_DATA_DIR && env.AGENTRIX_TEST_AGENTS !== '1')) return base.read(project, options);
+      if (!canRead || !project || project.kind === 'ssh' || (env.AGENTRIX_DATA_DIR && env.AGENTRIX_TEST_AGENTS !== '1')) return base.read(project, options);
       if (focus?.id !== project.id) focus = { id: project.id };
       const current = focus, revision = current.revision = (current.revision ?? 0) + 1;
-      const runningOrSaved = [project, ...(project.terminals ?? [])].flatMap(({ restore }) => restore?.threadId ? [restore.agent] : []);
-      const selected = Object.values(seats(project.id) ?? {}).map(({ model }) => agentOfModel(model));
-      const eligible = new Set([...(project.quotaAgents ?? []), ...runningOrSaved, ...selected]);
+      const eligible = eligibleAgents(project);
       const readers = focusedReaders().filter(({ manifest }) => eligible.has(manifest.id));
-      const [original, accounts] = await Promise.all([base.read(project, options), Promise.allSettled(readers.map(adapter => load(adapter, env)))]);
+      current.accounts = Object.fromEntries(readers.flatMap(({ manifest: { id }, usage }) => {
+        const held = cache.get(id);
+        return held?.value && held.key === usage.quotaHome({}, env) ? [[id, held.value]] : [];
+      }));
+      const reading = readers.map(adapter => load(adapter, env).then(value => {
+        if (focus !== current || current.revision !== revision) return;
+        const id = adapter.manifest.id;
+        if (value) current.accounts[id] = value;
+        else delete current.accounts[id];
+        options.onCached?.();
+      }));
+      const [original] = await Promise.all([base.read(project, options), Promise.allSettled(reading)]);
       if (focus !== current || current.revision !== revision || !original) return original;
-      current.accounts = Object.fromEntries(accounts.flatMap((result, index) => result.status === 'fulfilled' && result.value
-        ? [[readers[index].manifest.id, result.value]] : []));
       return { ...original, ...current.accounts };
     },
   };
@@ -101,7 +120,7 @@ function withFocusedAccountReaders(base, { cwd, seats = () => null, now = Date.n
 
 function createClaudeAccountService(host) {
   const { ClaudeAccountUsage, adapterOf, electronNet, process = globalThis.process } = host;
-  return new ClaudeAccountUsage({ changed: () => host.queueClaudeAccounts(), read: options => adapterOf('claude').usage.accountReader({ ...options,
+  return new ClaudeAccountUsage({ schedule: host.claudeSchedule, changed: () => host.queueClaudeAccounts(), read: options => adapterOf('claude').usage.accountReader({ ...options,
     routes: host.localClaudeMeters().map(s => ({ cwd: s.usageCwd, env: s.usageEnv || process.env })),
     fetch: (url, options) => electronNet.fetch(url, options),
   }) });

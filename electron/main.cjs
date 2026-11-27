@@ -119,14 +119,15 @@ const { claudeConfigDir, findClaudeSession } = require('./claude-sessions.cjs');
 const { AgentsManager, claudeState, codexState, onPath } = require('./agents.cjs');
 const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
+const { ClaudeAccountUsage, createClaudeReadSchedule } = require('./features/agents/claude-account-usage.cjs');
+const claudeSchedule = createClaudeReadSchedule();
 const { codexLocator, codexExecutable, codexAccounts, projectAccounts } = createCodexServices({
   createCodexLocator, scanDrives, fixedDrives, os, path, app, readNativeJson, writeNativeJson, CodexAccountUsage, adapterOf,
-  createResetRpc, createProjectAccounts, readClaudeAccountCache,
+  createResetRpc, createProjectAccounts, readClaudeAccountCache, claudeSchedule, fetch: (url, options) => electronNet.fetch(url, options),
   get agents() { return agents; },
   get routing() { return routing; },
 });
-const { ClaudeAccountUsage } = require('./features/agents/claude-account-usage.cjs');
-const claudeAccounts = createClaudeAccountService({ ClaudeAccountUsage, adapterOf, electronNet,
+const claudeAccounts = createClaudeAccountService({ ClaudeAccountUsage, adapterOf, electronNet, claudeSchedule,
   queueClaudeAccounts: () => queueClaudeAccounts(), localClaudeMeters: () => localClaudeMeters() });
 const root = path.join(__dirname, '..');
 const integrationDir = app.isPackaged ? path.join(process.resourcesPath, 'integration') : path.join(root, 'integration');

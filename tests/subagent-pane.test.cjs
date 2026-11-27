@@ -506,18 +506,19 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
   ])];
   const scope = CallsCard({ calls, terminalId, terminals: [{ id: terminalId, agentUsage: { calls } }] });
   const team = scope.props.children('p-team-open');
-  const rows = elements(team.type(team.props)).filter(node => node.props.row);
+  // The role's task list is the Orchestrator's TaskList; its task lines are the shared taskRow.
+  const [list] = elements(team.type(team.props)).filter(node => node.props.foldKey);
+  const rows = elements(list.props.rows).filter(node => node.type === 'li' && /^is-/.test(node.props.className));
   assert.equal(rows.length, 2);
-  const cards = rows.map(row => elements(row.type(row.props)).find(node => node.props.className === 'agent-team-row'));
-  const [open, unavailable] = cards;
-  assert.equal(open.type, 'button');
+  const [open, unavailable] = rows.map(row => elements(row.props.children).find(node => node.type === 'button'));
   assert.equal(open.props.type, 'button');
+  assert.equal(open.props.className, 'activity-call-open activity-task-open');
   assert.equal(open.props['aria-expanded'], undefined);
-  assert.equal(unavailable.type, 'div');
-  assert.equal(unavailable.props.title, '没有可打开的工作会话\nGPT-6.1-Sol · max · 快速');
-  assert.equal(unavailable.props.onClick, undefined);
+  assert.equal(unavailable, undefined, 'a task without a session is a plain line');
+  assert.match(rows[1].props.title, /^Task dispatch:unavailable\n运行中 · [^\n]+\n推断\nGPT-6\.1-Sol · max · 快速\n没有可打开的工作会话$/);
   const html = renderToStaticMarkup(rows[0]);
-  assert.match(html, /data-state="awaiting" role="img" aria-label="等待你确认"/);
+  assert.match(html, /^<li class="is-awaiting"[^>]*><button[^>]*><span class="activity-row-icon"><svg data-icon="DotsThreeCircle"><\/svg><\/span>/);
+  assert.match(html, /<p><span class="activity-call-role">等待你确认<\/span>Task dispatch:team-open<\/p>/, 'the state word leads the one-line subject');
   assert.doesNotMatch(html, /agent-team-details|>打开工作会话</);
   open.props.onClick();
   open.props.onClick();
@@ -673,7 +674,7 @@ test('the chip opens on a click and closes on Escape (focus back on it, the key 
 test("the chip's popover is the Agent tab's card on the menu colour, and the chip itself opens no view, writes nothing and expands nothing", () => {
   const css = readCss('src/features/agents/subagent-chip.css');
   assertRule(css, '.subagent-menu', {
-    '--flow-line': 'var(--divider)', '--flow-ink': 'var(--text-1)', '--flow-muted': 'var(--text-2)', '--flow-faint': 'var(--text-3)', background: 'var(--bg-menu)',
+    '--flow-ink': 'var(--text-1)', '--flow-muted': 'var(--text-2)', '--flow-faint': 'var(--text-3)', background: 'var(--bg-menu)',
   }, "the pane's ink levels and the menu fill");
   assert.equal(css.rule('.subagent-menu')['box-shadow'], undefined, 'no new shadow');
   assert.deepEqual(identifiers('src/features/agents/SubagentChip.tsx',

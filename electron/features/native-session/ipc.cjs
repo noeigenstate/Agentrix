@@ -3,7 +3,6 @@ const { CODEX_PERMISSIONS } = require('../../codex-permissions.cjs');
 const { routingOwned, routingPatch } = require('../agents/agent-command.cjs');
 const { adapterOf } = require('../cli-adapters/registry.cjs');
 const { canLead } = require('../cli-adapters/capabilities.mjs');
-const { validModel, EFFORT } = require('../routing/seat-rules.mjs');
 function registerIpc({ handle, router, settings, claude, remoteModels }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
   handle('native:start', (terminalId, options) => {
@@ -35,12 +34,6 @@ function registerIpc({ handle, router, settings, claude, remoteModels }) {
     if (answer.switch) assert(requestId === answer.switch.requestId);
     if (answer.handoff) assert(requestId === `handoff-${answer.handoff.changeId}`);
     return router.answer(terminalId, runtimeSessionId, requestId, answer);
-  });
-  handle('native:model-options', (terminalId, runtimeSessionId, patch = {}) => {
-    binding(terminalId, runtimeSessionId);
-    assert(exact(patch, ['model', 'effort']) && (!Object.hasOwn(patch, 'model') || validModel(patch.model))
-      && (!Object.hasOwn(patch, 'effort') || typeof patch.effort === 'string' && EFFORT.test(patch.effort)));
-    return router.modelOptions(terminalId, runtimeSessionId, patch);
   });
   handle('native:snapshot', terminalId => { assert(id(terminalId)); return router.snapshot(terminalId); });
   handle('native:commands', (...args) => { assert(args.length === 2); binding(...args); return router.commands(...args); });

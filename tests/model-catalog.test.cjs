@@ -9,6 +9,8 @@ const { rankByName } = require('../electron/features/routing/seat-rules.mjs');
 const seats = require('../electron/features/routing/model-seats.cjs');
 const { probeCodex, probeClaude } = require('../electron/features/routing/model-probe.cjs');
 const { createRpc } = require('../electron/features/codex-app-server/index.cjs');
+const { workerModelKey } = require('../electron/features/cli-adapters/workers.cjs');
+const agyOptions = require('./fixtures/agy-acp/model-options.json');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 
@@ -36,6 +38,30 @@ test('catalog keeps provider efforts, defaults, fast metadata and sanitized labe
   assert.equal(modelRow({ value: 'default', resolvedModel: 'claude-opus-5-5' }), null);
   assert.equal(modelRow({ value: 'opus', resolvedModel: 'claude-opus-5-5', supportsFastMode: true }).alias, 'opus');
   assert.equal(modelRow({ model: 'agy:gemini-4-neon' }).model, 'gemini-4-neon');
+});
+
+test('old agy cache hides orchestration modes immediately and preserves other providers', t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-old-catalog-'));
+  t.after(() => fs.promises.rm(dataDir, { recursive: true, force: true }));
+  const at = 1000, file = path.join(dataDir, 'seat-models.json');
+  const raw = JSON.stringify({ version: 1,
+    agy: { at, rows: agyOptions.map(({ value, name }) => ({
+      model: value === 'gemini-pro-orchestrator' ? 'agy:' + value : workerModelKey(value, 'agy'),
+      label: name, lastSeen: at,
+    })) },
+    claude: { at, rows: [{ model: 'claude-opus-5-5', efforts: ['max'], fast: true }] },
+    codex: { at, rows: [{ model: 'gpt-6.2-sol', efforts: ['high'], fast: false }] },
+  });
+  fs.writeFileSync(file, raw);
+  const catalog = new ModelCatalog({ dataDir, now: () => at });
+  assert.deepEqual(catalog.rows().filter(row => row.family === 'agy').map(row => row.model), [
+    'gemini-4-neon', 'gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash',
+    'agy:claude-opus-5-5', 'agy:claude-sonnet-5-5', 'agy:gpt-oss-120b-medium',
+  ]);
+  assert.deepEqual(catalog.rows().filter(row => row.family !== 'agy').map(({ model, efforts, fast }) => ({ model, efforts, fast })), [
+    { model: 'claude-opus-5-5', efforts: ['max'], fast: true }, { model: 'gpt-6.2-sol', efforts: ['high'], fast: false },
+  ]);
+  assert.equal(fs.readFileSync(file, 'utf8'), raw);
 });
 
 test('catalog refresh throttles, persists, retains missing rows for 30 days and deduplicates probes', async t => {

@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { createInterface } = require('node:readline');
 const { spawn } = require('node:child_process');
+const modelOptions = require('./model-options.json');
 
 const [trace, scenario, acp, flag, profile] = process.argv.slice(2);
 const sessionId = '670f1895-da18-4940-b596-4e80e0c3c387';
-const neon = 'gemini-4-neon', flash = 'gemini-3.8-flash', fixed = 'gpt-oss-120b-medium';
-const modelOptions = [{ value: neon, name: 'Gemini 4 Neon' }, { value: flash, name: 'Gemini 3.8 Flash' }, { value: fixed, name: 'GPT-OSS 120B (Medium)' }];
+const neon = 'gemini-4-neon', fixed = 'gpt-oss-120b-medium';
 let model = neon, effort = 'high', mode = scenario === 'unsafe-mode' ? 'accept-edits' : 'default';
 let turn, nextApproval = 0, stop = false;
 const approvals = new Map();
@@ -26,9 +26,9 @@ const output = value => ({ rawOutput: value, content: [{ type: 'content', conten
 log({ launch: { acp, flag, profile, autoUpdate: process.env.AGY_CLI_DISABLE_AUTO_UPDATE } });
 
 function configOptions() {
-  const levels = ['low', 'medium', 'high', ...(model === neon ? ['xhigh'] : [])];
+  const levels = ['low', 'medium', 'high', ...([neon, 'gemini-4-hydrogen'].includes(model) ? ['xhigh'] : [])];
   return [selection('model', model, modelOptions),
-    ...(model === fixed ? [] : [selection('thought_level', effort, levels.map(value => ({ value, name: value })))]),
+    ...(model === fixed || model.startsWith('gemini-pro-orchestrator') ? [] : [selection('thought_level', effort, levels.map(value => ({ value, name: value })))]),
     selection('mode', mode, ['default', 'accept-edits', 'plan'].map(value => ({ value })))];
 }
 

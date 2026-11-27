@@ -11,11 +11,13 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `src/features/agents/RoleEditor.tsx`
 - `src/features/agents/RoutingReview.tsx`
 - `src/features/agents/role-rules.d.ts`
+- `src/shared/routing-role-icons.ts` (each role's mark, also drawn on the Agent tab's role groups)
 
 ## Interface
 - `SeatsHost` (`src/features/agents/SeatsHost.tsx`) — handles scoped routing requests and opens the dialog. App mounts it through ActivityPane's re-export.
 - `RoutingKeyCard` (`src/features/agents/RoutingKeyCard.tsx`) — shows the current routing summary and opens the scoped dialog from ActivityPane.
 - `roleGroups` (`src/features/agents/routing-seats.ts`) — `callSeatRole`, `modelRow`, `roleGroups`, `routeVerdict` and `shortLabel` support the Agent tab's role groups and labels.
+- `roleIconOf` (`src/shared/routing-role-icons.ts`) — a role's mark by its id, the person for a custom role; the Agent tab draws it before each role group's name.
 
 ## May import
 

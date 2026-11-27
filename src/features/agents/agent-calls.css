@@ -1,31 +1,11 @@
 .agent-team-group h4 { margin: 0 0 4px; color: var(--flow-muted); font-size: 13px; font-weight: 600; }
 .agent-team-group ul { list-style: none; padding: 0; margin: 0; }
-.agent-team-call { min-width: 0; border-bottom: 1px solid var(--flow-line); }
-.activity-call-rows > .agent-team-call { display: block; height: auto; }
-.agent-team-row {
-  display: grid; gap: 4px; width: 100%; min-width: 0; padding: 8px; border: 0; border-radius: 8px;
-  text-align: start; font: inherit; background: transparent; color: var(--flow-ink);
-}
-button.agent-team-row { cursor: pointer; }
-button.agent-team-row:hover { background: var(--bg-hover); }
-button.agent-team-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.agent-team-subject { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
-.agent-team-title { overflow-wrap: anywhere; }
-.agent-team-status { display: grid; place-items: center; width: 16px; height: 16px; color: var(--flow-muted); }
-.agent-team-status[data-state="running"] { color: var(--running); }
-.agent-team-status .loading-spinner { color: inherit; }
-.agent-team-status[data-state="done"] { color: var(--success); }
-.agent-team-status[data-state="failed"] { color: var(--danger); }
-.agent-team-status[data-state="awaiting"] { color: var(--warning); }
-.agent-team-heading, .agent-team-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.agent-team-line, .agent-team-model, .agent-team-title, .agent-team-subject time { color: var(--flow-muted); font-size: 12px; }
-.agent-team-line, .agent-team-model, .agent-team-title { font-weight: 400; }
-.agent-team-subject time { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.agent-team-line b { font-weight: 600; }
-.agent-team-terminal { max-width: 40%; }
-.agent-team-heading > span, .agent-team-line > b, .agent-team-terminal, .agent-team-model {
-  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-}
-.agent-team-model { flex-shrink: 2; }
-.agent-team-line [data-routing-verdict] { margin-inline-start: auto; white-space: nowrap; }
-.agent-team-line [data-routing-verdict="mismatch"] { color: var(--danger); }
+/* A role group is the Orchestrator's block: its mark sits in the model lines' 16px icon column, its name on the model name's left edge. */
+.agent-team-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-team-heading > .activity-row-icon { flex: none; align-self: center; }
+.agent-team-heading > span:not(.activity-row-icon) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* A task that opens its worker session is one button over the whole line; its cells keep the line's three columns, so it looks and lines up like the Orchestrator's. */
+.activity-call-rows li > .activity-task-open { grid-column: 1 / -1; align-self: stretch; display: grid; grid-template-columns: subgrid; align-items: center; min-width: 0; padding: 0; }
+.activity-call-rows li.activity-task-notice { display: block; height: auto; }
+.activity-call-rows li.activity-task-notice:hover::before { background: none; }
+.activity-call-note [data-routing-verdict="mismatch"] { color: var(--danger); }

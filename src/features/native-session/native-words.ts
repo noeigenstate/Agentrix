@@ -9,7 +9,7 @@ import { t } from '../../shared/i18n';
 import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
 import type { ClaudeFound } from '../../shared/types';
 import type { ResultFacts } from '../reading/feed-parts';
-import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
+import type { ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
 import type { LimitNotice, NativeItem, Payload, TurnEnd } from './native-model.ts';
 
 const str = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
@@ -199,19 +199,6 @@ export function clockWords(at: number | null | undefined, now = Date.now()) {
   if (typeof at !== 'number') return t('未知');
   const date = new Date(at), time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   return date.toDateString() === new Date(now).toDateString() ? time : `${date.toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${time}`;
-}
-
-// ── Connections ──
-// What an agent is connected through, in the pane's words (the agent's name is the row's label); the source is the tooltip. Not known says so.
-const CONNECTION_WORDS: Partial<Record<NativeAgent, Record<string, string>>> = {
-  claude: { api: '已连接 API', subscription: '订阅（Claude Code 登录）', none: '未连接' },
-  codex: { api: 'API', subscription: 'ChatGPT 订阅', none: '未连接' },
-  agy: { api: 'API', subscription: 'Antigravity 登录', none: '未连接' },
-};
-// `active: false` is an account that is signed in while this agent has no main session. A sub-agent may still be running on it, so the row names the plan and says nothing about sessions; only 已连接 waits for a session to back it.
-export function connectionWord(agent: NativeAgent, connection: (AgentConnection) | null | undefined) {
-  const word = connection?.active === false && connection.kind === 'api' ? 'API' : connection ? CONNECTION_WORDS[agent]?.[connection.kind] : undefined;
-  return { text: word ? t(word) : t('未知'), source: connection?.source || null };
 }
 
 // The lines of a connection test, each with a tone (ok, warn, bad) the view marks with a symbol as well as colour, and a next step for

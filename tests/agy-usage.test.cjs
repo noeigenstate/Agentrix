@@ -2,10 +2,11 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { test } = require('node:test');
-const { readAgyAccount, agyAccountLimits } = require('../electron/features/agy-acp/usage.cjs');
-const { withFocusedAccountReaders } = require('../electron/features/agents/usage-host.cjs');
+const path = require('node:path');
+const { readAgyAccount, agyAccountLimits, QUOTA_INTERVAL } = require('../electron/features/agy-acp/usage.cjs');
+const { createCodexServices, withFocusedAccountReaders } = require('../electron/features/agents/usage-host.cjs');
 const { createNativeUsage } = require('../electron/features/native-session/agent-usage.cjs');
-const { adapters } = require('../electron/features/cli-adapters/registry.cjs');
+const { adapterOf, adapters } = require('../electron/features/cli-adapters/registry.cjs');
 
 const at = Date.UTC(2026, 10, 26);
 const reset = '2026-11-27T01:00:00Z';
@@ -106,6 +107,59 @@ test('focused usage reads cache agy separately and refresh it without retaining 
   assert.deepEqual(accounts.snapshot(second.id).agy.limits, []);
   await accounts.close();
   assert.deepEqual(accounts.focusedLimits(second.id), {});
+});
+
+test('agy cools down after null and thrown reads, then publishes when its own refresh completes', async () => {
+  const adapter = adapterOf('agy'), project = { id: 'p', quotaAgents: ['agy'] };
+  const legacy = { codex: null }, pending = Promise.withResolvers(), published = Promise.withResolvers();
+  const account = await readAgyAccount(peer(reply).options);
+  let now = at, calls = 0;
+  const usage = { ...adapter.usage, accountReader: async () => {
+    if (++calls === 1) return null;
+    if (calls === 2) throw new Error('fixture failure');
+    return account;
+  } };
+  const base = { snapshot: () => legacy, read: async () => legacy, close() {} };
+  const accounts = withFocusedAccountReaders(base, { cwd: () => 'fixture', now: () => now, registered: () => [{ ...adapter, usage }] });
+  const options = { env: { HOME: 'fixture' } };
+  for (const call of [1, 2]) {
+    assert.deepEqual(await accounts.read(project, options), legacy);
+    now += QUOTA_INTERVAL - 1;
+    assert.deepEqual(await accounts.read(project, options), legacy);
+    assert.equal(calls, call);
+    now++;
+  }
+  base.read = () => pending.promise;
+  const reading = accounts.read(project, { ...options, onCached: () => published.resolve(accounts.focusedLimits(project.id)) });
+  assert.equal((await published.promise).agy.limitsById.gemini.primary.usedPercent, 20);
+  pending.resolve(legacy);
+  assert.deepEqual(await reading, { ...legacy, agy: account });
+  assert.equal(calls, 3);
+  await accounts.close();
+});
+
+test('the app’s focused reader skips uninstalled agy and profiles isolated by AGENTRIX_DATA_DIR', async () => {
+  const adapter = adapterOf('agy'), project = { id: 'p', quotaAgents: ['agy'] };
+  const legacy = {}, base = { read: async () => legacy, snapshot: () => legacy, close() {} };
+  let installed = false, calls = 0;
+  const account = await readAgyAccount(peer(reply).options);
+  const options = { env: { HOME: 'fixture' } };
+  const host = {
+    path, app: { getPath: () => 'fixture' }, createCodexLocator: () => ({}), CodexAccountUsage: class {},
+    createProjectAccounts: () => base, agents: { installers: new Map([['agy', { peek: () => ({ installed }) }]]) },
+    adapterOf: () => ({ ...adapter, usage: { ...adapter.usage, accountReader: async () => { calls++; return account; } } }),
+  };
+  const { projectAccounts: enabled } = createCodexServices({ ...host, env: {} });
+  const isolatedEnv = { AGENTRIX_DATA_DIR: 'fixture-isolated' };
+  const { projectAccounts: isolated } = createCodexServices({ ...host, env: isolatedEnv });
+  assert.deepEqual(await enabled.read(project, options), legacy);
+  installed = true;
+  assert.deepEqual(await isolated.read(project, options), legacy, 'main disables the reader for an isolated profile');
+  assert.deepEqual(await enabled.read(project, { env: isolatedEnv }), legacy, 'isolated read environments also skip agy');
+  assert.equal(calls, 0);
+  assert.deepEqual(await enabled.read(project, options), { agy: account });
+  assert.equal(calls, 1);
+  await Promise.all([enabled.close(), isolated.close()]);
 });
 
 test('the agy native meter keeps its own tokens, context and model identity', () => {

@@ -40,7 +40,6 @@ export interface NativeBridge {
   resume?: SessionApi['resume'];
   history?: SessionApi['history'];
   remoteModels?: SessionApi['remoteModels'];
-  modelOptions?: SessionApi['modelOptions'];
   send(terminalId: string, runtimeSessionId: string, clientMessageId: string, text: string, images?: string[]): Promise<Result<unknown>>;
   interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
   // The commands the session runs without a terminal (contract addendum, native composer); an older main has none, and that reads as an empty list.

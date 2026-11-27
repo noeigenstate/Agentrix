@@ -15,6 +15,8 @@ const { registerWorkspaceIpc } = require('../electron/features/workspace/ipc.cjs
 const { temporary, recordEvents, fakeProcess } = require('./helpers/agy-runtime.cjs');
 
 const agy = 'agy', neon = 'gemini-4-neon', flash = 'gemini-3.8-flash';
+const modelIds = [neon, 'gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', flash,
+  'agy:claude-opus-5-5', 'agy:claude-sonnet-5-5', 'agy:gpt-oss-120b-medium'];
 const sessionId = '670f1895-da18-4940-b596-4e80e0c3c387';
 const done = events => events.wait(event => event.type === 'turn.completed');
 const approval = events => events.wait(event => event.type === 'request.opened');
@@ -79,7 +81,7 @@ test('agy owner history filters every page by cwd and replays messages without s
 });
 
 test('agy owner models change on the same session and restore from the workspace setting', { timeout: 10000 }, async t => {
-  const { spec, events, factory } = await fixture(t);
+  const { spec, events, factory, log } = await fixture(t);
   const file = path.join(spec.cwd, 'workspace.json'), store = new WorkspaceStore(file);
   const { project } = store.add(spec.cwd);
   const id = project.id, settings = { get: () => ({ claudePath: 'terminal-only' }) };
@@ -90,10 +92,11 @@ test('agy owner models change on the same session and restore from the workspace
     saveModelOptions: (_, nativeModelOptions) => store.setRestore(id, { nativeModelOptions }) });
   try {
     const { runtimeSessionId } = await router.start(id, { agent: agy });
-    const changed = await router.modelOptions(id, runtimeSessionId, { model: neon, effort: 'xhigh' });
+    const changed = await router.applyRouting(id, { model: neon, effort: 'xhigh' });
     assert.partialDeepStrictEqual(changed, { model: neon, effort: 'xhigh' });
+    assert.deepEqual(changed.models.map(option => option.value), modelIds);
     assert.ok(changed.efforts.some(option => option.value === 'xhigh'));
-    await assert.rejects(router.modelOptions(id, runtimeSessionId, { effort: 'unsupported' }), { code: 'agy_invalid_effort' });
+    await assert.rejects(router.applyRouting(id, { model: 'gemini-unknown', effort: 'low' }), { code: 'agy_invalid_model' });
     assert.equal(router.snapshot(id).runtimeSessionId, runtimeSessionId);
     assert.partialDeepStrictEqual(restore(), { agent: agy, nativeTransport: 'agy-acp', threadId: sessionId,
       nativeModelOptions: { model: neon, effort: 'xhigh' } });
@@ -101,13 +104,27 @@ test('agy owner models change on the same session and restore from the workspace
     assert.deepEqual(new WorkspaceStore(file).findTerminal(id).record.restore.nativeModelOptions, { model: neon, effort: 'xhigh' });
     await router.stop(id, runtimeSessionId);
     const next = await router.start(id, { agent: agy, resume: true });
-    assert.partialDeepStrictEqual(await router.modelOptions(id, next.runtimeSessionId, {}), { model: neon, effort: 'xhigh' });
+    const applied = (await log()).filter(row => row.method === 'session/set_config_option').map(row => [row.params.configId, row.params.value]);
+    assert.deepEqual(applied.slice(-2), [['model', neon], ['thought_level', 'xhigh']], 'the resumed session starts on the restored choice');
     await router.stop(id, next.runtimeSessionId);
     store.removeTerminal(id);
     const reopened = new WorkspaceStore(file).findTerminal(id);
     assert.equal(reopened.record.restore.threadId, undefined);
     assert.deepEqual(reopened.project.quotaAgents, [agy]);
   } finally { await router.close(); }
+});
+
+test('an existing agy lead choice remains effective without appearing in the model dropdown', { timeout: 10000 }, async t => {
+  const { spec, factory, events } = await fixture(t);
+  const savedModel = 'gemini-pro-orchestrator-neon';
+  const runtime = factory.create({ ...spec, model: savedModel, effort: 'default' }, events.emit);
+  try {
+    await runtime.start();
+    assert.deepEqual(runtime.modelOptions().models.map(option => option.value), modelIds);
+    assert.equal(runtime.modelOptions().model, savedModel);
+    await runtime.applyRouting({ model: 'gemini-pro-orchestrator-argon', effort: 'default' });
+    assert.equal(runtime.modelOptions().model, 'gemini-pro-orchestrator-argon');
+  } finally { await runtime.close(); }
 });
 
 test('agy full answers automatically and ask waits for the owner through allow, deny and interrupt', { timeout: 15000 }, async t => {
@@ -165,7 +182,8 @@ test('agy applies the changed lead model and effort before a queued turn starts'
     const changed = router.applyRouting(id, { model: neon, effort: 'xhigh' });
     const nextId = randomUUID(), second = events.wait(event => event.type === 'turn.started' && event.payload.clientMessageId === nextId);
     assert.equal((await router.send(id, runtimeSessionId, { clientMessageId: nextId, text: 'OK' })).status, 'queued');
-    assert.partialDeepStrictEqual(await router.modelOptions(id, runtimeSessionId, {}), { model: flash, effort: 'low' });
+    const configured = (await log()).filter(row => row.method === 'session/set_config_option').map(row => row.params.value);
+    assert.ok(!configured.includes(neon) && !configured.includes('xhigh'), 'nothing changes while the turn runs');
     await router.answer(id, runtimeSessionId, requestId, { decision: 'allow' });
     assert.partialDeepStrictEqual(await changed, { model: neon, effort: 'xhigh' });
     const { turnId } = await second;
