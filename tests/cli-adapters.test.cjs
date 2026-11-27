@@ -122,7 +122,7 @@ test('manifest model, display and install defaults preserve the existing choices
     shortLabel: 'Codex',
     install: { npm: '@openai/codex', page: 'https://learn.chatgpt.com/docs/codex/cli' },
     models: {
-      prefix: '', fallback: 'gpt-6.1-sol', preferred: /^gpt-(\d+)(?:\.(\d+))?-sol$/, fastDefault: true, fileEfforts: ['minimal'],
+      prefix: '', fallback: 'gpt-6.1-sol', preferred: /^gpt-(\d+)(?:\.(\d+))?-sol$/, fastDefault: true, fileEfforts: ['minimal', 'max', 'ultra'],
       catalogAge: { startup: 21600000, dialog: 3600000, manual: 0 }, aliases: [],
     },
   });

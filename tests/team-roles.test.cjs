@@ -30,7 +30,7 @@ test('the default library is disabled and inherits the intended seats', () => {
 test('Ultracode is a boolean choice for the Claude orchestrator only', () => {
   const orchestrator = { ...seat('opus'), ultracode: true };
   const raw = config({ orchestrator, researcher: { ...seat('sonnet'), ultracode: true }, qa: { ultracode: true } });
-  const { config: cleaned } = cleanConfig(raw, entry, catalog, true, true);
+  const { config: cleaned } = cleanConfig(raw, entry, catalog, { stored: true, file: true });
   assert.deepEqual(resolveTeam(entry, cleaned, defaults).effective, { ...defaults, orchestrator });
   assert.deepEqual(compactConfig(entry, cleaned), config({ orchestrator }));
   for (const rejected of [{ ...orchestrator, model: 'gpt-6.2-sol' }, { ...orchestrator, ultracode: 'true' }]) {
@@ -54,7 +54,7 @@ test('copies inherit roles and freshness and sit next to their source', () => {
 
 test('stored partial seats are ignored and saved overrides omit inherited values', () => {
   const raw = config({ future: seat('opus'), frontend: { enabled: true, effort: 'medium' }, docs: { enabled: true, ...seat('sonnet') } }, { memory: 'follow' });
-  const { config: clean, ignored } = cleanConfig(raw, entry, catalog, true);
+  const { config: clean, ignored } = cleanConfig(raw, entry, catalog, { stored: true });
   assert.deepEqual(ignored, ['roles.future', 'roles.frontend.seat']);
   const team = resolveTeam(entry, clean, defaults);
   assert.deepEqual(compactConfig(entry, clean, team), config({ frontend: { enabled: true }, docs: { enabled: true } }));

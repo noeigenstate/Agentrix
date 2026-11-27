@@ -1,7 +1,7 @@
 const modelSeats = require('./model-seats.cjs');
 const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules, orderRoles, compactOrder } = require('./role-rules.mjs');
 const { adapterOfModel, agentOfModel } = require('./seat-rules.mjs');
-const { agentIds } = require('../cli-adapters/registry.mjs');
+const { agentIds, canonicalModelId } = require('../cli-adapters/registry.mjs');
 const { outsideFences, region } = require('./guide-format.cjs');
 
 const seatKeys = ['model', 'effort', 'fast', 'ultracode'];
@@ -14,10 +14,12 @@ const unknownKey = (value, keys) => Object.keys(value).some(key => !keys.include
 const unsafeFileModel = value => typeof value === 'string' && (value.endsWith(':') || value.includes('://'));
 // A saved card order: distinct role ids. Ids that name no role are kept until the next save compacts them away.
 const badOrder = order => order !== undefined && (!Array.isArray(order) || order.length > 64 || !order.every(validRoleId) || new Set(order).size !== order.length);
-const fileEffort = value => {
-  if (value?.effort === undefined || typeof value.model !== 'string') return true;
-  const { efforts, fileEfforts } = adapterOfModel(value.model).manifest.models;
-  return efforts.includes(value.effort) || fileEfforts.includes(value.effort);
+const fileEffort = ({ model, effort }, catalog) => {
+  if (effort === undefined || typeof model !== 'string') return true;
+  const { efforts, fileEfforts } = adapterOfModel(model).manifest.models;
+  if (efforts.includes(effort) || fileEfforts.includes(effort)) return true;
+  const id = canonicalModelId(model);
+  return catalog?.find(row => row.model === id)?.efforts.includes(effort) ?? false;
 };
 
 function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
@@ -27,7 +29,7 @@ function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
   const builtIn = entry.seats.includes(id), library = entry.library?.includes(id);
   const custom = id.startsWith('x-');
   if (!builtIn && !library && !custom) {
-    if (!stored) fail('invalid-role', id);
+    if (!ignored) fail('invalid-role', id);
     ignored.push('roles.' + id);
     return null;
   }
@@ -49,28 +51,28 @@ function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
   if (Object.hasOwn(raw, 'ultracode') && typeof raw.ultracode !== 'boolean') fail('ultracode-not-allowed', id);
   if (seatKeys.some(key => Object.hasOwn(raw, key) && (key !== 'ultracode' || isLead))) {
     try {
-      if (file && !fileEffort(raw)) fail('invalid-effort', id);
+      if (file && !fileEffort(raw, catalog)) fail('invalid-effort', id);
       Object.assign(fields, modelSeats.cleanSeat(raw, id, catalog, stored, isLead));
     }
     catch (error) {
-      if (!stored) throw error;
+      if (!ignored) throw error;
       ignored.push('roles.' + id + '.seat');
     }
   }
   return fields;
 }
 
-function cleanConfig(raw, entry, catalog, stored = false, file = false) {
+function cleanConfig(raw, entry, catalog, { stored = false, file = false, rejectIgnored = false } = {}) {
   if (!object(raw) || !object(raw.roles)) fail('bad-format');
   if (unknownKey(raw, ['roles', 'conductor', 'order'])) fail('unknown-key');
   if (raw.conductor !== undefined && typeof raw.conductor !== 'boolean' || badOrder(raw.order)) fail('bad-format');
-  const ignored = [];
+  const ignored = stored && !rejectIgnored ? [] : null;
   const roles = Object.fromEntries(Object.entries(raw.roles).flatMap(([id, value]) => {
     if (file && unsafeFileModel(value?.model)) fail('bad-format', id);
     const fields = roleConfig(id, value, entry, catalog, stored, ignored, file);
     return fields ? [[id, fields]] : [];
   }));
-  return { config: { roles, ...(raw.order?.length && { order: [...raw.order] }), ...(raw.conductor && { conductor: true }) }, ignored: ignored.slice(0, 16) };
+  return { config: { roles, ...(raw.order?.length && { order: [...raw.order] }), ...(raw.conductor && { conductor: true }) }, ignored: ignored?.slice(0, 16) ?? [] };
 }
 
 function baseRows(entry) {

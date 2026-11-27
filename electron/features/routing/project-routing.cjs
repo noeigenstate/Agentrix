@@ -54,7 +54,7 @@ function hasDuplicateKeys(json) {
   return false;
 }
 
-function parseRouting(bytes, entry, catalog, defaults) {
+function parseRouting(bytes, entry, catalog, defaults, { rejectIgnored = false } = {}) {
   let raw, document;
   try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { return invalid('bad-utf8', hash('raw\0', bytes)); }
@@ -70,7 +70,8 @@ function parseRouting(bytes, entry, catalog, defaults) {
   // Digest the entire legacy document before discarding obsolete configuration.
   const { format, version, operations, ...body } = document;
   try {
-    const { config, ignored } = cleanConfig(body, entry, catalog, true, true), team = resolveTeam(entry, config, defaults);
+    const { config, ignored } = cleanConfig(body, entry, catalog, { stored: true, file: true, rejectIgnored });
+    const team = resolveTeam(entry, config, defaults);
     const error = validateTeam(team, entry);
     return error ? invalid(error.code, digest, raw) : { digest, raw, config, ignored };
   } catch (error) {
@@ -153,9 +154,9 @@ function removeStaleTemps(target) {
 function writeRouting(root, config, base, context, beforeRename) {
   const read = () => readAtRoot(root, ...context);
   const text = serializeRouting(config), bytes = Buffer.from(text);
-  if (bytes.length > MAX_BYTES) return refusal('file-unwritable');
-  const { digest, error, config: cleaned, ignored } = parseRouting(bytes, ...context);
-  if (error || ignored?.length) return refusal('file-unwritable');
+  if (bytes.length > MAX_BYTES) return refusal('too-large');
+  const { digest, error, config: cleaned } = parseRouting(bytes, ...context, { rejectIgnored: true });
+  if (error) return { ok: false, ...error };
   let target, temporary, rollback;
   try {
     root = fs.realpathSync.native(root);

@@ -152,8 +152,19 @@ async function checkRoutingKey(page, key) {
   await page.keyboard.press('Tab');
   await key.focus();
   assert.ok(await key.evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).outlineWidth === '2px'));
+  // Where focus is when the dialog is attached: a key pressed at once (this Escape on a slow machine) goes there.
+  const focusAtOpen = await page.evaluateHandle(() => {
+    const record = { inside: null };
+    const watch = new MutationObserver(() => {
+      const dialog = document.querySelector('.seats-dialog');
+      if (dialog) { watch.disconnect(); record.inside = dialog.contains(document.activeElement); }
+    });
+    watch.observe(document.body, { childList: true });
+    return record;
+  });
   await page.keyboard.press('Enter');
   await seats.waitFor();
+  assert.equal(await focusAtOpen.evaluate(record => record.inside), true, 'the routing dialog holds focus from the moment it is attached');
   await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached' });
 }
 

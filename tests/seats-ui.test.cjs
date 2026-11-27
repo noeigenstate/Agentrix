@@ -2,12 +2,15 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readCss, assertRule } = require('./helpers/css-rules.cjs');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { AntigravityLogo } = require('../src/features/agents/AgentBrandIcon.ts');
 const seatModels = require('../electron/features/routing/model-seats.cjs');
+const { RoutingStore } = require('../electron/features/routing/store.cjs');
+const { registerRoutingIpc } = require('../electron/features/routing/ipc.cjs');
 const { workerModelKey } = require('../electron/features/cli-adapters/workers.cjs');
 const agyOptions = require('./fixtures/agy-acp/model-options.json');
 const seatsLib = require('../src/features/agents/routing-seats.ts');
@@ -197,7 +200,8 @@ function dialogHarness(t, info, props = {}) {
       current = { ...current, [key]: config, routing: source() };
       return { ok: true };
     },
-    refreshRouting: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
+    refreshRouting: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; },
+    ...props.api };
   globalThis.window = { agentrix: api, innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
   const listeners = [];
   globalThis.document = { activeElement: null, elementFromPoint: () => null, addEventListener: (type, fn) => listeners.push([type, fn]), removeEventListener: (type, fn) => { const at = listeners.findIndex(entry => entry[0] === type && entry[1] === fn); if (at >= 0) listeners.splice(at, 1); } };
@@ -414,6 +418,15 @@ test('a file-watch refresh does not replace a draft’s compare-and-swap digest'
   assert.match(textOf(h.render()), /changed on disk/i);
 });
 
+test('an unsupported effort and an unwritable file have distinct localized save messages', () => {
+  const zh = compile('RoutingReview.tsx', {}, { language: 'zh' }).routingError;
+  const english = compile('RoutingReview.tsx', {}).routingError;
+  assert.equal(zh({ code: 'invalid-effort' }), '此模型不支持这个思考强度。');
+  assert.equal(zh({ code: 'file-unwritable' }), '无法写入路由文件。');
+  assert.equal(english({ code: 'invalid-effort' }), 'This model does not support this reasoning effort.');
+  assert.equal(english({ code: 'file-unwritable' }), 'Agentrix could not write the routing file.');
+});
+
 for (const dismissal of ['Escape', 'Keep editing']) test(`${dismissal} preserves the draft and restores focus inside the dialog`, t => {
   const h = dialogHarness(t, seatsInfo());
   const panel = tree => byAttr(tree, 'role', 'dialog');
@@ -573,6 +586,62 @@ test('the 更换 menu lists the row’s own efforts, switches fast only where th
   assert.match(textOf(byAttr(openMenu(agentTool, 'researcher'), 'data-fast-note')), /through the Agent tool/);
   const unknown = dialogHarness(t, seatsInfo({ catalog: catalog({ sonnet: { fastReason: 'unknown' } }) }));
   assert.match(textOf(byAttr(openMenu(unknown, 'designer'), 'data-fast-note')), /not known yet/);
+});
+
+test('every effort shown for Claude, Codex and Antigravity saves through the dialog and reads back from the project file', async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-seat-effort-')));
+  const project = { id: 'p1', path: path.join(root, 'project') };
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  fs.mkdirSync(project.path);
+  const cases = [
+    ['orchestrator', 'claude-fable-5-2', CLAUDE_EFFORTS],
+    ['backend', 'gpt-6.2-sol', [...GPT_EFFORTS, 'max', 'ultra']],
+    ['architect', 'gemini-4-carbon', ['low', 'medium', 'high']],
+    ['qa', 'gemini-4-neon', GPT_EFFORTS],
+  ];
+  const store = new RoutingStore({
+    guideFile: path.join(__dirname, '../resources/routing/model-routing.md'), dataDir: path.join(root, 'profile'),
+    getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true }, agy: { installed: true } }),
+    getModels: () => cases.map(([, model, efforts]) => ({ model, efforts, fast: model === 'gpt-6.2-sol' })),
+  });
+  t.after(() => store.close());
+  const roles = Object.fromEntries(cases.map(([slot, model]) => [slot, { model, effort: 'high' }]));
+  roles.backend.enabled = true;
+  const seed = { roles, conductor: true, order: ['backend', 'qa', 'architect'] };
+  assert.deepEqual(store.setRouting('project', project.id, seed, null), { ok: true });
+  const handlers = new Map();
+  registerRoutingIpc({ handle: (name, fn) => handlers.set(name, fn), routing: store });
+  const read = () => handlers.get('routing:seats')(project.id);
+  const readDisk = () => JSON.parse(fs.readFileSync(path.join(project.path, '.agentrix', 'routing.json'), 'utf8'));
+  const order = readDisk().order;
+  assert.deepEqual(order.slice(0, seed.order.length), seed.order);
+  for (const [slot, model, efforts] of cases) {
+    for (const effort of efforts) await t.test(`${model} · ${effort}`, async t => {
+      let saved;
+      const h = dialogHarness(t, read(), { api: {
+        routingSeats: async () => read(),
+        saveRouting: (...args) => { saved = handlers.get('routing:save')(...args); return saved; },
+      } });
+      const menu = openMenu(h, slot);
+      const buttons = findAll(byAttr(menu, 'data-effort', slot), node => node.props['data-pop-effort']);
+      assert.deepEqual(buttons.map(node => node.props['data-pop-effort']), efforts);
+      byAttr(menu, 'data-pop-effort', effort).props.onClick();
+      const save = byAttr(h.render(), 'data-save');
+      assert.equal(save.props.disabled, false);
+      save.props.onClick();
+      assert.ok(saved, 'the dialog sent the draft to main');
+      assert.deepEqual(await saved, { ok: true });
+      const file = readDisk(), info = read();
+      assert.equal(file.roles[slot].effort, effort);
+      assert.deepEqual(file.order, order);
+      assert.equal(info.routing.state, 'trusted');
+      assert.equal(info.effective[slot].effort, effort);
+      if (slot === 'orchestrator') assert.equal(info.leads.claude.effort, effort);
+    });
+  }
+  store.getModels = () => [];
+  assert.equal(read().routing.state, 'trusted');
+  assert.equal(read().config.roles.backend.effort, 'ultra', 'the saved Codex effort survives an empty model catalog');
 });
 
 test('其他模型… takes an id in the menu: a good id is assigned and saved, a refused one stays in the box with its reason', async t => {

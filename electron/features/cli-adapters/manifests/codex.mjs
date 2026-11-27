@@ -15,7 +15,7 @@ export default Object.freeze({
     match: /^/, efforts: ['low', 'medium', 'high', 'xhigh'], ultracodeLead: false,
     prefix: '', fallback: 'gpt-6.1-sol', preferred: /^gpt-(\d+)(?:\.(\d+))?-sol$/, fastDefault: true,
     defaultRoles: ['developer', 'devops'],
-    fileEfforts: ['minimal'], catalogAge: { startup: 6 * 3600000, dialog: 3600000, manual: 0 }, aliases: [],
+    fileEfforts: ['minimal', 'max', 'ultra'], catalogAge: { startup: 6 * 3600000, dialog: 3600000, manual: 0 }, aliases: [],
   },
   words: {
     utilities: [...harmless, 'login', 'logout', 'mcp', 'plugin', 'app-server', 'remote-control', 'app', 'completion',

@@ -195,6 +195,26 @@ test('atomic writes record trust before rename and refuse to replace a stale bas
   assert.deepEqual(fs.readdirSync(folder), ['routing.json']);
 });
 
+test('the writer keeps a catalog effort and reports rejected settings before writing', t => {
+  const { root, folder, read } = fixture(t);
+  const model = 'gemini-4-neon', qa = { model, effort: 'adaptive' };
+  const config = { roles: { qa } };
+  const models = modelSeats.catalog({ ...installed, agy: true }, [{ model, efforts: ['high', 'adaptive'] }]);
+  const withModel = [entry, models, context[2]];
+  assert.deepEqual(writeRouting(root, config, null, withModel, () => () => {}), { ok: true });
+  const saved = readRouting(root, ...withModel);
+  assert.deepEqual(saved.config, config);
+  assert.deepEqual(saved.ignored, []);
+  assert.deepEqual(read().ignored, ['roles.qa.seat'], 'without catalog evidence, an unrecognized effort is ignored on read');
+
+  const rejected = { roles: { qa: { ...qa, effort: 'unsupported' } } };
+  assert.equal(writeRouting(root, rejected, saved.digest, withModel, assert.fail).code, 'invalid-effort');
+  const oversized = { roles: { qa: { ...qa, effort: 'a'.repeat(MAX_BYTES) } } };
+  assert.equal(writeRouting(root, oversized, saved.digest, withModel, assert.fail).code, 'too-large');
+  assert.deepEqual(readRouting(root, ...withModel), saved);
+  assert.deepEqual(fs.readdirSync(folder), ['routing.json']);
+});
+
 test('a competing write during trust persistence restores trust and leaves the competing file', t => {
   const { root, folder, write, read } = fixture(t), config = { roles: {} };
   const original = JSON.stringify(document({ qa: { enabled: false } }));

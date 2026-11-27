@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowCounterClockwise, ArrowsClockwise, CaretDown, CheckCircle, DotsThree, LockSimple, MagnifyingGlass, Plus, Prohibit, SidebarSimple, User, Warning, X,
@@ -306,7 +306,9 @@ function usePanels({ dirty, discardShown, setDiscarding }: ReturnType<typeof use
   const dialog = useRef<HTMLDivElement>(null);
   const keepButton = useRef<HTMLButtonElement>(null);
   const beforeDiscard = useRef<HTMLElement | null | undefined>(undefined);
-  useEffect(() => { dialog.current?.focus(); }, []);
+  // Focus moves in the commit that adds the dialog: a passive effect waits for its first paint, and a key pressed
+  // meanwhile reaches the button behind it (Escape then leaves the dialog open).
+  useLayoutEffect(() => { dialog.current?.focus(); }, []);
   useEffect(() => {
     if (discardShown) { keepButton.current?.focus({ preventScroll: true }); return; }
     const previous = beforeDiscard.current, panel = dialog.current;
@@ -979,7 +981,7 @@ function DialogStrip({ state }: DialogPart) {
       {teamError && <div className="seats-banner is-bad" role="alert">{routingError(teamError)}</div>}
       {moved.length > 0 && <div className="seats-banner" role="status" data-moved><CheckCircle size={14} aria-hidden="true" />
         <span>{t('默认已更新为 {changes}', { changes: movedText })}</span></div>}
-      {refusal && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
+      {refusal && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{routingError(refusal)}</span></div>}
       {discardShown && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" />
         <span> {count ? t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count }) :
           t('关闭会丢掉未保存的修改。')}</span>

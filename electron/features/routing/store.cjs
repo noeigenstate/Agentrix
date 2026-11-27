@@ -231,7 +231,7 @@ class RoutingStore {
     const restore = raw => {
       if (raw === undefined || raw === null) return null;
       try {
-        const { config } = cleanConfig(raw, entry, catalog, true);
+        const { config } = cleanConfig(raw, entry, catalog, { stored: true });
         return validateTeam(resolveTeam(entry, config, defaults), entry) ? null : config;
       } catch { return null; }
     };
@@ -353,7 +353,7 @@ class RoutingStore {
       const config = compactConfig(entry, local ?? template);
       if (file.digest === null) return this.writeProjectRouting(context, project, config, null).ok;
       // Compare in the parsed form used by the writer's trust record.
-      const parsed = cleanConfig(config, entry, catalog, true, true);
+      const parsed = cleanConfig(config, entry, catalog, { stored: true, file: true });
       if (parsed.ignored.length || !isDeepStrictEqual(file.config, parsed.config)) return false;
       return this.acceptProjectRouting(context, id, file).ok;
     } catch (error) { this.report(error); return false; }

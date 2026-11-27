@@ -3781,5 +3781,6 @@
   "性能": "Performance",
   "在终端里启动 Codex 或 Claude Code 后，这里显示它的模型路由和用量。": "Start Codex or Claude Code in the terminal to see its model route and usage here.",
   "面板简化": "Simpler Agent panel",
-  "用量面板只显示通道和额度，打开项目就能看到额度，角色列表也和总指挥用同一种排法。": "When you open a project, the usage panel shows only the channel and quota, and the role list uses the same layout as the Orchestrator."
+  "用量面板只显示通道和额度，打开项目就能看到额度，角色列表也和总指挥用同一种排法。": "When you open a project, the usage panel shows only the channel and quota, and the role list uses the same layout as the Orchestrator.",
+  "????????????": "This seat cannot use the selected model."
 }

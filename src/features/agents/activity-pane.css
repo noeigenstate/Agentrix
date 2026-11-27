@@ -5,6 +5,8 @@
 .activity-pane { container: activity / size; gap: 8px; padding: 8px 12px; overflow: hidden; }
 .activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .activity-pane .activity-card { gap: 4px; }
+/* The pane's first line (the usage title, the not-started note or the routing title) keeps --activity-head-end clear at its end, for a control the host lays over that corner. */
+.activity-pane > :first-child > :first-child { padding-inline-end: var(--activity-head-end, 0px); }
 .activity-main { gap: 0; margin-bottom: 16px; }
 .activity-main:has([data-expanded]) { flex: 0 1 auto; min-height: 0; }
 /* The called models fill the left bar's Agent tab (and the narrow window's popover): the section takes what the bar gives and its list scrolls. */

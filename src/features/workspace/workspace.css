@@ -83,15 +83,18 @@
 .activity-pane, .project-panel.has-activity::before { position: absolute; right: 0; z-index: 1; box-sizing: border-box; width: 340px; border-left: 1px solid var(--divider); background: var(--bg-aside); }
 .activity-pane { top: var(--pane-top); bottom: 0; display: flex; flex-direction: column; min-height: 0; }
 .project-panel.has-activity::before { content: ''; top: 0; height: var(--pane-top); }
-/* In focus with the pane open, the header's right cluster is the pane strip's own. The header sits --panel-pad inside the panel, the pane at its edge, so offsets are measured from there.
-   The state tag's dot lines up with the pane titles' text (pane border 1 + padding 16, less the tag's 8px padding, plus .7px of the title glyph's side bearing); the 「···」 glyph's ink
-   (its 20px icon has 6px of box and 3.4px of ink margin to the 32px button) ends on the pane's right text edge (padding 16), the button overhanging into the gutter. The tag leaves the flow, so the
-   name side never moves; the name stops short of the strip. Where the pane is hidden by CSS (the rule below) the cluster stays at the header's right. */
+/* In focus with the pane open, the pane rises to the header's row: its first line (the 「运行方式与额度」 title) is centred on the 「···」 button (panel pad + 10px padding + half its 20px
+   line = the 40px header's middle), and the header's state tag is not shown there. The 「···」 glyph's ink (its 20px icon has 6px of box and 3.4px of ink margin to the 32px button) ends on the
+   pane's right text edge, the button overhanging into the gutter; the pane's first line stops 36px short of that edge so it never runs under the button. The header lets clicks through
+   to the pane's top except on its own controls. The name stops short of the strip. Where the pane is hidden by CSS (the rule below) the tag and cluster stay at the header's right. */
 @media (min-width: 1001px) {
-  .focus-mode .project-panel.has-activity .panel-header { padding-right: 0; }
-  .focus-mode .project-panel.has-activity .panel-header > .status-badge { position: absolute; top: 10px; left: calc(100% + var(--panel-pad) - 340px + 8.7px); }
+  .focus-mode .project-panel.has-activity .panel-header { padding-right: 0; pointer-events: none; }
+  .focus-mode .project-panel.has-activity .panel-header > * { pointer-events: auto; }
+  .focus-mode .project-panel.has-activity .panel-header > .status-badge { display: none; }
   .focus-mode .project-panel.has-activity .panel-menu-anchor { margin-right: calc(6.6px - var(--panel-pad)); }
   .focus-mode .project-panel.has-activity .panel-name { flex: 0 1 auto; max-width: calc(100% - 332px); margin-right: auto; }
+  .focus-mode .project-panel.has-activity .activity-pane { top: var(--panel-pad); padding-top: 10px; --activity-head-end: 36px; }
+  .focus-mode .project-panel.has-activity::before { height: var(--panel-pad); }
 }
 @media (max-width: 1000px) { .project-panel.has-activity .panel-terminal-area { margin-right: 0; } .activity-pane, .project-panel.has-activity::before { display: none; } }
 /* The header's sub-agent chip stands in for the pane, so it shows only where the rule above hides the pane. */

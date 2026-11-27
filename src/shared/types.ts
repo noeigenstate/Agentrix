@@ -304,7 +304,7 @@ export type SeatsInfo = {
 export type SeatsSaveError = {
   ok: false;
   code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'ultracode-not-allowed'
-    | RoleRuleCode | 'file-changed' | 'file-unwritable' | 'action-unavailable';
+    | NonNullable<RoutingSource['error']>['code'] | 'file-changed' | 'file-unwritable' | 'action-unavailable';
   seat?: string;
   role?: SeatId;
   message: string;
