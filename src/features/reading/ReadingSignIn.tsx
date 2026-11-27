@@ -2,13 +2,15 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { ArrowSquareOut, Copy, SignIn } from '@phosphor-icons/react';
 import type { SignInScreen } from '../cli-screens/index.ts';
 import { t } from '../../shared/i18n';
+import type { AgentProvider } from '../../shared/agent-events';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
 import './reading-cli.css';
 
 // The CLI signing in, as a popup over the reading view: what it says, its sign-in page to open in the browser (a click
 // of the reader's; the CLI could not open one itself), a one-time code to copy, a field for what the browser gave back,
 // and the keys it waits for. It stays until the CLI moves on; nothing is answered for the reader.
 export function ReadingSignIn({ agent, screen, terminalId, projectId, onError }: {
-  agent: 'claude' | 'codex'; screen: SignInScreen; terminalId: string; projectId: string; onError: (message: string) => void;
+  agent: AgentProvider; screen: SignInScreen; terminalId: string; projectId: string; onError: (message: string) => void;
 }) {
   const [value, setValue] = useState(''), [copied, setCopied] = useState<string | null>(null);
   const card = useRef<HTMLDivElement>(null), field = useRef<HTMLInputElement>(null);
@@ -22,7 +24,7 @@ export function ReadingSignIn({ agent, screen, terminalId, projectId, onError }:
   const open = (url: string) => void window.agentrix.openLink(projectId, url).then(result => { if (!result.ok) onError(result.error); });
   // What the browser gave back goes into the CLI's own field, then Enter; the field here is cleared for a retry.
   const submit = () => { const text = value.trim(); if (!text) return; write(text); setTimeout(() => write('\r'), 60); setValue(''); };
-  const name = agent === 'claude' ? 'Claude Code' : 'Codex';
+  const name = adapterOf(agent)!.manifest.label;
   return <div className="reading-cli-overlay reading-sign-in-overlay">
     <div ref={card} className="reading-cli-panel reading-sign-in" role="dialog" aria-modal="true" aria-label={t('登录 {name}', { name })} tabIndex={-1}
       onKeyDown={event => {

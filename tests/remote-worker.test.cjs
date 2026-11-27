@@ -267,14 +267,15 @@ test('the SSH lookup requires a supported version and preserves exact path bytes
 import os, runpy, sys
 from unittest.mock import Mock, patch
 worker = runpy.run_path(sys.argv[1])
-assert 'AGENTRIX_LOOKUP_VERSION=1' in worker['CODEX_LOOKUP']
+assert 'AGENTRIX_LOOKUP_VERSION=1' in worker['TOOL_LOOKUP']
 path = '/tools/测试=a=b'.encode('utf-8')
-output = b'login banner\nAGENTRIX_CODEX=\nAGENTRIX_NODE=/bin/node\nAGENTRIX_PATH=' + path + b'\n'
+output = b'login banner\nAGENTRIX_CODEX=\nAGENTRIX_AGY=' + path + b'/agy\nAGENTRIX_NODE=/bin/node\nAGENTRIX_PATH=' + path + b'\n'
 with patch.object(worker['subprocess'], 'run') as run:
     run.return_value = Mock(stdout=output + b'AGENTRIX_LOOKUP_VERSION=1\n', stderr=b'', returncode=0)
     tools = worker['login_tools']({})
     assert tools['AGENTRIX_CODEX'] == '' and tools['AGENTRIX_NODE'] == '/bin/node'
     assert os.fsencode(tools['AGENTRIX_PATH']) == path
+    assert os.fsencode(tools['AGENTRIX_AGY']) == path + b'/agy'
     for field in (b'', b'AGENTRIX_LOOKUP_VERSION=23\n', b'AGENTRIX_LOOKUP_VERSION=01\n'):
         run.return_value.stdout = output + field
         try:

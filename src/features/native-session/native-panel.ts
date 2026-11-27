@@ -2,8 +2,10 @@
 // the provider. A command supplies facts and a builder turns them into groups of five kinds; nothing here is a message of the conversation. A value main did
 // not know is 未知 in the window — never zero, never a guess. Pure: facts in, structure and plain text out.
 import { currentLanguage, t } from '../../shared/i18n';
+import type { AgentProvider } from '../../shared/agent-events';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
 
-export type PanelAgent = 'claude' | 'codex';
+export type PanelAgent = AgentProvider;
 export type PanelCommand = 'status' | 'usage' | 'context' | 'cost';
 export type Row = { label: string; value: string; note?: string };
 export type Quota = { name: string; percent: number | null; used: string; full: boolean; when: string };
@@ -28,9 +30,11 @@ export type Panel = {
 // What the window shows: asking, answered, or failed with the reason. `agent` and `command` are known before any answer, so the header is too.
 export type PanelState = { agent: PanelAgent; command: PanelCommand } & ({ state: 'loading' } | { state: 'ready'; panel: Panel } | { state: 'failed'; error: string });
 
-// Codex answers /status and /usage only; Claude answers all four.
-export const panelTitle = (agent: PanelAgent, command: PanelCommand) => agent === 'codex' ? command === 'usage' ? t('Codex 额度') : t('Codex 状态')
-  : command === 'usage' ? t('Claude 用量') : command === 'context' ? t('上下文用量') : command === 'cost' ? t('本会话花费') : t('Claude 状态');
+const titles: Partial<Record<PanelAgent, Partial<Record<PanelCommand, string>>>> = {
+  codex: { usage: 'Codex 额度', status: 'Codex 状态' },
+  claude: { usage: 'Claude 用量', context: '上下文用量', cost: '本会话花费', status: 'Claude 状态' },
+};
+export const panelTitle = (agent: PanelAgent, command: PanelCommand) => t(titles[agent]?.[command] ?? adapterOf(agent)!.manifest.label);
 export const unknown = () => t('未知');
 export const readFailed = (reason: string) => t('读取失败（{reason}）', { reason });
 

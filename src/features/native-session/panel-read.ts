@@ -3,7 +3,8 @@ import { claudePanel } from './panel-claude.ts';
 import { codexPanel } from './panel-codex.ts';
 import { localOf, type Panel, type PanelAgent } from './native-panel.ts';
 
+const readByAgent: Partial<Record<PanelAgent, typeof codexPanel>> = { codex: codexPanel, claude: claudePanel };
+
 export function readPanel(agent: PanelAgent, receipt: unknown, now = Date.now()): Panel | null {
-  const local = localOf(receipt);
-  return agent === 'codex' ? codexPanel(local, now) : claudePanel(local, now);
+  return readByAgent[agent]?.(localOf(receipt), now) ?? null;
 }

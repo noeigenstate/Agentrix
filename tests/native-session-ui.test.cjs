@@ -651,15 +651,21 @@ function nextOf({ settings, saved, next }) {
   if (saved) return { path: 'api', reason: settings.claudePath === 'api-only' ? 'set_api' : null };
   return { path: settings.claudePath === 'api-only' ? null : 'terminal', reason: 'no_key' };
 }
-function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null }, claude = { installed: true }, routing = null } = {}) {
+function launcher(runtime, calls, {
+  kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null },
+  claude = { installed: true }, routing = null, agyHere = false, nativeCalls = {}, onRefresh = () => {},
+} = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
     usage: async () => ({ ok: true, value: { agents: { claude: { next: nextOf(runtime) } } } }),
     start: async (...args) => { calls.push(['start', ...args]); return startError ? { ok: false, error: startError } : { ok: true, value: { runtimeSessionId: 'rs1' } }; },
+    ...nativeCalls,
   };
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { dispatchEvent: event => { calls.push(['event', event.type, event.detail]); return true; }, agentrix: {
-    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude } }), onAgents: () => () => {},
+    getAgents: async () => ({
+      ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude, agy: { installed: agyHere } },
+    }), onAgents: () => () => {},
     routingSeats: async () => routing, onRouting: () => () => {},
     startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
@@ -669,8 +675,9 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   } } });
   const bridgeModule = require('../src/features/native-session/native-bridge.ts');
   const harness = hookHarness('src/features/terminal/AgentLauncher.tsx', {
-    '@phosphor-icons/react': { CircleNotch() {}, Terminal() {} }, './AgentBrandIcon.ts': { ClaudeLogo() {}, CodexLogo() {} }, './time': { relativeTime: () => '' }, './i18n': { t: fill }, './agent-launcher.css': {},
-    './native-store.ts': { noteTerminalSwitch: (...args) => calls.push(['note', ...args]), refreshNativeSession: id => calls.push(['refresh', id]) }, './native-bridge.ts': bridgeModule,
+    '@phosphor-icons/react': { CircleNotch() {}, Terminal() {} }, './AgentBrandIcon.ts': { brandIconOf: () => () => null },
+    './time': { relativeTime: () => '' }, './i18n': { t: fill }, './agent-launcher.css': {},
+    './native-store.ts': { refreshNativeSession: id => { calls.push(['refresh', id]); onRefresh(); } }, './native-bridge.ts': bridgeModule,
   });
   const errors = [], props = { terminalId: 't1', projectId: 'p', kind, onAction: async promise => { const result = await promise; if (!result.ok) errors.push(result.error); return result.ok ? result.value : undefined; }, onOpenTerminal: id => calls.push(['open', id]) };
   const render = () => harness.render('AgentLauncher', props).result;
@@ -678,6 +685,51 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   const note = agent => elements(button(agent)).find(node => node.type === 'small').props.children;
   return { render, button, note, errors, text: () => renderToStaticMarkup(render()), done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
+
+test('an installed local agy starts natively and continues the selected Antigravity history entry', async () => {
+  const calls = [], history = Promise.withResolvers(), finished = [Promise.withResolvers(), Promise.withResolvers()];
+  let refreshed = 0;
+  const view = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, calls, {
+    agyHere: true, onRefresh: () => finished[refreshed++].resolve(),
+    nativeCalls: {
+      history: (id, agent) => { calls.push(['history', id, agent]); return history.promise; },
+      resume: async (id, options) => { calls.push(['resume', id, options]); return { ok: true, value: { runtimeSessionId: 'rs2' } }; },
+    },
+  });
+  try {
+    assert.equal(view.button('agy'), undefined);
+    await Promise.resolve();
+    view.button('agy').props.onClick();
+    await finished[0].promise;
+    assert.deepEqual(calls, [['start', 't1', { agent: 'agy' }], ['refresh', 't1']]);
+    const next = elements(view.render()).find(node => node.props.role === 'radio' && node.props.children === '继承开发历史');
+    assert.equal(next.props.disabled, false);
+    next.props.onClick();
+    assert.equal(view.button('agy').props.disabled, true);
+    assert.deepEqual(calls.at(-1), ['history', 't1', 'agy']);
+    history.resolve({ ok: true, value: [{ id: 'latest', title: 'Latest task', at: NOW }, { id: 'earlier', title: null, at: null }] });
+    await history.promise;
+    const picker = elements(view.render()).find(node => node.props.label === 'Antigravity 历史会话');
+    assert.deepEqual(picker.props.options.map(option => option.label), ['Latest task', '无标题会话']);
+    picker.props.onChange('earlier');
+    view.button('agy').props.onClick();
+    await finished[1].promise;
+    assert.deepEqual(calls.slice(-2), [['resume', 't1', { agent: 'agy', sessionId: 'earlier' }], ['refresh', 't1']]);
+  } finally { view.done(); }
+});
+
+test('agy starts natively from an SSH launcher regardless of its local installation', async () => {
+  for (const agyHere of [false, true]) {
+    const calls = [], view = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, calls, { kind: 'ssh', agyHere });
+    try {
+      view.render();
+      assert.equal(view.note('agy'), '开始新的对话 · 原生模式');
+      view.button('agy').props.onClick();
+      await settle();
+      assert.deepEqual(calls, [['start', 't1', { agent: 'agy' }], ['refresh', 't1']]);
+    } finally { view.done(); }
+  }
+});
 
 test('a rejected launcher history read leaves a usable new conversation option', async () => {
   const view = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, []);
@@ -687,6 +739,23 @@ test('a rejected launcher history read leaves a usable new conversation option',
     assert.equal(view.note('claude'), '开始新的对话');
     assert.equal(view.button('claude').props.disabled, false);
   } finally { view.done(); }
+});
+
+test('local history from either CLI selects Continue and leaves the launcher names in their usual order', async () => {
+  for (const agent of ['claude', 'codex']) {
+    const history = { [agent]: { id: 'previous', at: Date.now() } };
+    const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal' }, saved: true }, calls, { history });
+    try {
+      view.render(); await settle();
+      const nodes = elements(view.render());
+      const selected = nodes.find(node => node.props.role === 'radio' && node.props['aria-checked']);
+      assert.equal(selected.props.children, '继承开发历史');
+      const choices = nodes.filter(node => node.props.className?.startsWith('agent-launcher-agent is-'));
+      assert.deepEqual(choices.map(choice => elements(choice).find(node => node.type === 'b').props.children), ['Claude Code', 'Codex']);
+      view.button(agent).props.onClick(); await settle();
+      assert.deepEqual(calls, [['start', 't1', { agent, resume: true }], ['refresh', 't1']]);
+    } finally { view.done(); }
+  }
 });
 
 test('the launcher puts the orchestrator family first and labels both leads from C0', async () => {
@@ -774,13 +843,13 @@ test('an incomplete npm install of Claude Code is not installed again: the card 
   }
 });
 
-test('the launcher of an SSH project offers Claude Code, Codex and a plain terminal; Codex starts at once whether or not this computer has it: no 未安装, no install, no Node.js; a local project is unchanged', async () => {
+test('SSH offers Claude Code, Antigravity, Codex and a plain terminal, and Codex starts without a local install', async () => {
   const runtime = { settings: { claudePath: 'api-then-terminal' }, saved: true };
   const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
   const agents = view => elements(view.render()).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent')).map(node => node.props.className.split(' ')[1]);
   try {
     remote.render(); await settle();
-    assert.deepEqual(agents(remote), ['is-claude', 'is-codex'], 'Claude Code on another computer is offered too and starts in its remote terminal');
+    assert.deepEqual(agents(remote), ['is-claude', 'is-agy', 'is-codex']);
     assert.equal(remote.note('claude'), '开始新的对话 · 远端终端', 'no install offer and no API route for a computer that is not this one');
     assert.equal(remote.note('codex'), '开始新的对话 · 原生模式', 'no "not installed" for a computer that is not the one it runs on');
     remote.button('codex').props.onClick(); await settle();
@@ -1052,6 +1121,87 @@ test('a finished session says why and offers a new conversation; a Codex session
   assert.match(failed, /result-status is-failed/); assert.match(failed, /失败/, 'a turn that failed is not 已完成, whatever else the result says');
   const empty = await viewHtml(ev => [ev('session.state', { state: 'idle', reason: null })]);
   assert.doesNotMatch(empty, /会话已就绪|result-status|reading-step/, 'nothing yet: no line of its own');
+});
+
+test('Antigravity has its own reading identity, approval and usage, without a Claude or Codex command panel', () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts');
+  const { NativeSession } = load('features/native-session/NativeSessionView.tsx');
+  const render = build => {
+    const events = build(stream({ provider: 'agy', transport: 'agy-acp' }));
+    const { model } = applyEvents(emptyModel(), events);
+    return renderToStaticMarkup(React.createElement(NativeSession, {
+      terminalId: 't1', projectId: 'p1', entry: { model }, handoff: handoffStub(), onError() {}, onOpenLink() {},
+    }));
+  };
+  const html = render(ev => [
+    ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'hi' } }, { itemId: 'u1' }),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'hello' } }, { itemId: 'a1' }),
+    ev('usage.updated', { contextTokens: 400, contextWindow: 2000 }),
+    ev('turn.completed', { status: 'completed', tokens: { input: 21, cachedInput: 10, cacheWrite: 4, output: 8 } }),
+    ev('session.state', { state: 'idle' }),
+  ]);
+  assert.match(html, /data-agent="agy"/);
+  assert.match(html, /agent-brand-agy/);
+  assert.match(html, /reading-step-label">Antigravity/);
+  assert.match(html, /上下文 400 \/ 2k · 20%/);
+  assert.match(html, /输入 35 · 输出 8/);
+  const { composerAction } = load('features/native-session/native-composer.ts');
+  for (const command of ['/usage', '/status', '/cost', '/context', '/permissions', '/fast']) assert.equal(composerAction(command, 'agy'), null);
+  assert.equal(readPanel('agy', statusLocal()), null);
+  assert.equal(readPanel('agy', contextLocal), null);
+  const approval = render(ev => [
+    ev('session.state', { state: 'waiting' }),
+    ev('request.opened', { requestId: 'r1', kind: 'tool', title: 'agy 工具审批', preview: 'write_file' }),
+  ]);
+  assert.match(approval, /agy 工具审批/);
+  assert.match(approval, /允许本次/);
+  for (const [code, message] of [
+    ['agy_cli_required', /未找到 Google Antigravity CLI/],
+    ['agy_cli_outdated', /版本过低/],
+    ['agy_auth_required', /请先登录 Google Antigravity CLI/],
+  ]) assert.match(render(ev => [ev('session.state', { state: 'failed', reason: code })]), message);
+});
+
+test('Antigravity model choices write to their session between turns and replace the effort choices', async t => {
+  const Select = () => null, read = Promise.withResolvers(), changed = Promise.withResolvers(), effortChanged = Promise.withResolvers();
+  const calls = [], busy = [];
+  const model = 'gemini-3-flash', collision = 'agy:claude-opus-5-5';
+  const models = [{ value: model, label: 'Flash' }, { value: collision, label: 'Collision' }];
+  const { stubGlobals } = require('./helpers/renderer-fixtures.cjs');
+  stubGlobals(t, { window: { agentrix: { nativeSession: { modelOptions: (...args) => {
+    calls.push(args);
+    const patch = args[2];
+    return !patch ? read.promise : patch.model ? changed.promise : effortChanged.promise;
+  } } } } });
+  const ui = hookHarness('src/features/native-session/NativeModelControls.tsx', {
+    './Select': { Select }, './feed-parts': { AgentMark() {} }, './i18n': { t: fill }, './native-words.ts': words(),
+  });
+  t.after(() => ui.dispose());
+  const props = { terminalId: 't', sessionId: 'a1', kind: 'agy', agent: 'Antigravity', idle: true, routingRevision: null,
+    busy: false, onBusy: value => busy.push(value), onError: message => { if (message) assert.fail(message); } };
+  const picks = () => elements(ui.render('NativeModelControls', props).result).filter(node => node.type === Select).map(node => node.props);
+  assert.deepEqual(picks(), []);
+  read.resolve({ ok: true, value: { model, effort: 'high', models, efforts: [{ value: 'high', label: 'High' }] } });
+  await read.promise;
+  const [modelsMenu, effortMenu] = picks();
+  assert.equal(modelsMenu.value, model);
+  assert.deepEqual(modelsMenu.options.map(option => option.label), [model, 'claude-opus-5-5']);
+  assert.equal(effortMenu.value, 'high');
+  modelsMenu.onChange(collision);
+  assert.deepEqual(calls, [['t', 'a1'], ['t', 'a1', { model: collision }]]);
+  const efforts = [{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }];
+  changed.resolve({ ok: true, value: { model: collision, effort: 'low', models, efforts } });
+  await changed.promise;
+  assert.deepEqual(busy, [true, false]);
+  assert.deepEqual(picks().map(menu => menu.value), [collision, 'low']);
+  assert.deepEqual(picks()[1].options, efforts);
+  picks()[1].onChange('medium');
+  assert.deepEqual(calls.at(-1), ['t', 'a1', { effort: 'medium' }]);
+  effortChanged.resolve({ ok: true, value: { model: collision, effort: 'medium', models, efforts } });
+  await effortChanged.promise;
+  assert.equal(picks()[1].value, 'medium');
+  props.idle = false;
+  assert.ok(picks().every(menu => menu.disabled));
 });
 
 // The session component with real hooks, the heavy neighbours stood in. `show` replaces the model's events; `change` is the terminal's SwitchState.
@@ -1684,8 +1834,9 @@ test('the requests and the switch question stand at the end of the timeline on t
 test('only what the reading view does not have stays in native-session.css', () => {
   const css = readCss('src/features/native-session/native-session.css');
   const classes = new Set(css.blocks.flatMap(({ selector }) => selector.match(/\.native-[a-z-]+/g) ?? []));
-  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
-    'no header, step, receipt, diff or plan style of its own');
+  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-context-usage', '.native-ended', '.native-error', '.native-model-agent', '.native-model-controls',
+    '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
+    'session model controls have their own styles; the feed, steps, receipts, diffs and plans use the reading view');
 });
 
 test('a new request pulls the view to it even when the owner had scrolled up; an ordinary step does not', () => {
@@ -1934,7 +2085,7 @@ test('an account signed in while the agent has no main session names its plan an
   assert.doesNotMatch(html, /未开会话/, 'a sub-agent may be running on this account, so no session is not something the pane can say');
   assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.match(codex, /额度来自 Codex/);
   assert.match(claude, /API 花费/); assert.doesNotMatch(claude, /月预算/);
-  assert.doesNotMatch(html, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'no session: no context, no round, no empty row');
+  assert.doesNotMatch(claude + codex, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'these signed-in accounts have no session: no context, no round, no empty row');
   const signed = { ...base.agents.codex, connection: c('api', false) }, codexApi = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: { ...base.agents, codex: signed } }) }) }), 'Codex');
   assert.doesNotMatch(codexApi, /API 用量记录|API 花费|activity-metrics/);
 });

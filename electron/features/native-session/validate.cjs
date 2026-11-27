@@ -1,3 +1,5 @@
+const { adapterOf } = require('../cli-adapters/registry.cjs');
+
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => object(value) && Object.keys(value).every(key => keys.includes(key));
 const id = value => typeof value === 'string' && /^[\w:.-]{1,160}$/.test(value);
@@ -9,8 +11,9 @@ function validEvent(event) {
   if (!object(event) || event.schemaVersion !== 1 || !eventTypes.has(event.type) || !object(event.payload) ||
     !['eventId', 'connectionEpoch', 'projectId', 'terminalId', 'runtimeSessionId'].every(key => id(event[key])) ||
     !['providerSessionId', 'runId', 'turnId', 'itemId'].every(key => event[key] === null || id(event[key])) ||
-    !count(event.sequence) || !count(event.receivedAtMs) || !nullableCount(event.occurredAtMs) || typeof event.replay !== 'boolean' ||
-    !['claude', 'codex'].includes(event.provider) || event.transport !== (event.provider === 'claude' ? 'claude-sdk' : 'codex-app-server')) return false;
+    !count(event.sequence) || !count(event.receivedAtMs) || !nullableCount(event.occurredAtMs) || typeof event.replay !== 'boolean') return false;
+  const transport = adapterOf(event.provider)?.nativePolicy?.transport;
+  if (!transport || event.transport !== transport) return false;
   const value = event.payload;
   if (event.type === 'context.compacting') return exact(value, ['active']) && typeof value.active === 'boolean';
   if (event.type === 'context.compacted') return exact(value, ['trigger', 'preTokens', 'postTokens']) && ['auto', 'manual'].includes(value.trigger) && nullableCount(value.preTokens) && nullableCount(value.postTokens);

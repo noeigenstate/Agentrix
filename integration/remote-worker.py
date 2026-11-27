@@ -33,7 +33,7 @@ MAX_MESSAGE = 2 * 1024 * 1024
 # The open message carries the dispatch helper, its runtime modules and the rendered routing guide.
 # Leave room for JSON escaping and the envelope. tests/boundary-dispatch.test.cjs reads these names.
 DISPATCH_HELPER_BYTES = 256 * 1024
-DISPATCH_MODULE_COUNT = 64
+DISPATCH_MODULE_COUNT = 80
 EVENT_CONNECTION_LIMIT = 32
 DISPATCH_MODULE_BYTES = 768 * 1024
 ROUTING_GUIDE_BYTES = 512 * 1024
@@ -338,6 +338,7 @@ def live_seats():
 def launch_route(words, layout, args):
     first = args[0] if args else None
     if layout is None:
+        if words.get("bareNative"): return "passthrough" if args else "native"
         return "passthrough" if first in words["utilities"] else "native"
     options = args[:args.index("--")] if "--" in args else args
     if any(word.split("=", 1)[0] in layout["overrides"] for word in options):
@@ -430,7 +431,8 @@ try:
         phase=hook.get("hook_event_name")
         if phase=="PreToolUse":
             if not supported:
-                problem = "uses Codex." if not claude else "Claude Agent cannot apply this seat's model and effort."
+                provider = "Antigravity (agy)" if model.startswith(("agy:", "gemini-")) else "Codex"
+                problem = "Claude Agent cannot apply this seat's model and effort." if claude else "uses %s." % provider
                 note = "[" + seat + "] " + problem
                 reason = (note + ' Use start_role with seat="' + seat + '". '
                           'If start_role is not loaded, use ToolSearch to load mcp__agentrix__start_role first. '
@@ -479,9 +481,11 @@ try:
         event["codexAvailable"]=len(sys.argv)>2 and sys.argv[2]=="1"
         event["claudeAvailable"]=len(sys.argv)>3 and sys.argv[3]=="1"
     elif mode in ("agent-started","agent-exited"):
-        event["agent"]="claude" if len(sys.argv)>3 and sys.argv[3]=="claude" else "codex"
+        agent=sys.argv[3] if len(sys.argv)>3 else "codex"
+        if agent not in ("claude","codex","agy"): sys.exit(0)
+        event["agent"]=agent
         if mode=="agent-exited": event["exitCode"]=int(sys.argv[2])
-        elif event["agent"] == "codex":
+        elif agent in ("codex","agy"):
             event["args"] = json.loads(sys.argv[4]) if len(sys.argv)>4 else []
             if not isinstance(event["args"], list) or len(event["args"])>64 or any(not isinstance(arg, str) or "\0" in arg for arg in event["args"]) or len(json.dumps(event["args"]))>32768: sys.exit(0)
         elif len(sys.argv)>2 and sys.argv[2]: event["command"]=sys.argv[2][:24]
@@ -513,6 +517,7 @@ __pg_login_path=${AGENTRIX_LOGIN_PATH-}; unset AGENTRIX_LOGIN_PATH
 __pg_reading_note() { if [ -r "$__pg_note_file" ]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi; }
 unalias codex 2>/dev/null || true
 unalias claude 2>/dev/null || true
+unalias agy 2>/dev/null || true
 __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
 __pg_launch_error() {
     printf 'Agentrix：%s（退出码 %s）。%s。\n' "$2" "$1" "$3" >&2
@@ -587,7 +592,7 @@ __pg_load_mode() {
 }
 # Both terminal entrypoints ask the same transported CLI definition.
 function agentrix_agent {
-    local agent=$1; shift
+    local agent=$1 label=$2; shift 2
     local executable arguments route= reply code launch_path=$PATH
     reply=$(__pg_launch_plan "$agent" classify "$@" 2>/dev/null) || {
         code=$?
@@ -603,7 +608,7 @@ function agentrix_agent {
         native)
             arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
             __pg_emit agent-started '' "$agent" "$arguments"
-            printf '%s\n' '已请求在原生模式打开 Codex。'
+            printf '已请求在原生模式打开 %s。\n' "$label"
             return 0;;
         refused)
             printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2
@@ -620,14 +625,17 @@ function agentrix_agent {
         if [[ -n $__pg_login_path ]] && executable=$(PATH=$__pg_login_path type -P "$agent"); then launch_path=$__pg_login_path; fi
     fi
     if [[ $route == passthrough ]]; then
-        if [ -z "$executable" ]; then printf 'Codex CLI was not found on this SSH host.\n'; return 127; fi
+        if [ -z "$executable" ]; then printf '%s CLI was not found on this SSH host.\n' "$label"; return 127; fi
         PATH=$launch_path "$executable" "$@"
         return
     fi
     __pg_hook_agent "$agent" "$route" "$executable" "$@"
 }
-function codex { agentrix_agent codex "$@"; }
-function claude { agentrix_agent claude "$@"; }
+function codex { agentrix_agent codex Codex "$@"; }
+function claude { agentrix_agent claude 'Claude Code' "$@"; }
+function agy {
+    if (( $# )); then command agy "$@"; else agentrix_agent agy agy; fi
+}
 __pg_hook_agent() {
     local agent=$1 route=$2 executable=$3; shift 3
     local result settings
@@ -746,7 +754,7 @@ fi
 # TUIs such as Codex. These bindings are private to this generated shell rc.
 bind -m emacs-standard '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
 bind -m vi-insertion '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
-printf '\033[36m  AGENTRIX / SSH\033[0m\n  Type codex or claude to start, codex resume --last or claude --resume to continue.\n\n'
+printf '\033[36m  AGENTRIX / SSH\033[0m\n  Type codex, claude or agy to start, codex resume --last or claude --resume to continue.\n\n'
 '''
 
 class NotRegularFile(ValueError): pass
@@ -1419,7 +1427,9 @@ class CodexActivityReader:
             return dict(self.snapshot) if self.offset >= size else None
 
 # Marked lines, because a login shell's startup files may print anything before them.
-CODEX_LOOKUP = r'''printf '\nAGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=%s\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$(type -P node)" "$PATH"'''
+TOOL_LOOKUP = r'''printf '\nAGENTRIX_LOOKUP_VERSION=1\nAGENTRIX_CODEX=%s\nAGENTRIX_AGY=%s\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$(type -P agy)" "$(type -P node)" "$PATH"'''
+
+NATIVE_PROCESS = {"codex": ("Codex", False), "agy": ("agy", True)}
 
 def login_tools(env):
     """Resolve the remote tools and their PATH from the same login shell."""
@@ -1427,10 +1437,10 @@ def login_tools(env):
     # "#!/usr/bin/env node" script whose node is on that PATH only, so the app-server must start with it too.
     # Bytes, not text: without LANG, Python 3.6 decodes as ASCII and one Chinese character a startup file prints would
     # fail. os.fsdecode hands the names to Popen, which encodes them back to the same bytes under any locale.
-    result = subprocess.run(["/bin/bash", "-lic", CODEX_LOOKUP], env=dict(env),
+    result = subprocess.run(["/bin/bash", "-lic", TOOL_LOOKUP], env=dict(env),
         stdin=subprocess.DEVNULL, start_new_session=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-    keys = (b"AGENTRIX_LOOKUP_VERSION", b"AGENTRIX_CODEX", b"AGENTRIX_NODE", b"AGENTRIX_PATH")
+    keys = (b"AGENTRIX_LOOKUP_VERSION", b"AGENTRIX_CODEX", b"AGENTRIX_AGY", b"AGENTRIX_NODE", b"AGENTRIX_PATH")
     found = {}
     for line in result.stdout.splitlines():
         key, equals, value = line.partition(b"=")
@@ -1456,6 +1466,49 @@ def resolve_codex(env, tools=None):
     error.code = "codex_cli_required"
     raise error
 
+
+def agy_error(code, message):
+    error = ValueError(message)
+    error.code = code
+    return error
+
+def resolve_agy(env, minimum, tools=None):
+    tools = login_tools(env) if tools is None else tools
+    login_path = tools.get("AGENTRIX_PATH") or env.get("PATH", "")
+    preferred = login_executable(tools, "AGENTRIX_AGY")
+    candidates = [preferred] if preferred else []
+    candidates.extend(os.path.abspath(os.path.join(folder, "agy")) for folder in login_path.split(os.pathsep) if folder)
+    candidates.append(os.path.join(os.path.expanduser("~"), ".local", "bin", "agy"))
+    for file in candidates:
+        directories = (os.path.dirname(file), os.path.dirname(os.path.realpath(file)))
+        if any(os.path.exists(os.path.join(folder, ".agentrix-shims")) for folder in directories): continue
+        if os.path.isfile(file) and os.access(file, os.X_OK): break
+    else:
+        raise agy_error("agy_cli_required", "Antigravity CLI (agy) was not found on the remote login PATH.")
+    launch_env = dict(env, PATH=login_path, AGY_CLI_DISABLE_AUTO_UPDATE="true")
+    version = subprocess.Popen([file, "--version"], env=launch_env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        stdout, _ = version.communicate(timeout=8)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(version.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        version.communicate()
+        raise agy_error("agy_cli_outdated", "Could not determine the remote Antigravity CLI version.") from None
+    found = re.search(br"\b[0-9]+\.[0-9]+\.[0-9]+\b", stdout)
+    if version.returncode or not found or tuple(map(int, found.group().split(b"."))) < tuple(map(int, minimum.split("."))):
+        raise agy_error("agy_cli_outdated", "Remote Antigravity CLI %s or later is required." % minimum)
+    return file, launch_env
+
+def check_agy_role_server(cwd):
+    try:
+        with open(os.path.join(cwd, ".agents", "mcp_config.json"), encoding="utf-8-sig") as source:
+            config = json.load(source)
+        names = config.get("mcpServers") if isinstance(config, dict) else None
+    except (OSError, ValueError):
+        return
+    if isinstance(names, dict) and any(name.lower() == "agentrix_role" for name in names):
+        raise agy_error("agy_role_server_conflict", "The remote project MCP server agentrix_role conflicts with Agentrix role tools.")
 
 def valid_dispatch_modules(modules):
     """Relative .cjs names under the runtime folder with text bodies, within the open message's share for them."""
@@ -1610,6 +1663,7 @@ class Worker:
         self.claude_reader = None
         self.activity_lock = threading.Lock()
         self.codex_processes = {}
+        self.native_processes = {"codex": self.codex_processes, "agy": {}}
         # Its channel opens in a thread of its own (main): a shutdown that arrives meanwhile waits for the shell.
         self.lock = threading.RLock()
 
@@ -1624,56 +1678,82 @@ class Worker:
             return {"snapshot": snapshot, **self.activity_reader.take()}
 
     def codex_open(self, process_id):
+        return self.native_open("codex", process_id)
+
+    def agy_open(self, process_id, purpose, minimum):
+        if purpose not in ("session", "history", "catalog") or not isinstance(minimum, str) or not re.fullmatch(r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}", minimum):
+            raise ValueError("Invalid remote Antigravity launch options.")
+        executable, env = resolve_agy(self.agent_env, minimum, self.dispatch_login)
+        if purpose == "session" and (self.claude_lead or {}).get("conductor") and self.role_server("agy"):
+            check_agy_role_server(self.coding_root)
+        return self.native_open("agy", process_id, ([executable, "acp"], env), catalog=purpose == "catalog")
+
+    def native_open(self, agent, process_id, launch=None, catalog=False):
         if not isinstance(process_id, str) or not re.fullmatch(r"[\w-]{1,160}", process_id): raise ValueError("无效的远程进程标识。")
+        processes = self.native_processes[agent]
+        label, reap_descendants = NATIVE_PROCESS[agent]
         with self.lock:
-            if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
-            if self.codex_processes: raise ValueError("远程 Codex 进程数量已达上限。")
-        executable, login = resolve_codex(self.agent_env, tools=self.dispatch_login) if self.dispatch_login is not None else resolve_codex(self.agent_env)
+            if self.stopping or process_id in processes: raise ValueError("远程进程已关闭或已经启动。")
+            if processes: raise ValueError("远程 %s 进程数量已达上限。" % label)
+        if launch is None:
+            executable, login = resolve_codex(self.agent_env, tools=self.dispatch_login) if self.dispatch_login is not None else resolve_codex(self.agent_env)
+            launch = [executable, "app-server", "--listen", "stdio://"], dict(self.agent_env, **login)
+        argv, environment = launch
         with self.lock:
-            if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
-            child = subprocess.Popen([executable, "app-server", "--listen", "stdio://"], cwd=self.coding_root,
-                env=dict(self.agent_env, **login), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=os.name == "posix")
-            self.codex_processes[process_id] = child
+            if self.stopping or process_id in processes: raise ValueError("远程进程已关闭或已经启动。")
+            if processes and reap_descendants: raise ValueError("远程 %s 进程数量已达上限。" % label)
+            profile = tempfile.mkdtemp(prefix="agy-catalog-", dir=self.temp) if catalog else None
+            try:
+                child = subprocess.Popen(argv + (["--gemini-dir", profile] if profile else []), cwd=self.coding_root,
+                    env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    start_new_session=os.name == "posix")
+            except Exception:
+                if profile: shutil.rmtree(profile, ignore_errors=True)
+                raise
+            processes[process_id] = child
         def pump(stream, name):
             try:
                 while True:
                     data = os.read(stream.fileno(), 32768)
                     if not data: break
-                    self.emit({"type": "codex-data", "processId": process_id, "stream": name, "data": base64.b64encode(data).decode("ascii")})
+                    self.emit({"type": agent + "-data", "processId": process_id, "stream": name, "data": base64.b64encode(data).decode("ascii")})
             except (OSError, ValueError): pass
         threads = [threading.Thread(target=pump, args=(stream, name), daemon=True) for stream, name in ((child.stdout, "stdout"), (child.stderr, "stderr"))]
         for thread in threads: thread.start()
         def wait():
             code = child.wait()
+            if reap_descendants and os.name == "posix":
+                try: os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+            if profile: shutil.rmtree(profile, ignore_errors=True)
             for thread in threads: thread.join(timeout=2)
             for stream in (child.stdin, child.stdout, child.stderr):
                 # Closing stdin flushes input the dead child never read (EPIPE): that must not cost the slot or the exit report.
                 try: stream.close()
                 except (OSError, ValueError): pass
-            with self.lock: self.codex_processes.pop(process_id, None)
-            self.emit({"type": "codex-exit", "processId": process_id, "code": code})
+            with self.lock: processes.pop(process_id, None)
+            self.emit({"type": agent + "-exit", "processId": process_id, "code": code})
         threading.Thread(target=wait, daemon=True).start()
         return {"started": True}
 
-    def codex_input(self, process_id, encoded):
+    def codex_input(self, process_id, encoded, agent="codex"):
         data = base64.b64decode(encoded, validate=True)
         if len(data) > 32768: raise ValueError("远程输入块过大。")
-        with self.lock: child = self.codex_processes.get(process_id)
-        if not child or child.poll() is not None: raise ValueError("远程 Codex 已结束。")
+        with self.lock: child = self.native_processes[agent].get(process_id)
+        if not child or child.poll() is not None: raise ValueError("远程 %s 已结束。" % NATIVE_PROCESS[agent][0])
         # A stopped reader can block this pipe. Never hold the worker lock:
         # codex_close must still be able to kill it and unblock this write.
         child.stdin.write(data); child.stdin.flush()
         return {}
 
-    def codex_eof(self, process_id):
-        with self.lock: child = self.codex_processes.get(process_id)
+    def codex_eof(self, process_id, agent="codex"):
+        with self.lock: child = self.native_processes[agent].get(process_id)
         if child: child.stdin.close()
         return {}
 
-    def codex_close(self, process_id):
-        with self.lock: child = self.codex_processes.get(process_id)
-        if child and child.poll() is None:
+    def codex_close(self, process_id, agent="codex"):
+        with self.lock: child = self.native_processes[agent].get(process_id)
+        if child and (NATIVE_PROCESS[agent][1] or child.poll() is None):
             if os.name == "posix":
                 try: os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError: pass
@@ -2246,6 +2326,31 @@ class Worker:
         if self.dispatch_server:
             return dict(self.dispatch_server, args=self.dispatch_server["args"] + [agent])
 
+    def agy_usage(self):
+        server = self.dispatch_server
+        if not server or self.stopping: return None
+        module = os.path.join(os.path.dirname(server["args"][0]), "electron", "features", "agy-acp", "usage-reader.cjs")
+        if not os.path.isfile(module): return None
+        # Keep the whole tool reply on the remote host. This script emits only validated numeric windows.
+        script = """const { readUsageWindows } = require(process.argv[1]); const abort = new AbortController();
+            process.once('SIGTERM', () => abort.abort());
+            readUsageWindows({ signal: abort.signal, timeoutMs: 4000 })
+              .then(windows => process.stdout.write(JSON.stringify(windows)), () => process.exitCode = 1);"""
+        child = subprocess.Popen([server["command"], "-e", script, module], env=dict(self.agent_env, PATH=server["env"]["PATH"]),
+            cwd=self.coding_root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            stdout, _ = child.communicate(timeout=12)
+            return json.loads(stdout.decode("utf-8")) if not child.returncode and not self.stopping and len(stdout) <= 16384 else None
+        except subprocess.TimeoutExpired:
+            child.terminate()
+            try: child.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.communicate()
+            return None
+        except (ValueError, UnicodeError):
+            return None
+
     def update_launch_note(self, sequence, note, guide):
         with self.lock, self.sequence_lock:
             if type(sequence) is not int or sequence != self.launch_note_sequence: raise ValueError("Agent launch changed.")
@@ -2314,7 +2419,8 @@ class Worker:
         env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "dispatch.json.lead")
         env["AGENTRIX_SEATS"] = encoded if native else "null"
         if self.dispatch_server:
-            env["AGENTRIX_BOOTSTRAP"] = self.dispatch_server["env"]["AGENTRIX_BOOTSTRAP"]
+            server_env = self.dispatch_server["env"]
+            env.update((key, server_env[key]) for key in ("AGENTRIX_BOOTSTRAP", "AGENTRIX_REMOTE_ROLE_TOOLS") if key in server_env)
             if not native and wire:
                 role = wire["claude"]["roleTools"]
                 server = dict(self.role_server("claude"))
@@ -2550,7 +2656,8 @@ class Worker:
         with FAST_SETTINGS_LOCK:
             for token, run in list(FAST_SETTINGS_PENDING.items()):
                 if run[0] is self: del FAST_SETTINGS_PENDING[token]
-        for process_id in list(self.codex_processes): self.codex_close(process_id)
+        for agent, processes in self.native_processes.items():
+            for process_id in list(processes): self.codex_close(process_id, agent)
         for identity in list(self.uploads): self.cancel_upload(identity)
         if self.master is not None:
             try: os.close(self.master)
@@ -2586,8 +2693,12 @@ class Channel:
                     worker.agent_environment(config.get("readingNote", ""), native=True)
             else: worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
             info.update(cwd=worker.coding_root, context=getattr(worker, "agent_context", ""))
+            requested = config.get("nativeAgent")
+            if config.get("native") is True and isinstance(requested, str) and requested in NATIVE_PROCESS:
+                info["nativeAgent"] = requested
             if (worker.claude_lead or {}).get("conductor"):
-                server = worker.role_server("codex" if config.get("native") is True else "claude")
+                agent = info.get("nativeAgent", "codex") if config.get("native") is True else "claude"
+                server = worker.role_server(agent)
                 if server: info["roleServer"] = server
             worker.emit({"type": "ready", "info": info})
         except Exception as error:
@@ -2627,6 +2738,11 @@ class Channel:
             elif op == "codex-input": value = worker.codex_input(message.get("processId"), message.get("data"))
             elif op == "codex-eof": value = worker.codex_eof(message.get("processId"))
             elif op == "codex-close": value = worker.codex_close(message.get("processId"))
+            elif op == "agy-open": value = worker.agy_open(message.get("processId"), message.get("purpose"), message.get("minimumVersion"))
+            elif op == "agy-input": value = worker.codex_input(message.get("processId"), message.get("data"), "agy")
+            elif op == "agy-eof": value = worker.codex_eof(message.get("processId"), "agy")
+            elif op == "agy-close": value = worker.codex_close(message.get("processId"), "agy")
+            elif op == "agy-usage": value = worker.agy_usage()
             elif op == "directory": value = worker.directory(message.get("path", ""), message.get("offset", 0))
             elif op == "git": value = worker.git(message.get("action"), message.get("value"))
             elif op == "stat": value = worker.metadata(message["path"])
@@ -2661,7 +2777,8 @@ class Channel:
             worker.emit({"type": "response", "id": identity, "ok": True, "value": value})
         except Exception as error:
             worker.emit({"type": "response", "id": identity, "ok": False, "error": str(error)[:1000],
-                **({"code": "codex_cli_required"} if getattr(error, "code", None) == "codex_cli_required" else {})})
+                **({"code": error.code} if getattr(error, "code", None) in
+                   ("codex_cli_required", "agy_cli_required", "agy_cli_outdated", "agy_role_server_conflict") else {})})
 
     def close(self):
         self.worker.stop()

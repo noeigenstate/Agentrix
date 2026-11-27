@@ -6,6 +6,7 @@
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `path`, `output` (or `result`), and `input` or `arguments`
 // only to name a step by (never shown); an assistant picture `generated { path, prompt, copied, copyNote, deferred }` and `images`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
 import type { ClaudeFound } from '../../shared/types';
 import type { ResultFacts } from '../reading/feed-parts';
 import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
@@ -98,6 +99,8 @@ const REASON_WORDS: Record<string, string> = {
   key_forbidden: 'API 密钥没有调用权限。', api_unreachable: '无法连接 Anthropic API。', key_check_failed: '无法完成 API 连接检查。',
   cli_too_old: 'Claude Code 版本过低，请升级到 2.1.317 或更高', api_unavailable: 'Claude API 路径当前不可用。',
   codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
+  agy_cli_required: '未找到 Google Antigravity CLI（agy）。', agy_auth_required: '请先登录 Google Antigravity CLI（agy）。',
+  agy_cli_outdated: 'Google Antigravity CLI（agy）版本过低，请升级后重试。', agy_start_failed: '无法启动 Google Antigravity CLI（agy）会话。',
   cli_split_versions: '终端和原生用的 Claude Code 版本不同',
   terminal_agent_exited: 'Claude Code 在终端里启动后就退出了', terminal_start_failed: '终端里的 Claude Code 没有启动成功',
 };
@@ -146,7 +149,8 @@ const exact = (value: number) => value.toLocaleString('en-US');
 // A turn's tokens in words. Claude counts the cached and cache-written input apart from `input`; Codex's `input` already holds its cache, and reasoning is part of
 // the output: neither is added twice. A turn that counted nothing says nothing.
 function tokenWords(tokens: NonNullable<TurnEnd['tokens']>, provider: NativeAgent) {
-  const input = tokens.input === null ? null : provider === 'claude' ? tokens.input + (tokens.cachedInput ?? 0) + (tokens.cacheWrite ?? 0) : tokens.input;
+  const input = tokens.input === null ? null : adapterOf(provider)?.manifest.usage?.inputExcludesCache
+    ? tokens.input + (tokens.cachedInput ?? 0) + (tokens.cacheWrite ?? 0) : tokens.input;
   if (!input && !tokens.output) return undefined;
   return [input !== null && t('输入 {count}', { count: exact(input) }), tokens.output !== null && t('输出 {count}', { count: exact(tokens.output) })].filter(Boolean).join(' · ');
 }
@@ -199,13 +203,14 @@ export function clockWords(at: number | null | undefined, now = Date.now()) {
 
 // ── Connections ──
 // What an agent is connected through, in the pane's words (the agent's name is the row's label); the source is the tooltip. Not known says so.
-const CONNECTION_WORDS: Record<NativeAgent, Record<string, string>> = {
+const CONNECTION_WORDS: Partial<Record<NativeAgent, Record<string, string>>> = {
   claude: { api: '已连接 API', subscription: '订阅（Claude Code 登录）', none: '未连接' },
   codex: { api: 'API', subscription: 'ChatGPT 订阅', none: '未连接' },
+  agy: { api: 'API', subscription: 'Antigravity 登录', none: '未连接' },
 };
 // `active: false` is an account that is signed in while this agent has no main session. A sub-agent may still be running on it, so the row names the plan and says nothing about sessions; only 已连接 waits for a session to back it.
 export function connectionWord(agent: NativeAgent, connection: (AgentConnection) | null | undefined) {
-  const word = connection?.active === false && connection.kind === 'api' ? 'API' : connection ? CONNECTION_WORDS[agent][connection.kind] : undefined;
+  const word = connection?.active === false && connection.kind === 'api' ? 'API' : connection ? CONNECTION_WORDS[agent]?.[connection.kind] : undefined;
   return { text: word ? t(word) : t('未知'), source: connection?.source || null };
 }
 

@@ -36,9 +36,9 @@ const { inspectClaudeExecutable, resolveClaudeExecutable } = require('./features
 const { createLocator } = require('./features/claude-runtime/locator.cjs');
 const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson } = require('./features/native-session/storage.cjs');
 const { netRequest, apiEnvironment, listModels } = require('./features/claude-sdk/index.cjs');
-const { adapterOf, legacyRestoreAgent, support } = require('./features/cli-adapters/registry.cjs');
+const { adapters, adapterOf, adapterOfModel, bindNativeAdapters, legacyRestoreAgent, support } = require('./features/cli-adapters/registry.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
-const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
+const { registerClaudeWorker, registerAgyWorker } = require('./features/native-session/worker.cjs');
 const { createWorkerTerminals } = require('./features/worker-terminals/worker-terminals.cjs');
 const { registerWorkspaceIpc } = require('./features/workspace/ipc.cjs');
 const { listProjectImageCandidates, LIMITS: PROJECT_IMAGE_LIMITS } = require('./features/workspace/project-images.cjs');
@@ -72,7 +72,7 @@ const { createDashboard } = require('./features/dashboard/index.cjs');
 const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
-const { createRpc: createResetRpc } = require('./features/codex-app-server/rpc.cjs');
+const { createRpc: createResetRpc } = require('./features/codex-app-server/codex-rpc.cjs');
 const { createCodexLocator } = require('./features/codex-runtime/locator.cjs');
 const { scanDrives, fixedDrives } = require('./features/codex-runtime/drive-scan.cjs');
 const { agentCommand } = require('./features/agents/agent-command.cjs');
@@ -123,6 +123,7 @@ const { codexLocator, codexExecutable, codexAccounts, projectAccounts } = create
   createCodexLocator, scanDrives, fixedDrives, os, path, app, readNativeJson, writeNativeJson, CodexAccountUsage, adapterOf,
   createResetRpc, createProjectAccounts, readClaudeAccountCache,
   get agents() { return agents; },
+  get routing() { return routing; },
 });
 const { ClaudeAccountUsage } = require('./features/agents/claude-account-usage.cjs');
 const claudeAccounts = createClaudeAccountService({ ClaudeAccountUsage, adapterOf, electronNet,
@@ -170,7 +171,7 @@ let stateTimer;
 let runtimeDir;
 let nativeSessions, claudeRuntime, dispatchControl, controlAddress, terminalInput;
 const nativeSpecs = new Map();
-const seatModelRuntimes = { codex: new Set(), claude: new Set() };
+const seatModelRuntimes = Object.fromEntries(adapters().map(({ manifest: { id } }) => [id, new Set()]));
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
 let shellPathReady = Promise.resolve();
@@ -199,8 +200,8 @@ const { windowBackgroundColor, systemTheme, applyNativeTheme, updateStoreSetting
   get desktopGlassActive() { return desktopGlassActive; }, get dashboardWindow() { return dashboardWindow; }, get labWindow() { return labWindow; },
   get requestQuit() { return requestQuit; }, get attentionTimer() { return attentionTimer; }, set attentionTimer(value) { attentionTimer = value; },
 });
-const { inspectClaude, checkClaude, checkCodex } = createCliChecks({
-  inspectClaudeExecutable, claudeState, codexState, codexLocator, get claudeLocator() { return claudeLocator; },
+const { inspectClaude, checkClaude, checkCodex, checkManualInstalls } = createCliChecks({
+  adapters, inspectClaudeExecutable, claudeState, codexState, codexLocator, get claudeLocator() { return claudeLocator; },
   get agents() { return agents; }, get claudeRuntime() { return claudeRuntime; },
 });
 const usageHost = createUsageHost({
@@ -232,7 +233,7 @@ const host = {
   get claudeRuntime() { return claudeRuntime; }, set claudeRuntime(value) { claudeRuntime = value; }, get terminalInput() { return terminalInput; },
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
   get runtimeDir() { return runtimeDir; }, get routing() { return routing; },
-  accountEnvironment, ActionLog, adapterOf, AgentCalls, app, ApprovalGuard, approvalStamp, bashArguments, captureBranch, claudeResumeCommand,
+  accountEnvironment, ActionLog, adapterOf, adapters, AgentCalls, app, ApprovalGuard, approvalStamp, bashArguments, captureBranch, claudeResumeCommand,
   codexLocator, CompletionWork, ConversationLog, dashboard, endSkillSession, fs, InputGate, isTerminalResponse, legacyRestoreAgent, linuxShell,
   macShell, onPath, os, path, prepareAskpass, PromptMarkers, PromptQueue, pty, publishAction, publishConversation, quotaScope,
   readingHistory, remoteBranch, RemoteConnection, removeBootstrap, restorePlans, retryFileOperation, shellEnvironment, startupErrors,
@@ -246,7 +247,28 @@ const host = {
   acceptShellEvent, agentCommand, bindRemoteClaudeAccount, CodexActivityReader, codexConversation, codexRecord, createNativeUsage,
   reportHookChannel, sshHandoff, startHookLaunch, startSkillSession, startUsage,
   claudeBackgroundEnvironment, createNativeSessions, createSdkLoader, electronNet, folderHistory, folderOf, generatedImages,
-  inspectClaude, listAgentCommands, netRequest, registerClaudeWorker, resolveClaudeExecutable, seatModelRuntimes, support, updateBootstrapLead,
+  inspectClaude, listAgentCommands, netRequest, resolveClaudeExecutable, seatModelRuntimes, support, updateBootstrapLead,
+  registerClaudeWorker(options) {
+    registerClaudeWorker(options);
+    let factory;
+    registerAgyWorker({ control: options.control, adapterOf, adapterOfModel, roleResultServer: options.roleResultServer,
+      readRoleResult: (folder, id) => require(path.join(integrationDir, 'role-artifacts.cjs')).readRoleResultFile(folder, id),
+      env: () => withoutAppImage(process.env),
+      runtimeOf: async adapter => {
+        const { id } = adapter.manifest;
+        factory ??= adapter.native.load();
+        const createRuntime = await factory;
+        let treeStopFailure;
+        const provider = { create(spec, emit) {
+          const runtime = createRuntime({ dataDir: app.getPath('userData'), clientVersion: app.getVersion(),
+            onTreeStopFailure: error => { treeStopFailure = error; } }).create(spec, emit);
+          const close = runtime.close.bind(runtime);
+          runtime.close = async () => { await close(); if (treeStopFailure) throw treeStopFailure; };
+          return runtime;
+        } };
+        return bindNativeAdapters({ [id]: provider })(id).native;
+      } });
+  },
   updateDispatchLaunchSeats, updateDispatchSeats, writeSeatMap,
   get workerTerminals() { return workerTerminals; },
   get dispatchControl() { return dispatchControl; }, set dispatchControl(value) { dispatchControl = value; },
@@ -255,6 +277,7 @@ const host = {
   loadDispatchRegistration: () => require('./features/agents/dispatch-registration.cjs'),
   get safeStorage() { return require('electron').safeStorage; },
   createRemoteCodexProcess: remote => require('./features/ssh/codex-process.cjs').createRemoteCodexProcess(remote),
+  createRemoteAgyProcess: (remote, options) => require('./features/ssh/codex-process.cjs').createRemoteAgyProcess(remote, options),
   roleResultServer: (runId, folder) => require(path.join(integrationDir, 'role-artifacts.cjs')).roleResultServer(path.join(integrationDir, 'dispatch.cjs'), runId, folder),
 };
 Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
@@ -282,8 +305,10 @@ const workerTerminals = createWorkerTerminals({ spawn: (file, args, options) => 
   hooks: ({ terminalId, sessionKey, env, cwd }) => terminalHooks({ port: hookServer?.port, terminalId, sessionKey, eventServer, env, cwd, workerPermission: true,
     shell: { posix: process.platform !== 'win32', powershellPath, script: path.join(integrationDir, 'claude-hook.ps1'), node: process.execPath,
       helper: path.join(integrationDir, 'agent-event.cjs') } }) });
+const agyInstall = adapterOf('agy')?.install;
 const agents = new AgentsManager({ onChange: state => send('agents:changed', state), translate: t,
-  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh'), codex: () => codexLocator.peek(), refreshCodex: () => checkCodex('scan') });
+  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh'), codex: () => codexLocator.peek(), refreshCodex: () => checkCodex('scan'),
+  agy: agyInstall?.peek, refreshAgy: agyInstall?.refresh });
 function broadcast() {
   dashboardWindow?.sync();
   syncDashboardLive();
@@ -330,16 +355,19 @@ if (!app.requestSingleInstanceLock()) {
     // window comes back at most once a minute, so one installed meanwhile is found without a restart.
     claudeFirst = checkClaude('refresh').catch(() => {});
     codexFirst = checkCodex('refresh').catch(() => {});
+    const manualInstalls = shellPathReady.then(() => checkManualInstalls()).catch(report);
     if (process.platform !== 'win32') void shellPathReady.then(() => Promise.all([checkClaude('refresh'), checkCodex('refresh')])).catch(() => {});
-    app.on('browser-window-focus', () => { checkClaude('focus').catch(() => {}); checkCodex('focus').catch(() => {}); });
+    app.on('browser-window-focus', () => {
+      checkClaude('focus').catch(() => {}); checkCodex('focus').catch(() => {}); checkManualInstalls('focus').catch(report);
+    });
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme(), report });
     if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
       for (const project of store.projects) for (const record of [project, ...(project.terminals || [])]) {
         if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
       }
     }
-    const { modelProbes } = createModelProbes({
-      app, path, fs, seatModelRuntimes, agents, probeCodex, spawn: require('node:child_process').spawn, codexExecutable,
+    const modelProbes = createModelProbes({
+      app, path, fs, seatModelRuntimes, agents, adapters, probeCodex, spawn: require('node:child_process').spawn, codexExecutable, report,
       loadCodexProbe: () => import('./features/codex-app-server/index.cjs'),
       probeClaude, createSdkLoader, resolveClaudeExecutable, claudeLocator, apiEnvironment, listModels, netRequest, electronNet,
       get claudeRuntime() { return claudeRuntime; },
@@ -360,7 +388,7 @@ if (!app.requestSingleInstanceLock()) {
       }, report,
       routingNote: () => routingNote(app.getPath('userData')) });
     routing.syncWatchers();
-    codexFirst.then(() => routing.modelCatalog.refresh('startup')).catch(report);
+    Promise.all([codexFirst, manualInstalls]).then(() => routing.modelCatalog.refresh('startup')).catch(report);
     projectImageAuto = autoProjectImages({ createProjectImageAuto, store, projectImageCandidates, broadcast, get quitting() { return quitting; } });
     voiceManager = new VoiceManager({ directory: voiceDirectory, model: store.settings.voiceModel, fetcher: (url, options) => electronNet.fetch(url, options), changed: state => send('voice:state', state) });
     // Download the offline model in the background after installation so dictation works on first use.
@@ -432,6 +460,12 @@ if (!app.requestSingleInstanceLock()) {
     };
     const backdrop = openMainWindow(windowStartup, shellIcon);
     if (backdrop) await backdrop;
+    const installPages = new Set(adapters().flatMap(({ manifest: { install } }) =>
+      install.commands && install.page.startsWith('https://') ? [install.page] : []));
+    if (installPages.size) window.webContents.setWindowOpenHandler(({ url }) => {
+      if (installPages.has(url)) void shell.openExternal(url).catch(report);
+      return { action: 'deny' };
+    });
     await loadMainWindow(windowStartup);
     for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();

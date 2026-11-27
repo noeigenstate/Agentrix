@@ -47,6 +47,16 @@ test('registration checks current authentication before and after the asynchrono
   assert.deepEqual(await resolveRegistration(f.deps, f.registration), { refused: 'dispatch.session_mismatch' });
 });
 
+test('an Antigravity lead can register roles when it runs as a native session', async t => {
+  const f = fixture(t);
+  f.worker.agent = f.registration.agent = 'agy';
+  assert.equal((await resolveRegistration(f.deps, f.registration)).run.agent, 'agy');
+  f.session.agent = 'agy';
+  assert.deepEqual(await resolveRegistration(f.deps, f.registration), { refused: 'dispatch.control_unbound' });
+  f.session.nativeStructured = true;
+  assert.equal((await resolveRegistration(f.deps, f.registration)).run.leadMode, 'native-independent');
+});
+
 test('a Git error, timeout, missing team or missing run cannot become a boardless registration', async t => {
   const f = fixture(t);
   for (const status of ['git_error', 'no_team']) {

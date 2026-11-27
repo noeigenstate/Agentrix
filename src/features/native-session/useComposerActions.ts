@@ -7,6 +7,7 @@ import { optionPatch, optionTold, optionUsage, permissionChoices, type Choice, t
 import { nativeItem, refreshNativeSession } from './native-store.ts';
 import { readPanel } from './panel-read.ts';
 import type { PanelAgent, PanelCommand, PanelState } from './native-panel.ts';
+import { reasonWords } from './native-words';
 
 // An unavailable or failed main-process call reads as a refusal with its reason.
 function ask<T>(call: Promise<Result<T>> | undefined): Promise<Result<T>> {
@@ -46,7 +47,7 @@ export function useComposerActions({ projectId, terminalId, sessionId, agent, cl
     setRenewing(true); clear();
     const result = await ask(nativeBridge()?.newConversation?.(terminalId, sessionId));
     if (result.ok) { refreshNativeSession(terminalId); return; }
-    setRenewing(false); fail(words, result.error);
+    setRenewing(false); fail(words, reasonWords(result.error) ?? result.error);
   };
 
   // /status, /usage, /context and /cost: the window opens at once on its loading state and fills with what main read. The query is no message of the

@@ -3,19 +3,19 @@ import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt } from '../readi
 import { readScreen } from '../terminal/terminal-screen';
 import { sameMessage } from '../reading/pending-prompts';
 import { t } from '../../shared/i18n';
+import type { AgentProvider } from '../../shared/agent-events';
 
-type Agent = 'claude' | 'codex';
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // What the agent's screen holds now: null while its terminal has none (not drawn yet).
-function look(terminalId: string, agent: Agent) {
+function look(terminalId: string, agent: AgentProvider) {
   const current = readScreen(terminalId), rows = current?.rows;
   return rows ? { rows, screen: { ...parseAgentScreen(agent, rows, current.agentVersion), queued: current.queued } } : null;
 }
 
 // Both CLIs queue messages while working if their input is drawn. Dialogs own the keys. Owner sends replace an old
 // draft; background relays preserve it and press Enter only while their own message is still in the input.
-export async function sendToAgent(terminalId: string, sessionId: string, agent: Agent, text: string,
+export async function sendToAgent(terminalId: string, sessionId: string, agent: AgentProvider, text: string,
   { preserveDraft = false, deadline }: { preserveDraft?: boolean; deadline?: number } = {}): Promise<string | null> {
   const screenError = t('请先在终端中处理当前界面，再发送消息。');
   const draftError = t('输入框中有未发送的草稿，请先处理草稿后重试。');
@@ -53,7 +53,7 @@ export async function sendToAgent(terminalId: string, sessionId: string, agent: 
 
 // Waits until a just-started agent shows its input (it may first ask to trust the folder or to sign in, which the
 // decision page takes). Gives whether it got there within the time.
-export async function untilAtPrompt(terminalId: string, agent: Agent, timeout = 45000) {
+export async function untilAtPrompt(terminalId: string, agent: AgentProvider, timeout = 45000) {
   for (const end = Date.now() + timeout; Date.now() < end; await pause(400)) {
     const now = look(terminalId, agent);
     if (now && !now.screen.choice && isAtPrompt(agent, now.rows, now.screen)) return true;
@@ -62,7 +62,7 @@ export async function untilAtPrompt(terminalId: string, agent: Agent, timeout = 
 }
 
 // Whether the agent waits at its input right now (not working, not asking).
-export function atPrompt(terminalId: string, agent: Agent) {
+export function atPrompt(terminalId: string, agent: AgentProvider) {
   const now = look(terminalId, agent);
   return !!now && isAtPrompt(agent, now.rows, now.screen);
 }

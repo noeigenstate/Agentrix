@@ -1,4 +1,6 @@
 const { estimateCost, priceOf } = require('./cost.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
+const { localModel } = require('../cli-adapters/registry.mjs');
 const { currentWeights } = require('./decisions.cjs');
 const { suggestions } = require('./suggestions.cjs');
 const { journalEntries, roundData, incidentOf, CATEGORIES } = require('./rounds.cjs');
@@ -18,8 +20,8 @@ const DAY = 24 * 60 * 60 * 1000;
 function normalizeRuns(records, now) {
   const unique = new Map();
   for (const [index, record] of records.entries()) {
-    if (!nonnegative(record?.at) || record.at > now || !['codex', 'claude'].includes(record.agent)) continue;
-    const run = { ...record, model: modelOf(record.model), kind: text(record.kind, 32) || 'unreported' };
+    if (!nonnegative(record?.at) || record.at > now || !adapterOf(record.agent)) continue;
+    const run = { ...record, model: modelOf(record.model, record.agent), kind: text(record.kind, 32) || 'unreported' };
     unique.set(record.usageRecordId ? keyOf('usage', record.usageRecordId) : keyOf(record.projectId, record.source === 'native' ? 'native' : record.source === 'subagent' ? 'subagent' : 'dispatch', record.id || index), run);
   }
   return [...unique.values()].sort((a, b) => a.at - b.at);
@@ -35,18 +37,31 @@ function workerPass(run, contexts) {
 function quotaData(records) {
   const latest = new Map();
   for (const record of records) {
-    if (!['codex', 'claude'].includes(record.provider) || !Array.isArray(record.windows)) continue;
+    if (!adapterOf(record.provider) || !Array.isArray(record.windows)) continue;
     // The newest reading replaces the older one even when its window duration is unreported.
     latest.set(record.provider, record);
   }
-  const providers = new Map();
+  const providers = new Map(), grouped = new Map();
   for (const [provider, record] of latest) {
-    const window = record.windows.filter(value => nonnegative(value?.minutes) && nonnegative(value?.percent))
-      .sort((a, b) => b.minutes - a.minutes)[0];
+    const windows = record.windows.filter(value => nonnegative(value?.minutes) && nonnegative(value?.percent))
+      .sort((a, b) => b.minutes - a.minutes);
+    const window = windows[0], groupId = adapterOf(provider).usage?.quotaGroupId;
     if (window) providers.set(provider, { provider, percent: window.percent, minutes: window.minutes, at: record.at });
+    for (const value of windows) {
+      const id = groupId?.(value.id), key = keyOf(provider, id);
+      if (id && !grouped.has(key)) grouped.set(key, { provider, id, percent: value.percent, minutes: value.minutes });
+    }
   }
   const recent = [...providers.values()].sort((a, b) => b.at - a.at || a.provider.localeCompare(b.provider))[0];
-  return { providers, latest: recent ? { provider: recent.provider, percent: recent.percent, minutes: recent.minutes } : null };
+  const groups = [...grouped.values()];
+  return {
+    groups, latest: recent ? { provider: recent.provider, percent: recent.percent, minutes: recent.minutes } : null,
+    forModel(provider, model) {
+      if (!groups.some(group => group.provider === provider)) return providers.get(provider)?.percent ?? null;
+      const id = adapterOf(provider)?.usage?.quotaGroupOfModel?.(model);
+      return grouped.get(keyOf(provider, id))?.percent ?? null;
+    },
+  };
 }
 
 function projectList(projects, records) {
@@ -99,7 +114,7 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
   const passes = new Map(globalRuns.map(run => [run, workerPass(run, globalRounds.contexts)]));
   const allRuns = globalRuns.filter(inProject);
   const allGrades = (records.grades || []).filter(grade => nonnegative(grade?.at) && grade.at <= now && inProject(grade) &&
-    ['codex', 'claude'].includes(grade.agent) && ['passed', 'sent-back'].includes(grade.outcome)).map(grade => ({ ...grade, model: modelOf(grade.model) }));
+    adapterOf(grade.agent) && ['passed', 'sent-back'].includes(grade.outcome)).map(grade => ({ ...grade, model: modelOf(grade.model, grade.agent) }));
   const entries = query.projectId === null ? globalEntries : journalEntries(journals, projects, query.projectId, now);
   const allRounds = query.projectId === null ? globalRounds.rounds : roundData(entries, allRuns).rounds;
   const runs = allRuns.filter(selected), grades = allGrades.filter(selected);
@@ -124,7 +139,7 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
       sentBack: modelGrades.filter(grade => grade.outcome === 'sent-back').length,
       outOfScope: modelRuns.reduce((sum, run) => sum + (nonnegative(run.outOfScope) ? run.outOfScope : 0), 0),
       incidents: incidents.filter(incident => incident.row.model === model).length,
-      quotaPercent: quota.providers.get(agent)?.percent ?? null,
+      quotaPercent: quota.forModel(agent, model),
       costUsd: costs.length ? costs.reduce((sum, cost) => sum + cost, 0) : null, costedRuns: costs.length,
       weight: modelWeights.length ? Math.min(...modelWeights.map(weight => weight.to)) : 1, trend: modelTrends.get(model) };
   });
@@ -142,7 +157,7 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
   return { generatedAt: now, query: { ...query }, projects: projectList(projects, [...(records.runs || []), ...(records.grades || [])]),
     kpis: { firstPassRate: ratio(observations.filter(Boolean).length, observations.length), runs: runs.length,
       runsPrevious: length === null ? null : allRuns.filter(run => run.at >= start - length && run.at < start).length,
-      incidents: incidents.length, quota: quota.latest,
+      incidents: incidents.length, quota: quota.latest, ...(quota.groups.length ? { quotaGroups: quota.groups } : {}),
       reworkPerRound: average(rounds.map(round => round.row.rework)),
       reworkPerRoundPrevious: previous === null ? null : average(previous.map(round => round.row.rework)), rounds: rounds.length,
       roundtableFirstConfirm: ratio(rounds.filter(round => round.row.firstConfirmed).length, rounds.length),
@@ -153,7 +168,8 @@ function summarize({ records = {}, journals = [], projects = [], prices = {}, de
     incidents: incidents.map(incident => incident.row).sort((a, b) => b.at - a.at), rounds: rounds.map(round => round.row),
     findings: [...findingCells.values()].sort((a, b) => a.author.localeCompare(b.author) || a.category.localeCompare(b.category)),
     suggestions: suggestions({ incidents: globalEntries.filter(entry => entry.type === 'incident').map(entry => ({ row: incidentOf(entry), key: entry.key })),
-      kinds: kindRates(globalRuns, passes), rounds: globalRounds.rounds, decisions, t }),
+      kinds: kindRates(globalRuns.filter(run => run.model === 'unreported' || localModel(run.model) !== 'unreported'), passes),
+      rounds: globalRounds.rounds, decisions, t }),
     weights, prices: { updated: prices.updated || '', unpriced: [...new Set(runs.filter(run => !priceOf(run.model, prices)).map(run => run.model))].sort() } };
 }
 

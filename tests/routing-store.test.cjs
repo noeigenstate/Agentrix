@@ -32,6 +32,22 @@ const routeFile = project => path.join(project.path, '.agentrix', 'routing.json'
 const routeDocument = roles => JSON.stringify({ format: 'agentrix-routing', version: 1, ...routing(roles) });
 const seat = model => ({ model, effort: 'high' });
 
+test('Antigravity model IDs are canonical in routing.json and the generated team table, including the lead', t => {
+  const { store, projects: [project] } = fixture(t);
+  store.getAgents = () => ({ claude: { installed: true }, agy: { installed: true } });
+  const roles = { orchestrator: seat('agy:gemini-4-neon'), researcher: seat('agy:gemini-4-neon'), reviewer: seat('agy:claude-opus-5-5') };
+  assert.deepEqual(store.setRouting('project', project.id, { conductor: true, roles }, null), { ok: true });
+  const expected = { ...roles, orchestrator: seat('gemini-4-neon'), researcher: seat('gemini-4-neon') };
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')).roles, expected);
+  assert.deepEqual(store.seatsInfo(project.id).config.roles, expected);
+  assert.equal(store.seatsInfo(project.id).leadAgent, 'agy');
+  assert.deepEqual(store.leadOptions(project.id, 'agy'), expected.orchestrator);
+  const guide = store.launch(project, false, 'agy-routing', { agent: 'agy' }).guide.text;
+  assert.match(guide, /^\| researcher \|[^\n]*\| gemini-4-neon /m);
+  assert.match(guide, /^\| reviewer \|[^\n]*\| agy:claude-opus-5-5 /m);
+  assert.doesNotMatch(guide, /agy:gemini-4-neon/);
+});
+
 test('Ultracode saves and reloads as an opt-in, and appears in both lead seat tables and the routing guide summary', t => {
   const { store, projects } = fixture(t), [project] = projects;
   const orchestrator = { ...seat('opus'), ultracode: true };
@@ -616,38 +632,6 @@ test('sixteen enabled seats fit the launch cap and carry no role text', t => {
   assert.ok(Buffer.byteLength(JSON.stringify(worst)) < 8192);
 });
 
-test('v1 migration preserves stored choices and reports its notice once', async t => {
-  const choice = (model, effort = 'high') => ({ model, effort });
-  const stored = { global: { lookup: choice('sonnet'), visual: choice('bad;model'),
-    lead: { claude: choice('opus', 'max'), codex: choice('gpt-6.1-sol') } },
-    projects: { p1: { architect: choice('sonnet'), lookup: choice('bad model') } } };
-  const id = 'builtin:model-routing';
-  const { store, options } = fixture(t, ({ dataDir }) => put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: {
-    seats: stored, seatDefaultModels: { 'lead.claude': 'opus', 'lead.codex': 'gpt-6.1-sol', visual: 'sonnet', lookup: 'haiku' },
-  } })));
-  const info = store.seatsInfo('p1'), good = { researcher: choice('sonnet'), orchestrator: choice('opus', 'max') };
-  assert.deepEqual(info.template.roles, good);
-  assert.deepEqual(info.config.roles, { ...good, architect: choice('sonnet') });
-  assert.equal(info.lead, 'orchestrator'); assert.equal(info.leadAgent, 'claude');
-  assert.deepEqual(info.leads, { claude: choice('opus', 'max'), codex: null });
-  assert.deepEqual(info.authors, ['developer']); assert.equal(info.roles[0].name, '总指挥');
-  assert.deepEqual(store.options.seatDefaultModels, { orchestrator: 'opus', designer: 'sonnet', qa: 'sonnet' });
-  assert.equal(info.migrated, undefined);
-  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  store.modelCatalog.probes.codex = async () => [{ model: 'gpt-6.2-sol' }];
-  const refreshed = await store.refreshSeats('p1', null, 'dialog');
-  assert.match(refreshed.migrated, /Claude.*opus.*Codex.*gpt-6\.1-sol/);
-  assert.equal(refreshed.defaults.researcher.model, 'sonnet');
-  assert.equal(refreshed.defaults.devops.model, 'gpt-6.2-sol');
-  assert.equal(refreshed.defaultsMoved, undefined);
-  assert.deepEqual(store.setRouting('project', 'p2', routing({ designer: choice('opus') }), null), { ok: true });
-  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'));
-  assert.deepEqual(persisted.seats, stored);
-  assert.deepEqual(persisted.routing.template.roles, good);
-  const restored = new RoutingStore(options); t.after(() => restored.close());
-  assert.equal((await restored.refreshSeats('p1', null, 'dialog')).migrated, undefined);
-});
-
 function seatPreload(store) {
   const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
   const { registerRoutingIpc } = require('../electron/features/routing/ipc.cjs');
@@ -665,7 +649,11 @@ function seatPreload(store) {
 
 test('seat preload reads unwrap the real IPC adapter and transport errors', async t => {
   const { store } = fixture(t), bridge = seatPreload(store);
-  assert.equal((await bridge.routingSeats('p1', null)).lead, 'orchestrator');
+  const info = await bridge.routingSeats('p1', null);
+  assert.equal(info.lead, 'orchestrator');
+  assert.deepEqual(info.leads, { claude: seat('opus'), agy: null, codex: null });
+  assert.deepEqual(info.installed, { claude: true, agy: false, codex: false });
+  assert.deepEqual(info.catalogAt, { claude: null, agy: null, codex: null });
   store.seatsInfo = () => { throw new Error('seat read failed'); };
   await assert.rejects(() => bridge.routingSeats(), /seat read failed/);
 });

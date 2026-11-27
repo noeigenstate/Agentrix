@@ -39,17 +39,17 @@ test('local and SSH layouts give both providers the shipped plain replies body i
   }
 });
 
-test('the carried intercept runtime includes the six launchers in a CJS envelope', async t => {
+test('the carried intercept runtime includes the nine launchers in a CJS envelope', async t => {
   const carried = runtimeFiles();
   assert.equal(typeof carried['shims/intercept.cjs'], 'string');
   assert.ok(Object.keys(carried).every(name => /^[\w-]+(?:\/[\w-]+)*\.cjs$/.test(name)), 'the SSH carrier remains CJS-only');
   const install = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agx-packed-shims-'));
-  t.after(() => fs.rmSync(install, { recursive: true, force: true }));
+  t.after(() => fs.promises.rm(install, { recursive: true, force: true }));
   await require('../scripts/after-pack.cjs').copyDispatchRuntime(install);
   const bundleFile = path.join(install, 'electron/shims/launchers.cjs');
   const bundle = require(bundleFile);
   assert.equal(fs.readFileSync(bundleFile, 'utf8'), carried['shims/launchers.cjs']);
-  assert.deepEqual(Object.keys(bundle).sort(), ['.agentrix-shims', 'claude', 'claude.cmd', 'claude.ps1', 'codex', 'codex.cmd', 'codex.ps1']);
+  assert.deepEqual(Object.keys(bundle).sort(), ['.agentrix-shims', 'agy', 'agy.cmd', 'agy.ps1', 'claude', 'claude.cmd', 'claude.ps1', 'codex', 'codex.cmd', 'codex.ps1']);
   for (const [name, source] of Object.entries(bundle)) {
     assert.equal(source, read(`integration/shims/${name}`));
     assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
@@ -58,13 +58,17 @@ test('the carried intercept runtime includes the six launchers in a CJS envelope
   const packaged = require(path.join(install, 'shims/intercept.cjs'));
   assert.equal(packaged.runtimeFiles()['shims/launchers.cjs'], carried['shims/launchers.cjs']);
   assert.equal(readKeyValue(packaged.terminalLaunch({}, 'codex', 'classify', '', ['login']), { format: 'agentrix.launch-route' }).route, 'passthrough');
+  assert.equal(readKeyValue(packaged.terminalLaunch({}, 'agy', 'classify', 'native', []), { format: 'agentrix.launch-route' }).route, 'native');
+  assert.equal(readKeyValue(packaged.terminalLaunch({}, 'agy', 'classify', 'native', ['acp']), { format: 'agentrix.launch-route' }).route, 'passthrough');
   const transferred = require(path.join(install, 'electron/shims/intercept.cjs'));
   assert.equal(readKeyValue(transferred.terminalLaunch({}, 'claude', 'classify', 'remote', ['-p', 'prompt']), { format: 'agentrix.launch-route' }).route, 'print');
   // The start-up hooks are installed beside them, dotfiles included; they are not carried to SSH hosts.
   const hooks = require('../integration/shims/intercept.cjs').hookFiles();
   assert.ok(Object.keys(hooks).includes('hooks/zsh/.zshenv'));
   for (const [name, source] of Object.entries(hooks)) assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
-  if (process.platform !== 'win32') for (const name of ['codex', 'claude']) assert.equal(fs.statSync(path.join(install, 'shims', name)).mode & 0o777, 0o755);
+  if (process.platform !== 'win32') {
+    for (const name of ['agy', 'codex', 'claude']) assert.equal(fs.statSync(path.join(install, 'shims', name)).mode & 0o777, 0o755);
+  }
 });
 
 // Plain Node cannot read app.asar and an SSH host has only what was copied, so the helper carries these files beside it.
@@ -141,7 +145,10 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
   assert.deepEqual(dispatchCompanions, ['role-tools.cjs', 'role-artifacts.cjs']);
   assert.ok(dispatchCompanions.every(file => !(file in carried)));
   const helper = ['dispatch.cjs', ...dispatchCompanions].reduce((bytes, file) => bytes + Buffer.byteLength(read(`integration/${file}`)), 0);
-  assert.ok(count === 46, `SSH carries ${count} runtime modules; expected 46`);
+  assert.ok(count === 57, `SSH carries ${count} runtime modules; expected 57`);
+  assert.equal(carried['shared/stdio-rpc.cjs'], read('electron/shared/stdio-rpc.cjs'));
+  assert.equal(carried['features/agy-acp/index.cjs'], read('electron/features/agy-acp/index.cjs'));
+  assert.equal(carried['features/agy-acp/usage-reader.cjs'], read('electron/features/agy-acp/usage-reader.cjs'));
   assert.ok(count <= limit('DISPATCH_MODULE_COUNT') * 0.75, `${count} runtime modules leave under 25% of DISPATCH_MODULE_COUNT`);
   assert.ok(bytes <= limit('DISPATCH_MODULE_BYTES') * 0.75, `${bytes} bytes of runtime modules leave under 25% of DISPATCH_MODULE_BYTES`);
   assert.ok(helper <= limit('DISPATCH_HELPER_BYTES') * 0.75, `the ${helper}-byte helper leaves under 25% of DISPATCH_HELPER_BYTES`);

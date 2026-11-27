@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { localModel } = require('../cli-adapters/registry.mjs');
 const { modelKey } = require('./cost.cjs');
 const { TASK_KINDS } = require('./records-routing.cjs');
 const { readJsonl, readJsonlSync, FILE_LIMIT, LINE_LIMIT, READ_LIMIT } = require('./jsonl.cjs');
@@ -7,8 +8,10 @@ const { readJsonl, readJsonlSync, FILE_LIMIT, LINE_LIMIT, READ_LIMIT } = require
 const STATES = ['open', 'adopted', 'dismissed'];
 const boundedText = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value);
 function validWeight(weight) {
-  return weight && !Array.isArray(weight) && Object.keys(weight).sort().join(',') === 'from,kind,model,to' &&
-    boundedText(weight.model) && /^[a-z0-9][a-z0-9.\-]{0,63}$/.test(weight.model) && TASK_KINDS.includes(weight.kind) && Number.isFinite(weight.from) && weight.from >= 0 &&
+  if (!weight || Array.isArray(weight) || Object.keys(weight).sort().join(',') !== 'from,kind,model,to' || !boundedText(weight.model)) return false;
+  const model = localModel(weight.model);
+  return (model === weight.model || model !== 'unreported') && /^[a-z0-9][a-z0-9.-]{0,63}$/.test(model) &&
+    TASK_KINDS.includes(weight.kind) && Number.isFinite(weight.from) && weight.from >= 0 &&
     Number.isFinite(weight.to) && weight.to >= 0.3 && weight.to <= 1.5;
 }
 function validDecision(record) {

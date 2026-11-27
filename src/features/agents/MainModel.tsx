@@ -72,11 +72,11 @@ function sameModel(chosen: string, actual: string) {
 }
 
 function LeadModelNotice({ terminal, seats, actual }: { terminal: ProjectTerminal; seats: SeatsInfo | null; actual: string | null }) {
-  const kind = screenAgent(terminal.agent), scope = screenOf(kind)?.picker ? leadRoutingScope(terminal) : '';
+  const agent = terminal.agent ?? screenAgent(null), scope = screenOf(agent)?.picker ? leadRoutingScope(terminal) : '';
   const failureSnapshot = () => leadRoutingFailure(scope), pendingSnapshot = () => leadRoutingPending(scope);
   const failure = useSyncExternalStore(subscribeLeadRouting, failureSnapshot, failureSnapshot);
   const waiting = useSyncExternalStore(subscribeLeadRouting, pendingSnapshot, pendingSnapshot);
-  const chosen = seats?.conductor ? seats.leads?.[kind]?.model : null;
+  const chosen = seats?.conductor ? seats.leads?.[agent]?.model : null;
   const pendingModel = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
   const currentFailure = failure && failure.targetModel === chosen ? failure.notice : null;
   const deferred = waiting && !currentFailure && seats?.conductor !== false;
@@ -84,7 +84,7 @@ function LeadModelNotice({ terminal, seats, actual }: { terminal: ProjectTermina
   if (currentFailure) words = !currentFailure.unavailable && pendingModel
     ? t('未能切换到 {model}，可在终端里用 /model 手动切换。', { model: pendingModel }) : routingNotice(currentFailure, t);
   else if (deferred) words = pendingRoutingWords(waiting, t);
-  else if (pendingModel) words = t('正在切换到 {model}', { model: pendingModel });
+  else if (pendingModel && terminal.nativeMode !== 'agy-acp') words = t('正在切换到 {model}', { model: pendingModel });
   return words ? <li className={`activity-call-note${deferred ? ' activity-routing-wait' : ''}`} role="status"><span /><p>{words}</p><span /></li> : null;
 }
 
@@ -96,8 +96,7 @@ export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undef
 
 export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType<typeof useMainTurn>>; seats?: SeatsInfo | null }) {
   const { terminal, cli, activity, prompts, working, background, summary, ended } = turn;
-  const kind = screenAgent(terminal.agent);
-  const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = screenLabel(kind);
+  const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = screenLabel(terminal.agent ?? screenAgent(null));
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');

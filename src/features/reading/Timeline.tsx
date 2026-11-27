@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
+import type { AgentProvider } from '../../shared/agent-events';
+import { brandIconOf, ClaudeLogo } from '../agents/AgentBrandIcon.ts';
 
 // Main rail nodes belong to user and agent turns. An agent's messages and tools live inside its body.
 // Named heads always show their time; child items show it when the minute changes.
@@ -9,7 +10,7 @@ export function TimelineStep({ at, kind, mark, who, showTime = true, state, agen
   at: number | null | undefined; kind: 'user' | 'agent'; mark: ReactNode;
   who?: string; showTime?: boolean;
   // A node whose steps still run turns; one that failed is marked. agent: whose answer it is, which tints its node.
-  state?: 'running' | 'failed' | null; agent?: 'claude' | 'codex' | null;
+  state?: 'running' | 'failed' | null; agent?: AgentProvider | null;
   // The newest round's step; earlier rounds' steps speak more quietly.
   latest?: boolean; children: ReactNode;
 }) {
@@ -42,4 +43,7 @@ export function AgentTurnItem({ at, kind, showTime, state, children }: {
 export const ClaudeSpark = ClaudeLogo;
 
 // The agent's mark on its replies' nodes.
-export const AgentMark = ({ agent }: { agent: 'claude' | 'codex' }) => agent === 'claude' ? <ClaudeSpark /> : <CodexLogo />;
+export function AgentMark({ agent }: { agent: AgentProvider }) {
+  const Logo = brandIconOf(agent);
+  return <Logo />;
+}

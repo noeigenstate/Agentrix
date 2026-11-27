@@ -39,7 +39,7 @@ function compareVersion(a, b) {
 }
 
 export function belowMinimum(version, minimum) {
-  const actual = versionParts(version.split('-')[0]), lower = versionParts(minimum);
+  const actual = versionParts(typeof version === 'string' ? version.split('-')[0] : null), lower = versionParts(minimum);
   return !!(actual && lower && compareVersion(actual, lower) < 0);
 }
 
@@ -49,6 +49,8 @@ function verifiedVersion(version, [min, max]) {
   if (!actual || !lower || !upper || compareVersion(actual, lower) < 0) return 'older';
   return compareVersion(actual, upper) > 0 ? 'newer' : 'verified';
 }
+
+export const canLead = manifest => !!manifest && (support(manifest, 'native').ok || support(manifest, 'terminal').ok);
 
 export function support(manifest, key, version) {
   const capability = Object.hasOwn(manifest.supports, key) ? manifest.supports[key] : undefined;

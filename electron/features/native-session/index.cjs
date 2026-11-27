@@ -43,9 +43,25 @@ function createNativeSessions(options) {
       if (project.revision !== revision && previous) for (const { manifest: { id: agent } } of adapters()) {
         usage.agents[agent] = { ...previous.agents[agent], limits: usage.agents[agent].limits };
       }
-      for (const { manifest } of adapters()) {
+      for (const { manifest, nativePolicy } of adapters()) {
         const agent = manifest.id;
-        if (remote && !support(manifest, 'ssh.native').ok) continue;
+        if (remote) {
+          const next = support(manifest, 'ssh.native').ok ? { path: 'native', reason: null } : { path: null, reason: null };
+          if (!next.path) {
+            usage.agents[agent] = { path: null, reason: null, next, limits: null, connection: { kind: 'none', active: false, source: null, observedAt: null } };
+            continue;
+          }
+          usage.agents[agent].next = next;
+          if (nativePolicy?.remoteQuotaUnavailable) {
+            const state = usage.agents[agent];
+            const remoteLimits = await options.remoteLimits?.(projectId, agent, nativePolicy.remoteLimits);
+            state.limits = remoteLimits ?? { scopeId: `${agent}-ssh-account`, state: 'unavailable', source: 'ssh', limitsById: {},
+              billingRoute: 'unknown', observedAtMs: null, resetCredits: null, ordinaryUsageAllowed: null, reason: nativePolicy.remoteQuotaUnavailable };
+            state.connection = { kind: remoteLimits ? 'subscription' : 'unknown', active: !!connections?.[agent]?.active,
+              source: remoteLimits?.source ?? null, observedAt: remoteLimits?.observedAtMs ?? null };
+            continue;
+          }
+        }
         const state = usage.agents[agent], held = previous?.agents[agent];
         // What the account reader named and what main read from the session, oldest first: each is an observation of its
         // own, so the session's (which may name no account) does not hide the reader's by being the later of the two.
@@ -72,15 +88,11 @@ function createNativeSessions(options) {
         state.limits = retainLimits(changed ? null : held?.limits, standIn ? read : routed || read) || null;
         if (state.connection.kind === 'none' && Number.isFinite(state.connection.observedAt)) state.limits = null;
       }
-      if (remote) {
-        usage.agents.claude = { path: null, reason: null, next: { path: null, reason: null }, limits: null,
-          connection: { kind: 'none', active: false, source: null, observedAt: null } };
-        usage.agents.codex.next = { path: 'native', reason: null }; usage.switches = { waiting: 0 };
-      }
+      if (remote) usage.switches = { waiting: 0 };
       project.usage = structuredClone(usage);
       return usage;
     },
   };
-  return { ...facade, getSettings: settings.get, register: handle => registerIpc({ handle, router: facade, settings, claude: options.claude }) };
+  return { ...facade, getSettings: settings.get, register: handle => registerIpc({ handle, router: facade, settings, claude: options.claude, remoteModels: options.remoteModels }) };
 }
 module.exports = { createNativeSessions, createNativeUsage: require('./agent-usage.cjs').createNativeUsage };

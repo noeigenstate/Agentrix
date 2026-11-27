@@ -1,5 +1,6 @@
 import { t } from '../../shared/i18n';
 import type { AgentCommand, NativeRunOptions } from '../../shared/types';
+import type { AgentProvider } from '../../shared/agent-events';
 import { isRoutingCommand } from '../../shared/routing-command.ts';
 import type { PanelCommand } from './native-panel.ts';
 import { CODEX_PERMISSIONS, isCodexPermissions, type CodexPermissions } from '../../shared/codex-permissions.ts';
@@ -11,20 +12,25 @@ export type ComposerAction = { kind: 'new' } | { kind: 'shell'; command: string 
 export type ListLine = Pick<AgentCommand, 'name' | 'description' | 'source'> & { current?: boolean };
 export type Choice = ListLine & { source: 'builtin'; current: boolean };
 
-const NEW = /^\/(?:clear|new|reset)$/, OPTION = /^\/(permissions)(?:\s+([\s\S]*))?$/, PANELS = { claude: /^\/(context|cost|status|usage)$/, codex: /^\/(status|usage)$/ };
+const NEW = /^\/(?:clear|new|reset)$/, OPTION = /^\/(permissions)(?:\s+([\s\S]*))?$/;
+const LOCAL_COMMANDS: Partial<Record<AgentProvider, { shell: boolean; panels: RegExp }>> = {
+  claude: { shell: true, panels: /^\/(context|cost|status|usage)$/ },
+  codex: { shell: true, panels: /^\/(status|usage)$/ },
+};
 
 // The action the (trimmed) words ask for; null when they are an ordinary message. `value` is '' when the option is named without one (a menu); a "!" with
 // no command gives an empty command, which does nothing.
-export function composerAction(words: string, agent: 'claude' | 'codex' = 'claude'): ComposerAction | null {
+export function composerAction(words: string, agent: AgentProvider = 'claude'): ComposerAction | null {
   if ((agent === 'claude' ? NEW : /^\/(?:clear|new)$/).test(words)) return { kind: 'new' };
-  if (words.startsWith('!')) return { kind: 'shell', command: words.slice(1).trim() };
+  const manifest = adapterOf(agent)?.manifest;
+  const commands = LOCAL_COMMANDS[agent];
+  if (words.startsWith('!') && commands?.shell) return { kind: 'shell', command: words.slice(1).trim() };
   // The information commands open a window (Codex has two, Claude four); they are no message and take no turn.
-  const panel = PANELS[agent].exec(words);
+  const panel = commands?.panels.exec(words);
   if (panel) return { kind: 'panel', command: panel[1] as PanelCommand };
-  if (isRoutingCommand(words)) return { kind: 'routing' };
+  if (isRoutingCommand(words) && (!/^\/fast(?:\s|$)/.test(words) || manifest && support(manifest, 'fast').ok)) return { kind: 'routing' };
   const option = OPTION.exec(words);
   // /permissions is Codex's: a Claude session runs without asking, and the words stay a message there.
-  const manifest = adapterOf(agent)?.manifest;
   if (!option || !manifest || !support(manifest, 'permissionChoice').ok) return null;
   return { kind: 'option', option: 'permissions', value: option[2]?.trim() ?? '' };
 }

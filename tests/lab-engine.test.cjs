@@ -996,6 +996,8 @@ test('the lab copy of the real dispatch helper starts Codex on the file credenti
   assert.deepEqual(require(helper).commandOf({ agent: 'codex' }), ['app-server', '--listen', 'stdio://'], 'regular dispatch preserves the configured account store');
   assert.deepEqual(Object.keys(modules).filter(name => name !== 'dispatch.cjs').sort(),
     Object.keys(require(helper).runtimeFiles()).map(name => 'electron/' + name).sort());
+  const { createRpc } = require(path.join(directory, 'electron/shared/stdio-rpc.cjs'));
+  assert.equal(typeof createRpc, 'function');
   // The carried intercept module sits in no shim folder there: a worker's env gets no shims, no hooks, no pass-through.
   const { withShims } = require(path.join(directory, 'electron/shims/intercept.cjs'));
   const worker = withShims({ PATH: 'lab-tools' }, { depth: 1, runId: 'lab-run', proof: 'lab-proof' });

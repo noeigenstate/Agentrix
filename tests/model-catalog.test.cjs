@@ -1,4 +1,4 @@
-const { createModelProbes } = require('../electron/features/agents/usage-host.cjs');
+const { createCliChecks, createModelProbes } = require('../electron/features/agents/usage-host.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -35,26 +35,59 @@ test('catalog keeps provider efforts, defaults, fast metadata and sanitized labe
   assert.equal(modelRow({ model: '-unsafe' }), null);
   assert.equal(modelRow({ value: 'default', resolvedModel: 'claude-opus-5-5' }), null);
   assert.equal(modelRow({ value: 'opus', resolvedModel: 'claude-opus-5-5', supportsFastMode: true }).alias, 'opus');
+  assert.equal(modelRow({ model: 'agy:gemini-4-neon' }).model, 'gemini-4-neon');
 });
 
 test('catalog refresh throttles, persists, retains missing rows for 30 days and deduplicates probes', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'seat-catalog-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  t.after(() => fs.promises.rm(dataDir, { recursive: true, force: true }));
   let now = 1000, codex = 0, claude = 0, changed = 0;
   const catalog = new ModelCatalog({ dataDir, now: () => now, changed: () => changed++, probes: {
     codex: async () => { codex++; return [{ model: 'gpt-6.2-sol' }]; }, claude: async () => { claude++; return [{ model: 'claude-opus-5-5' }]; } } });
   await Promise.all([catalog.refresh('startup'), catalog.refresh('startup')]);
   assert.equal(codex, 1); assert.equal(claude, 0);
+  assert.deepEqual(catalog.timestamps(), { claude: null, agy: null, codex: now });
   await catalog.refresh('dialog'); assert.equal(claude, 1); assert.equal(codex, 1);
   now += 3600001; await catalog.refresh('dialog'); assert.equal(codex, 2); assert.equal(claude, 1);
   await catalog.refresh('manual'); assert.equal(codex, 3); assert.equal(claude, 2);
   catalog.accept('codex', [{ model: 'gpt-6.3-sol' }]);
   assert.equal(catalog.rows().find(row => row.model === 'gpt-6.2-sol').listed, false);
+  const stored = JSON.parse(fs.readFileSync(catalog.file, 'utf8'));
+  assert.equal(stored.version, 1);
+  assert.deepEqual(stored.claude.rows.map(row => row.family), ['claude']);
+  assert.deepEqual(stored.codex.rows.map(row => row.family), ['codex', 'codex']);
   const restored = new ModelCatalog({ dataDir, now: () => now });
+  assert.deepEqual(restored.timestamps(), catalog.timestamps());
   assert.equal(restored.rows().find(row => row.model === 'gpt-6.2-sol').source, 'cached');
   now += 30 * 86400000 + 1;
   assert.equal(restored.rows().some(row => row.model === 'gpt-6.2-sol'), false);
   assert.ok(changed >= 3);
+});
+
+test('foreground model refreshes finish while agy is pending and authentication failures cool down', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-background-'));
+  t.after(() => fs.promises.rm(dataDir, { recursive: true, force: true }));
+  const agy = deferred(), changes = [];
+  let now = 1, attempts = 0;
+  const catalog = new ModelCatalog({ dataDir, now: () => now, changed: () => changes.push(catalog.errors()), probes: {
+    agy: () => ++attempts === 1 ? agy.promise : [{ model: 'gemini-3.8-flash' }],
+    claude: () => [{ model: 'claude-opus-5-5' }], codex: () => [{ model: 'gpt-6.2-sol' }],
+  } });
+  await catalog.refresh('dialog', { waitForBackground: false });
+  assert.equal(attempts, 1);
+  assert.deepEqual(catalog.rows().map(row => row.family), ['claude', 'codex']);
+  const failure = catalog.refresh('dialog');
+  agy.reject(Object.assign(new Error('private provider error'), { catalogCode: 'auth_required' }));
+  await failure;
+  assert.deepEqual(changes.at(-1), { agy: 'auth_required' });
+  now += 59_999;
+  await catalog.refresh('dialog');
+  assert.equal(attempts, 1);
+  now++;
+  await catalog.refresh('dialog');
+  assert.equal(attempts, 2);
+  assert.deepEqual(changes.at(-1), {});
+  assert.deepEqual(catalog.rows().filter(row => row.family === 'agy').map(row => row.model), ['gemini-3.8-flash']);
 });
 
 test('newest numeric Sol defaults do not rewrite choices; rendering degrades unsupported settings visibly', () => {
@@ -128,7 +161,9 @@ test('unchanged catalog rows persist freshness across restart without publishing
 test('main uses a neutral probe folder and still lists keyed models after SDK startup fails', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neutral-probe-')); t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   let listed = 0, cwd;
-  const { probeDirectory: directory, modelProbes } = createModelProbes({ path, fs, app: { getPath: () => dataDir },
+  const { adapters } = require('../electron/features/cli-adapters/registry.cjs');
+  const directory = path.join(dataDir, 'model-probe');
+  const modelProbes = createModelProbes({ path, fs, adapters, app: { getPath: () => dataDir },
     seatModelRuntimes: { claude: new Set() }, agents: { getState: () => ({ claude: { installed: true } }) },
     claudeRuntime: { credentials: { read: () => 'synthetic-injected' } }, createSdkLoader: () => () => {},
     resolveClaudeExecutable: async () => 'injected', claudeLocator: {}, process: { env: {} }, apiEnvironment: env => env,
@@ -137,6 +172,38 @@ test('main uses a neutral probe folder and still lists keyed models after SDK st
   assert.ok(fs.statSync(directory).isDirectory()); assert.deepEqual(fs.readdirSync(directory), []);
   const rows = await modelProbes.claude();
   assert.equal(cwd, directory); assert.equal(listed, 1); assert.equal(rows[0].model, 'claude-new');
+});
+
+test('main skips an absent agy and delegates the installed catalog probe', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-probe-'));
+  t.after(() => fs.promises.rm(dataDir, { recursive: true, force: true }));
+  const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
+  let installed = false, calls = 0;
+  const probes = createModelProbes({ path, fs, app: { getPath: () => dataDir }, seatModelRuntimes: {},
+    agents: { getState: () => ({ agy: { installed } }) }, adapters: () => [{
+      manifest: adapterOf('agy').manifest,
+      modelProbe(_host, directory, available) {
+        calls++; assert.equal(available(), true); assert.equal(path.basename(directory), 'model-probe');
+        return [{ model: 'gemini-3.8-flash' }];
+      },
+    }] });
+  assert.equal(await probes.agy(), null); assert.equal(calls, 0);
+  installed = true;
+  assert.deepEqual(await probes.agy(), [{ model: 'gemini-3.8-flash' }]); assert.equal(calls, 1);
+});
+
+test('main publishes a manual install result when its version check changes the displayed state', async () => {
+  const { adapters } = require('../electron/features/cli-adapters/registry.cjs');
+  let state = null, calls = 0, changes = 0;
+  const installer = { peek: () => state, refresh() {
+    calls++; state = { installed: true, version: '1.5.18', fileShown: path.resolve('agy.exe') };
+  } };
+  const { checkManualInstalls } = createCliChecks({ adapters, process: { env: {} },
+    agents: { installers: new Map([['agy', installer]]), changed: () => changes++ } });
+  await Promise.all([checkManualInstalls(), checkManualInstalls()]);
+  assert.equal(calls, 1); assert.equal(changes, 1);
+  await checkManualInstalls();
+  assert.equal(calls, 2); assert.equal(changes, 1);
 });
 
 test('Codex probe starts a process group with a scrubbed environment and awaits the injected tree stop', async () => {

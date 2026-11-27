@@ -2,7 +2,7 @@ const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs')
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { createRpc } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc } = require('../electron/features/codex-app-server/codex-rpc.cjs');
 const { probeCapabilities } = require('../electron/features/codex-app-server/compatibility.cjs');
 
 // Fixed 0.166 binding contract, independent of the adapter's method list. All four parameter

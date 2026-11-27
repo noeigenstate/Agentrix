@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
-const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/codex-rpc.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 
 function runtimeFixture(t, mode, owner = 'gui') {

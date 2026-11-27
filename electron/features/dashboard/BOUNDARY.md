@@ -2,6 +2,7 @@
 
 Keeps private evaluation records, summarizes local model and collaboration evidence, and owns the dashboard window and owner-adopted routing weights. Incidents, findings and roundtable issues from historical Team journals stay available in reports.
 Successful in-scope runs with a permission note remain eligible for first pass and model scoring under the usual review rules.
+Quota and weights use the registered provider and model IDs, including prefixes that preserve distinct providers for models with the same name.
 The journal migration uses the shared versioned envelope and continues to read historical v0 records.
 Journal reader checks are in `tests/wire-format.test.cjs` and `tests/self-format-guard.test.cjs`.
 
@@ -25,6 +26,7 @@ Journal reader checks are in `tests/wire-format.test.cjs` and `tests/self-format
 - `electron/i18n.cjs`
 - `electron/shared/ipc.cjs`
 - `electron/features/cli-adapters/registry.cjs` (session identity and quota scope)
+- `electron/features/cli-adapters/registry.mjs` (registered model IDs and prefixes)
 - `electron/features/agents/dispatch-events.cjs` (journal envelopes)
 - `electron/features/team/inbox.cjs` (tolerant journal row reader)
 

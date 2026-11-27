@@ -1,5 +1,6 @@
 // Provider-neutral snapshots and live events. Unknown observations stay null.
-export type AgentProvider = 'claude' | 'codex';
+export type AgentProvider = 'claude' | 'codex' | 'agy';
+export type NativeTransport = 'claude-sdk' | 'codex-app-server' | 'agy-acp';
 export type SessionState = 'starting' | 'idle' | 'running' | 'waiting' | 'stopping' | 'stopped' | 'disconnected' | 'failed';
 export type SwitchPath = 'api' | 'native' | 'terminal';
 export type SwitchState = {
@@ -66,7 +67,7 @@ export type AgentEventPayloads = {
 export type AgentEventType = keyof AgentEventPayloads;
 export type AgentEvent = { [K in AgentEventType]: {
   schemaVersion: 1; eventId: string; sequence: number; connectionEpoch: string;
-  provider: AgentProvider; transport: 'claude-sdk' | 'codex-app-server';
+  provider: AgentProvider; transport: NativeTransport;
   projectId: string; terminalId: string; runtimeSessionId: string; providerSessionId: string | null;
   runId: string | null; turnId: string | null; itemId: string | null;
   receivedAtMs: number; occurredAtMs: number | null; replay: boolean; type: K; payload: AgentEventPayloads[K];

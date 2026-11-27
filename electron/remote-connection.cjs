@@ -114,7 +114,7 @@ class RemoteConnection {
     this.connectTimer.unref?.();
     this.link.send({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, guide, native: options.native === true,
       allowBackgroundTasks: options.allowBackgroundTasks === true, claudeLead: options.claudeLead ?? null,
-      dispatchHelper, dispatchModules, dispatchCompanions: companions });
+      ...(options.nativeAgent && { nativeAgent: options.nativeAgent }), dispatchHelper, dispatchModules, dispatchCompanions: companions });
   }
   onData(callback) { this.events.on('data', callback); return { dispose: () => this.events.off('data', callback) }; }
   onExit(callback) { this.events.on('exit', callback); return { dispose: () => this.events.off('exit', callback) }; }
@@ -124,6 +124,8 @@ class RemoteConnection {
     switch (message.type) {
       case 'codex-data': case 'codex-exit':
         this.events.emit('codex-process', message); return;
+      case 'agy-data': case 'agy-exit':
+        this.events.emit('agy-process', message); return;
       case 'ready':
         if (typeof message.info?.root !== 'string' || !message.info.root.startsWith('/')) { this.fail(new Error('远程目录无效。')); return; }
         clearInterval(this.connectTimer);
@@ -148,7 +150,7 @@ class RemoteConnection {
         if (!request) return;
         if (message.ok === true) request.resolve(message.value);
         else request.reject(Object.assign(new Error(String(message.error || '远程请求失败。')),
-          message.code === 'codex_cli_required' ? { code: message.code } : {}));
+          ['codex_cli_required', 'agy_cli_required', 'agy_cli_outdated', 'agy_role_server_conflict'].includes(message.code) ? { code: message.code } : {}));
       }
     }
   }

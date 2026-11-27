@@ -1,3 +1,5 @@
+const { agentOfModel } = require('../cli-adapters/registry.mjs');
+
 function createCodexServices(host) {
   const { createCodexLocator, scanDrives, fixedDrives, os, path, app, readNativeJson, writeNativeJson,
     CodexAccountUsage, adapterOf, createResetRpc, createProjectAccounts, readClaudeAccountCache, env = process.env } = host;
@@ -21,9 +23,80 @@ function createCodexServices(host) {
     const previous = readNativeJson(file, []);
     writeNativeJson(file, [...(Array.isArray(previous) ? previous : []), event].slice(-500));
   } });
-  const projectAccounts = createProjectAccounts({ codex: codexAccounts, readClaude: readClaudeAccountCache });
+  const projectAccounts = withFocusedAccountReaders(createProjectAccounts({ codex: codexAccounts, readClaude: readClaudeAccountCache }), {
+    cwd: () => app.getPath('userData'), seats: projectId => host.routing?.seatsInfo(projectId)?.effective,
+    registered: () => [...host.agents.installers.keys()].map(adapterOf),
+  });
 
   return { codexLocator, codexExecutable, codexAccounts, projectAccounts };
+}
+
+// The visible usage pane supplies the refresh signal. Share one recent reading per provider and CLI home across panes.
+function withFocusedAccountReaders(base, { cwd, seats = () => null, now = Date.now, registered }) {
+  const focusedReaders = () => registered().filter(({ usage }) => usage?.focusedLimits);
+  const cache = new Map();
+  let focus;
+
+  async function load({ manifest: { id }, usage }, env) {
+    const key = usage.quotaHome({}, env), held = cache.get(id);
+    if (held && held.key === key && !held.abort.signal.aborted) {
+      if (held.pending) return held.pending;
+      if (held.value && now() < held.nextReadAt) return held.value;
+    }
+    held?.abort?.abort();
+    const entry = { key, abort: new AbortController() };
+    cache.set(id, entry);
+    entry.pending = Promise.allSettled([held?.pending]).then(() => entry.abort.signal.aborted ? null
+      : usage.accountReader({ env, cwd: cwd(), now, signal: entry.abort.signal }))
+      .then(value => {
+        if (entry.abort.signal.aborted) return null;
+        entry.nextReadAt = now() + usage.focusedInterval;
+        return entry.value = value;
+      }).finally(() => { entry.pending = null; });
+    return entry.pending;
+  }
+
+  return {
+    ...base,
+    snapshot(id) {
+      const original = base.snapshot(id);
+      return focus?.id === id && focus.accounts ? { ...original, ...focus.accounts } : original;
+    },
+    focusedLimits(id) {
+      if (focus?.id !== id || !focus?.accounts) return {};
+      return Object.fromEntries(focusedReaders().flatMap(({ manifest: { id: agent }, usage }) => {
+        const account = focus.accounts[agent];
+        return account ? [[agent, usage.focusedLimits(account)]] : [];
+      }));
+    },
+    close(id) {
+      const closing = base.close(id);
+      if (id && focus?.id !== id) return closing;
+      focus = null;
+      const pending = [...cache.values()].flatMap(entry => {
+        if (!entry.pending) return [];
+        entry.abort.abort();
+        return [entry.pending];
+      });
+      if (!id) cache.clear();
+      return Promise.allSettled([closing, ...pending]);
+    },
+    async read(project, options) {
+      const env = options.env;
+      if (!project || project.kind === 'ssh' || (env.AGENTRIX_DATA_DIR && env.AGENTRIX_TEST_AGENTS !== '1')) return base.read(project, options);
+      if (focus?.id !== project.id) focus = { id: project.id };
+      const current = focus, revision = current.revision = (current.revision ?? 0) + 1;
+      const runningOrSaved = [project, ...(project.terminals ?? [])].flatMap(({ restore }) => restore?.threadId ? [restore.agent] : []);
+      const selected = Object.values(seats(project.id) ?? {}).map(({ model }) => agentOfModel(model));
+      const eligible = new Set([...(project.quotaAgents ?? []), ...runningOrSaved, ...selected]);
+      const readers = focusedReaders().filter(({ manifest }) => eligible.has(manifest.id));
+      const [original, accounts] = await Promise.all([base.read(project, options), Promise.allSettled(readers.map(adapter => load(adapter, env)))]);
+      if (focus !== current || current.revision !== revision || !original) return original;
+      current.accounts = Object.fromEntries(accounts.flatMap((result, index) => result.status === 'fulfilled' && result.value
+        ? [[readers[index].manifest.id, result.value]] : []));
+      return { ...original, ...current.accounts };
+    },
+  };
 }
 
 function createClaudeAccountService(host) {
@@ -60,7 +133,25 @@ function createCliChecks(host) {
     return host.claudeRuntime?.trackCli?.(check) ?? check;
   }
 
-  return { inspectClaude, checkClaude, checkCodex };
+  let manualPending, manualCheckedAt = -Infinity;
+  async function checkManualInstalls(mode) {
+    const { agents, adapters, process = globalThis.process } = host;
+    if (process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_AGENTS !== '1') return;
+    if (manualPending) return manualPending;
+    if (mode === 'focus' && Date.now() - manualCheckedAt < 60000) return;
+    const manual = adapters().filter(({ manifest }) => manifest.install.commands);
+    if (!manual.length) return;
+    manualCheckedAt = Date.now();
+    const snapshot = () => JSON.stringify(manual.map(({ manifest: { id } }) => agents.installers.get(id).peek()));
+    const before = snapshot();
+    manualPending = Promise.allSettled(manual.map(({ manifest: { id } }) =>
+      Promise.resolve().then(() => agents.installers.get(id).refresh(process.env)))).then(() => {
+      if (snapshot() !== before) agents.changed();
+    }).finally(() => { manualPending = null; });
+    return manualPending;
+  }
+
+  return { inspectClaude, checkClaude, checkCodex, checkManualInstalls };
 }
 
 function createUsageHost(host) {
@@ -231,7 +322,7 @@ function createUsageHost(host) {
     usageRolloverTimer = setTimeout(() => {
       usageRolloverTimer = null; usageRolloverAt = null;
       if (Date.now() >= next) {
-        for (const s of sessions.values()) if (s.cliActive && s.usage?.agent === 'codex') s.usageAccount?.refresh();
+        for (const s of sessions.values()) if (s.cliActive) s.usage?.facet?.terminal?.refreshAtRollover?.(s);
         void refreshClaudeAccounts();
       }
       scheduleUsageRollover();
@@ -283,40 +374,21 @@ function watchClaudeAccountFolders({ fs, path, claudeAccountFiles, queueClaudeAc
 }
 
 function createModelProbes(host) {
-  const { app, path, fs, seatModelRuntimes, agents, loadCodexProbe, probeCodex, spawn, codexExecutable,
-    probeClaude, createSdkLoader, resolveClaudeExecutable, claudeLocator, apiEnvironment, listModels, netRequest, electronNet, process = globalThis.process } = host;
+  const { app, path, fs, seatModelRuntimes, agents, adapters } = host;
   const probeDirectory = path.join(app.getPath('userData'), 'model-probe');
   fs.mkdirSync(probeDirectory, { recursive: true });
   const liveModels = async family => {
-    for (const runtime of seatModelRuntimes[family]) {
+    for (const runtime of seatModelRuntimes[family] ?? []) {
       try { await runtime.models(); return true; } catch { /* A closing runtime is not a catalog source. */ }
     }
-    return null;
+    return false;
   };
-  const modelProbes = {
-    codex: async () => {
-      const live = await liveModels('codex');
-      if (live || !agents.getState().codex?.installed) return null;
-      const { createRpc, stopProcess, workerEnvironment } = await loadCodexProbe();
-      return probeCodex({ rpcFactory: createRpc, stop: stopProcess, workerEnvironment, spawn,
-        executable: codexExecutable, cwd: probeDirectory, env: process.env });
-    },
-    claude: async () => {
-      const live = await liveModels('claude'); if (live) return null;
-      const key = host.claudeRuntime?.credentials.read();
-      let rows = [];
-      try { if (agents.getState().claude?.installed) rows = await probeClaude({ loadSdk: createSdkLoader({ packaged: app.isPackaged }), options: {
-        cwd: probeDirectory, pathToClaudeCodeExecutable: await resolveClaudeExecutable({ locator: claudeLocator }),
-        ...(key ? { env: apiEnvironment(process.env, key) } : {}) } }); } catch { /* The keyed model list is independent of the SDK probe. */ }
-      if (key) {
-        const listed = await listModels(key, { request: netRequest(electronNet) });
-        if (Array.isArray(listed.models)) for (const model of listed.models) if (!rows.some(row => (row.resolvedModel || row.value) === model)) rows.push({ model });
-      }
-      return rows;
-    },
-  };
-  return { probeDirectory, modelProbes };
+  return Object.fromEntries(adapters().map(({ manifest: { id, install }, modelProbe }) => [id, async () => {
+    const installed = () => agents.getState()[id]?.installed === true;
+    if (!modelProbe || install.commands && !installed() || await liveModels(id)) return null;
+    return modelProbe(host, probeDirectory, installed);
+  }]));
 }
 
 module.exports = { createUsageHost, createCodexServices, createClaudeAccountService, createCliChecks, createModelProbes,
-  watchClaudeAccountFolders };
+  watchClaudeAccountFolders, withFocusedAccountReaders };

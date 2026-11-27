@@ -3,11 +3,11 @@ import { CaretDown } from '@phosphor-icons/react';
 import type { Decision, DecisionKind } from './decisions';
 import { snooze } from './decisions';
 import { t } from '../../shared/i18n';
+import { screenLabel } from '../cli-screens/index';
 import { ReviewCard } from './ReviewCard';
 
 const KINDS: Record<DecisionKind, string> = { approval: '需要审批', question: '需要回答', choice: '需要选择', signin: '需要登录', attention: '需要你处理', review: '交付审查' };
 export const kindLabel = (kind: DecisionKind) => t(KINDS[kind]);
-const AGENTS = { claude: 'Claude Code', codex: 'Codex' };
 
 // How long a decision has waited, in the words of a clock on the wall.
 export function waited(since: number, now: number) {
@@ -27,8 +27,8 @@ function approvalTitle(decision: Decision) {
 export function decisionTitle(decision: Decision) {
   if (decision.kind === 'approval') return approvalTitle(decision);
   if (decision.kind === 'review') return decision.title ? t('交付：{task}', { task: decision.title }) : t('{project} 交付了这一轮的工作', { project: decision.projectName });
-  if (decision.kind === 'signin') return t('登录 {agent}', { agent: AGENTS[decision.agent] });
-  if (decision.kind === 'attention') return decision.message || t('{agent} 在等你', { agent: AGENTS[decision.agent] });
+  if (decision.kind === 'signin') return t('登录 {agent}', { agent: screenLabel(decision.agent) });
+  if (decision.kind === 'attention') return decision.message || t('{agent} 在等你', { agent: screenLabel(decision.agent) });
   if (trustsFolder(decision)) return t('要信任这个文件夹吗？');
   return decision.title;
 }
@@ -49,13 +49,13 @@ export function DecisionCard({ decision, now, onOpen, onDone, onError }: {
   useEffect(() => setLater(false), [decision.id]);
   const title = decisionTitle(decision);
   const kind = <span className="decision-kind">{kindLabel(decision.kind)}</span>;
-  const source = `${decision.projectName}${decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · ${AGENTS[decision.agent]} · ${waited(decision.since, now)}`;
-  if (decision.kind === 'review') return <ReviewCard decision={decision} now={now} kind={kind} onOpen={onOpen} onDone={onDone} onError={onError} />;
+  const source = `${decision.projectName}${decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · ${screenLabel(decision.agent)}`;
+  if (decision.kind === 'review') return <ReviewCard decision={decision} now={now} kind={kind} source={source} onOpen={onOpen} onDone={onDone} onError={onError} />;
   const putOff = (minutes: number) => { snooze(decision.id, Date.now() + minutes * 60000); setLater(false); onDone(t('已暂缓，{time} 后再提醒；执行仍在等你。', { time: minutes < 60 ? t('{count} 分钟', { count: minutes }) : t('{count} 小时', { count: minutes / 60 }) })); };
   return <article className={`decision-card is-${decision.kind}`} data-approval-mode="terminal-only" aria-label={title}>
     <header className="decision-card-head">
       {kind}<span className="decision-mode">{t('终端模式')}</span>
-      <span className="decision-source">{source}</span>
+      <span className="decision-source">{source} · {waited(decision.since, now)}</span>
     </header>
     <h2 className="decision-title">{title}</h2>
     <div className="decision-body">

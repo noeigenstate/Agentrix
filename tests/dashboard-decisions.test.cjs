@@ -16,6 +16,14 @@ async function lab(t, options = {}) {
   return { directory, store, file: path.join(directory, 'dashboard', 'decisions.jsonl'), previous: path.join(directory, 'dashboard', 'decisions.1.jsonl') };
 }
 
+test('adopted weights accept registered model prefixes and persist the model identity', async t => {
+  const { store } = await lab(t);
+  const agy = { ...weight(0.8), model: 'agy:claude-opus-5-5' };
+  assert.equal(await store.decide('new', 'adopted', agy), true);
+  assert.equal(await store.decide('invalid', 'adopted', { ...agy, model: 'other:claude-opus-5-5' }), false);
+  assert.deepEqual(currentWeights(await store.read()), [agy]);
+});
+
 test('latest adopted weight wins and withdrawal restores the earlier still-adopted suggestion', async t => {
   const { store } = await lab(t);
   await store.decide('first', 'adopted', weight(0.8));

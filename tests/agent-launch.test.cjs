@@ -205,32 +205,98 @@ test('public state reserves the reading surface during agent startup and release
   session.status = 'shell'; session.agentStarting = false; assert.equal(terminal().agentStarting, false, 'a plain shell stays visible');
 });
 
-test('agent:launch refuses the removed native mode without starting or replacing a session, and sends Codex to app-server', async () => {
+test('agent:launch refuses the removed native mode and opens Codex and agy through the native router', async () => {
   const handlers = {}, starts = [], deleted = [];
   const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
     adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf,
     launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: () => assert.fail('no Codex TUI'),
     store: { findTerminal: () => ({ record: {} }) }, nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
   registerAgentLaunch(context, context.handle);
-  for (const agent of ['claude', 'codex']) await assert.rejects(handlers['agent:launch']('fixture', agent, 'native'), /Unsupported agent session mode/);
+  for (const agent of ['claude', 'codex', 'agy']) await assert.rejects(handlers['agent:launch']('fixture', agent, 'native'), /Unsupported agent session mode/);
   assert.deepEqual(starts, []); assert.deepEqual(deleted, []);
   assert.equal(await handlers['agent:launch']('fixture', 'codex', 'new'), true);
-  assert.equal(starts.length, 1); assert.equal(starts[0][0], 'fixture'); assert.equal(starts[0][1].agent, 'codex');
+  for (const mode of ['new', 'continue']) assert.equal(await handlers['agent:launch']('fixture', 'agy', mode), true);
+  assert.deepEqual(starts, [['fixture', { agent: 'codex', resume: false }], ['fixture', { agent: 'agy', resume: false }],
+    ['fixture', { agent: 'agy', resume: true }]]);
 });
 
-test('the launcher offers both agents and the two start modes, with no terminal mode or managed Claude action', t => {
+test('the launcher keeps its two start modes and hides assistants that need a manual installation until they are found', t => {
   const { hookHarness } = require('./helpers/hook-harness.cjs'), React = require('react');
   const previous = global.window; global.window = { agentrix: { getAgents: async () => ({ ok: true, value: { codex: { installed: true }, claude: { installed: true } } }), onAgents: () => () => {}, agentHistory: async () => ({ ok: true, value: { claude: null, codex: null } }) } };
   t.after(() => { global.window = previous; });
   const ui = hookHarness('src/features/terminal/AgentLauncher.tsx', { '@phosphor-icons/react': { CircleNotch() {}, Terminal() {} },
-    './AgentBrandIcon.ts': { ClaudeLogo() {}, CodexLogo() {} }, './time': { relativeTime: () => '' }, './i18n': { t: text => text }, './agent-launcher.css': {} });
+    './AgentBrandIcon.ts': { brandIconOf: () => () => null }, './time': { relativeTime: () => '' }, './i18n': { t: text => text }, './agent-launcher.css': {} });
   const props = { terminalId: 'fixture', projectId: 'fixture', onAction: async () => {}, onOpenTerminal() {} };
   const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : React.isValidElement(node) ? [node, ...nodes(node.props.children)] : [];
   const first = ui.render('AgentLauncher', props).result;
   const buttons = nodes(first).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent '));
   assert.deepEqual(nodes(first).filter(node => node.props.role === 'radio').map(node => node.props.children), ['开始新开发', '继承开发历史']);
   assert.equal(buttons.length, 2);
-  assert.equal(nodes(first).some(node => typeof node.props.children === 'string' && /SDK/.test(node.props.children)), false); ui.dispose();
+  assert.equal(nodes(first).some(node => typeof node.props.children === 'string' && /SDK/.test(node.props.children)), false);
+  global.window.agentrix.nativeSession = { usage: async () => ({ ok: false }) };
+  const remote = ui.render('AgentLauncher', { ...props, kind: 'ssh' }).result;
+  assert.deepEqual(nodes(remote).filter(node => node.props.className?.startsWith('agent-launcher-agent '))
+    .map(node => node.props.className), ['agent-launcher-agent is-claude', 'agent-launcher-agent is-agy', 'agent-launcher-agent is-codex']);
+  ui.dispose();
+});
+
+test('an SSH resume carries both the saved conversation settings and the default seat for a different conversation', () => {
+  const { randomUUID } = require('node:crypto');
+  const project = { id: 'remote', kind: 'ssh', path: '/remote/project' }, nativeSpecs = new Map();
+  const saved = { agent: 'agy', threadId: randomUUID(), nativeModelOptions: { model: 'gemini-3.8-flash', effort: 'low' } };
+  const seat = { model: 'gemini-4-neon', effort: 'high' };
+  const host = createHostInputs({ findProject: () => project, sessions: new Map(), nativeSpecs, randomUUID,
+    store: { findTerminal: () => ({ record: { restore: saved } }), settings: {} },
+    routing: { leadOptions: (_id, _agent, options) => { assert.equal(options.remote, true); return seat; } } });
+  const spec = host.nativeSpec('terminal', 'agy', true);
+  assert.partialDeepStrictEqual(spec, { ...saved.nativeModelOptions, providerSessionId: saved.threadId, launchModelOptions: seat });
+  assert.equal(nativeSpecs.get('terminal'), spec);
+});
+
+test('the SSH launcher reads agy history only on opening its dropdown or clicking agy', { timeout: 5000 }, async t => {
+  const { hookHarness } = require('./helpers/hook-harness.cjs'), React = require('react');
+  const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : React.isValidElement(node) ? [node, ...nodes(node.props.children)] : [];
+  const sessions = [{ id: 'newest', title: 'Newest', at: null }, { id: 'older', title: 'Older', at: null }];
+  const previous = global.window;
+  t.after(() => { global.window = previous; });
+  for (const dropdown of [true, false]) {
+    const resumed = Promise.withResolvers();
+    let historyReads = 0;
+    const projectId = 'project', terminalId = 'terminal';
+    const success = value => ({ ok: true, value });
+    global.window = { agentrix: {
+      getAgents: async () => success({}), onAgents: () => () => {},
+      agentHistory: () => Promise.resolve(success({ codex: { id: 'known', at: 1 } })),
+      getState: async () => success({ projects: [{ id: projectId, terminals: [{ id: terminalId }] }] }),
+      nativeSession: {
+        usage: async () => ({ ok: false }),
+        history: async (...args) => { historyReads++; assert.deepEqual(args, [terminalId, 'agy']); return success(sessions); },
+        start: async () => assert.fail('a history selection should resume'),
+        resume: async (...args) => { resumed.resolve(args); return success(true); },
+      },
+    } };
+    const ui = hookHarness('src/features/terminal/AgentLauncher.tsx', {
+      '@phosphor-icons/react': { CircleNotch() {}, Terminal() {}, CaretDown() {}, Check() {} },
+      './time': { relativeTime: () => '' }, './i18n': { t: text => text },
+      './native-store.ts': { refreshNativeSession() {} },
+    });
+    const render = () => nodes(ui.render('AgentLauncher', { terminalId, projectId, kind: 'ssh', onOpenTerminal() {},
+      onAction: async action => (await action).value }).result);
+    try {
+      render();
+      await global.window.agentrix.agentHistory();
+      const card = render();
+      assert.equal(card.find(node => node.props.role === 'radio' && node.props.children === '继承开发历史').props['aria-checked'], true);
+      assert.equal(historyReads, 0);
+      if (dropdown) {
+        await card.find(node => node.props.onOpen).props.onOpen();
+        render().find(node => node.props.onOpen).props.onChange('older');
+      }
+      render().find(node => node.props.className === 'agent-launcher-agent is-agy').props.onClick();
+      assert.deepEqual(await resumed.promise, [terminalId, { agent: 'agy', sessionId: dropdown ? 'older' : 'newest' }]);
+      assert.equal(historyReads, 1);
+    } finally { ui.dispose(); }
+  }
 });
 
 test('a terminal lead takes its seat only in conductor mode; in native mode the plain CLI picks its own model', t => {

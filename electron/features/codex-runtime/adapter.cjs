@@ -16,4 +16,11 @@ function createInstall(locator = processLocator) {
   };
 }
 
-module.exports = { createInstall, transcript: require('./transcript.cjs') };
+async function modelProbe(host, cwd, installed) {
+  if (!installed()) return null;
+  const { loadCodexProbe, probeCodex, spawn, codexExecutable, process = globalThis.process } = host;
+  const { createRpc, stopProcess, workerEnvironment } = await loadCodexProbe();
+  return probeCodex({ rpcFactory: createRpc, stop: stopProcess, workerEnvironment, spawn, executable: codexExecutable, cwd, env: process.env });
+}
+
+module.exports = { createInstall, modelProbe, transcript: require('./transcript.cjs') };

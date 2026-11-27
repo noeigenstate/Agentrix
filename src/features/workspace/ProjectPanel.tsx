@@ -12,6 +12,7 @@ import { toggleDictation, useVoice } from '../voice/voice-input';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
 import { ProjectImageDialog } from './ProjectImageDialog';
+import { agentShortLabel } from '../../shared/agent-label.ts';
 
 const api = window.agentrix;
 
@@ -23,7 +24,8 @@ function statusText(project: Project) {
   if (project.cliActive && project.codexActivity === 'working') return t('正在处理');
   if (project.unread) return t('等待你查看');
   if (project.error) return t('需要检查');
-  if (project.status === 'codex') return project.codexActivity === 'complete' ? t('本轮已完成') : project.codexActivity === 'interrupted' ? t('已中断') : t('{agent} 会话中', { agent: agentName(project.agent) });
+  if (project.status === 'codex') return project.codexActivity === 'complete' ? t('本轮已完成') : project.codexActivity === 'interrupted'
+    ? t('已中断') : t('{agent} 会话中', { agent: agentShortLabel(project.agent ?? 'codex') });
   if (project.status === 'shell') return t('终端就绪');
   if (project.status === 'starting') return project.kind === 'ssh' ? t('正在连接 SSH') : t('正在启动');
   // A session with no terminal (the API) that ended is no exited terminal.
@@ -31,7 +33,6 @@ function statusText(project: Project) {
   return t('尚未启动');
 }
 
-function agentName(agent: Project['agent']) { return agent === 'claude' ? 'Claude' : 'Codex'; }
 
 function isRoundComplete(project: Project) {
   return project.cliActive && project.codexActivity === 'complete' && !project.unread && !project.error;
@@ -120,7 +121,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
           <button role="menuitem" onClick={() => action(() => void addTerminal())}><Plus size={16} />{t('新建终端并分屏')}<span className="menu-shortcut" aria-hidden="true">{shortcut('newTerminal')}</span></button>
           <button role="menuitem" onClick={() => action(() => onRevealProject(project.id))}><FolderOpen size={16} />{t('打开项目目录')}</button>
           <button role="menuitem" onClick={() => action(() => setImageOpen(true))}><ImageSquare size={16} />{t('项目图片…')}</button>
-          {currentTerminal && <button role="menuitem" onClick={() => action(() => { onAction(api.restartTerminal(currentTerminal.id)); })}><ArrowCounterClockwise size={16} />{project.kind === 'ssh' ? t('重新连接 SSH') : t('重启当前终端')}</button>}
+          {currentTerminal && currentTerminal.nativeMode !== 'agy-acp' && <button role="menuitem" onClick={() => action(() => { onAction(api.restartTerminal(currentTerminal.id)); })}><ArrowCounterClockwise size={16} />{project.kind === 'ssh' ? t('重新连接 SSH') : t('重启当前终端')}</button>}
           <div className="menu-divider" />
           <button role="menuitem" className="danger-text" onClick={() => action(() => { onAction(api.removeProject(project.id)); })}><X size={16} />{t('移除项目')}<span className="menu-shortcut" aria-hidden="true">{shortcut('removeProject')}</span></button>
         </div>}

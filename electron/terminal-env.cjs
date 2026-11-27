@@ -11,7 +11,7 @@ function createTerminalEnvironment(source, bootstrapFile, { allowBackgroundTasks
     const name = key.toUpperCase();
     if (['NO_COLOR', 'NODE_DISABLE_COLORS', 'TERM', 'COLORTERM', 'CLICOLOR', 'TERM_PROGRAM',
       'AGENTRIX_BOOTSTRAP', 'ELECTRON_RUN_AS_NODE', 'AGENTRIX_DATA_DIR', 'AGENTRIX_DEV_URL', 'CLAUDE_CODE_ENTRYPOINT',
-      'AGENTRIX_CLAUDE_EXECUTABLE', 'AGENTRIX_CODEX_EXECUTABLE'].includes(name)
+      'AGENTRIX_CLAUDE_EXECUTABLE', 'AGENTRIX_CODEX_EXECUTABLE', 'AGENTRIX_AGY_EXECUTABLE'].includes(name)
       || (name === 'FORCE_COLOR' && ['0', 'false', ''].includes(String(env[key]).toLowerCase()))) {
       delete env[key];
     }

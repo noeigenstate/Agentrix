@@ -6,7 +6,7 @@ const os = require('node:os');
 const http = require('node:http');
 const { once } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
-const { createRpc } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc } = require('../electron/features/codex-app-server/codex-rpc.cjs');
 
 test('real Codex 0.166 validates reset params and rejects an isolated profile before any consume HTTP request', {
   skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 30000,

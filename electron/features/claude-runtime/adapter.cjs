@@ -24,4 +24,25 @@ function createInstall(locator = createLocator()) {
   };
 }
 
-module.exports = { createInstall, transcript: require('./transcript.cjs'), events: { hooks: require('./hooks.cjs') } };
+async function modelProbe(host, cwd, installed) {
+  const { app, probeClaude, createSdkLoader, resolveClaudeExecutable, claudeLocator, apiEnvironment,
+    listModels, netRequest, electronNet, process = globalThis.process } = host;
+  const key = host.claudeRuntime?.credentials.read();
+  let rows = [];
+  try {
+    if (installed()) rows = await probeClaude({
+      loadSdk: createSdkLoader({ packaged: app.isPackaged }),
+      options: { cwd, pathToClaudeCodeExecutable: await resolveClaudeExecutable({ locator: claudeLocator }),
+        ...(key ? { env: apiEnvironment(process.env, key) } : {}) },
+    });
+  } catch { /* The keyed model list is independent of the SDK probe. */ }
+  if (key) {
+    const listed = await listModels(key, { request: netRequest(electronNet) });
+    if (Array.isArray(listed.models)) for (const model of listed.models) {
+      if (!rows.some(row => (row.resolvedModel || row.value) === model)) rows.push({ model });
+    }
+  }
+  return rows;
+}
+
+module.exports = { createInstall, modelProbe, transcript: require('./transcript.cjs'), events: { hooks: require('./hooks.cjs') } };

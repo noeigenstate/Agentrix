@@ -20,7 +20,7 @@ import { t } from '../../shared/i18n';
 // The draft handoff of a run-mode switch, bound to its terminal by the card whatever the card shows (the reading view, the native view or the raw terminal),
 // so a switch never waits for a view that is not there: a card without a message box hands over an empty draft. The views never reach the bridge.
 function WithHandoff({ terminal, children }: { terminal: ProjectTerminal; children: (handoff: Handoff) => ReactNode }) {
-  const surface = terminal.sessionId ? 'terminal' : terminal.nativeMode === 'claude-sdk' ? 'api' : terminal.nativeMode === 'codex-app-server' ? 'native' : null;
+  const surface = terminal.sessionId ? 'terminal' : terminal.nativeMode === 'claude-sdk' ? 'api' : terminal.nativeMode ? 'native' : null;
   return <>{children(useHandoff(terminal.id, terminal.nativeRuntimeSessionId ?? null, terminal.switchState, surface))}</>;
 }
 
@@ -92,7 +92,7 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
         {/* Only with several splits, and only while the pointer or the keyboard is in one: its drag grip (splits are reordered by it), restart and close, in its corner. */}
         {multiple && <div className="terminal-split-tools">
           <span className="terminal-split-grip" title={t('拖动调整顺序')} aria-hidden="true"><DotsSixVertical size={14} /></span>
-          <button className="icon-button" title={t('重启此终端')} aria-label={t('重启 {name}', { name })} onClick={() => void onAction(window.agentrix.restartTerminal(terminal.id))}><ArrowCounterClockwise size={13} /></button>
+          {terminal.nativeMode !== 'agy-acp' && <button className="icon-button" title={t('重启此终端')} aria-label={t('重启 {name}', { name })} onClick={() => void onAction(window.agentrix.restartTerminal(terminal.id))}><ArrowCounterClockwise size={13} /></button>}
           <button className="icon-button" title={t('关闭此终端')} aria-label={t('关闭 {name}', { name })} onClick={() => void onAction(window.agentrix.closeTerminal(terminal.id))}><X size={13} /></button>
         </div>}
         <WithHandoff terminal={terminal}>{handoff => <div className="terminal-split-body" data-reading={reading || native || !!terminal.agentStarting}>

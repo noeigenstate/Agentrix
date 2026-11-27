@@ -25,8 +25,9 @@ export function selectMenuLeft(triggerLeft: number, menuWidth: number, windowWid
 
 // A listbox in place of the native <select>, whose pop-up the system draws (its width, corners, shadow and blue highlight are not ours).
 // The menu fits its options with the trigger as its minimum width, and flips upward when the window has no room below.
-export function Select({ value, options, onChange, label, className = '', disabled = false, icon }: {
+export function Select({ value, options, onChange, onOpen, label, className = '', disabled = false, icon }: {
   value: string; options: SelectOption[]; onChange: (value: string) => void; label: string; className?: string; disabled?: boolean; icon?: ReactNode;
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -39,7 +40,7 @@ export function Select({ value, options, onChange, label, className = '', disabl
   const host = trigger.current?.closest('dialog') ?? document.body;
 
   const close = (refocus: boolean) => { setOpen(false); if (refocus) trigger.current?.focus(); };
-  const openMenu = () => { setActive(Math.max(0, options.findIndex(option => option.value === value && !option.disabled))); setOpen(true); };
+  const openMenu = () => { setActive(Math.max(0, options.findIndex(option => option.value === value && !option.disabled))); setOpen(true); onOpen?.(); };
   const choose = (index: number) => { const option = options[index]; if (!option || option.disabled) return; if (option.value !== value) onChange(option.value); close(true); };
   const step = (from: number, delta: number) => {
     for (let at = from + delta; at >= 0 && at < options.length; at += delta) if (!options[at].disabled) return at;

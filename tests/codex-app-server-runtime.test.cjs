@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const { EventEmitter, once } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { createCodexRuntime, replaceContextCwd, releaseTurnInputs } = require('../electron/features/codex-app-server/index.cjs');
-const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/codex-rpc.cjs');
 const { mergeLimits, tokenUsage } = require('../electron/features/codex-app-server/account.cjs');
 const { createEvents } = require('../electron/features/codex-app-server/events.cjs');
 

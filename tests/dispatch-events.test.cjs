@@ -199,6 +199,7 @@ test('Bash commands, prompt filenames and helper stdout text never create or upd
 test('bad keys, projects, unknown ids, malformed fields and oversized payloads are rejected', t => {
   const f = session(t), launch = start();
   for (const event of [start(undefined, { sessionKey: 'wrong' }), start(undefined, { projectId: 'other' }), start(undefined, { id: 'not-a-uuid' }),
+    start(undefined, { agent: 'unregistered' }), start(undefined, { agent: 'constructor' }),
     start(undefined, { title: 'x'.repeat(1025) }), start(undefined, { model: 'x\ny' }), start(undefined, { fast: 'true' }), start(undefined, { declared: {} }),
     start(undefined, { cwd: 'x'.repeat(4097) }), start(undefined, { extra: 'x'.repeat(17000) }), start(undefined, { sessionId: null }),
     start(undefined, { log: '/other.log' }), start(undefined, { log: launch.out }),

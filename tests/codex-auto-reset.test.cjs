@@ -13,7 +13,7 @@ function fixture(t, mode = 'ready') {
   const env = { SystemRoot: process.env.SystemRoot, PATH: '', HOME: root, USERPROFILE: root, PROGRAMDATA: path.join(root, 'programdata'),
     CODEX_HOME: root, FAKE_RESET_WIRE: wire, FAKE_RESET_STATE: path.join(root, 'state.json'), FAKE_RESET_MODE: mode };
   const options = { cwd: root, codexHome: root, env, provider: 'openai', accountLaunch: 'model-only-v1', owner: 'gui' };
-  const consume = options => consumeCodexResetCredit({ ...options, rpcFactory: require('../electron/features/codex-app-server/rpc.cjs').createRpc,
+  const consume = options => consumeCodexResetCredit({ ...options, rpcFactory: require('../electron/features/codex-app-server/codex-rpc.cjs').createRpc,
     scopeCheck: async () => null, executable: 'offline-only', launch: (_file, _args, spec) => {
     const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-reset-client.cjs')], spec); children.push(child); return child;
   }, stop: child => { child?.stdin.end(); } });

@@ -29,11 +29,12 @@ test('status checks a fake PATH without spawning tools and ignores directories',
   const { env, folder, add } = fixture(t);
   const fake = fakeLaunch();
   const manager = new AgentsManager({ env, launch: fake.launch });
-  assert.deepEqual(manager.getState(), { codex: { installed: false }, claude: { installed: false }, npm: false, installing: null, message: '', error: '' });
+  const absent = { agy: { installed: false }, claude: { installed: false } };
+  assert.deepEqual(manager.getState(), { ...absent, codex: { installed: false }, npm: false, installing: null, message: '', error: '' });
   add('codex'); add('npm'); fs.mkdirSync(path.join(folder, windows ? 'claude.exe' : 'claude'));
   assert.equal(onPath('codex', env), true);
   if (!windows) fs.rmdirSync(path.join(folder, 'claude'));
-  assert.deepEqual(manager.getState(), { codex: { installed: true }, claude: { installed: false }, npm: true, installing: null, message: '', error: '' });
+  assert.deepEqual(manager.getState(), { ...absent, codex: { installed: true }, npm: true, installing: null, message: '', error: '' });
   add('claude'); assert.equal(manager.getState().claude.installed, true);
   assert.equal(fake.calls.length, 0);
 });

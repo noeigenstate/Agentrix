@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
-const SHIM_NAMES = ['.agentrix-shims', 'codex', 'codex.cmd', 'codex.ps1', 'claude', 'claude.cmd', 'claude.ps1'];
+const SHIM_MARKER = '.agentrix-shims';
 const ZSH_PHASES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'];
 const HOOK_FILES = ['hooks/path.sh', 'hooks/bash-env.sh', 'hooks/claude-env.sh', 'hooks/owner.sh', 'hooks/terminal-wire.sh',
   'hooks/zsh/phase.zsh', ...ZSH_PHASES.map(name => `hooks/zsh/${name}`)];
@@ -33,8 +33,9 @@ function terminalFacets() {
 
 function shimFiles() {
   // The SSH carrier accepts CJS modules only. Its launcher envelope is the same files, never a second implementation.
-  if (!fs.existsSync(path.join(__dirname, 'codex'))) return require(carriedEnvelope());
-  return Object.fromEntries(SHIM_NAMES.map(name => [name, fs.readFileSync(path.join(__dirname, name), 'utf8')]));
+  if (!fs.existsSync(terminalSource)) return require(carriedEnvelope());
+  const names = Object.keys(terminalFacets()).flatMap(agent => [agent, agent + '.cmd', agent + '.ps1']);
+  return Object.fromEntries([SHIM_MARKER, ...names].map(name => [name, fs.readFileSync(path.join(__dirname, name), 'utf8')]));
 }
 
 // The start-up hooks a packaged app installs beside the launchers. SSH shims are deferred, so they are not carried.
@@ -67,7 +68,7 @@ function withShims(source, { depth, runId, proof }) {
   const inherited = env[key] || '';
   for (const name of Object.keys(env)) if (name.toUpperCase() === 'PATH' || /^AGENTRIX_(?:DISPATCH_DEPTH|RUN_ID|RUN_PROOF|SHIM_NODE)$/i.test(name)) delete env[name];
   // SSH shims are deferred: a carried module without an installed marker never changes a remote worker's PATH.
-  const installed = fs.existsSync(path.join(__dirname, '.agentrix-shims'));
+  const installed = fs.existsSync(path.join(__dirname, SHIM_MARKER));
   const same = folder => process.platform === 'win32' ? path.resolve(folder.replace(/^"|"$/g, '')).toLowerCase() === __dirname.toLowerCase() : folder === __dirname;
   env[key] = installed ? [__dirname, ...inherited.split(path.delimiter).filter(folder => !same(folder))].join(path.delimiter) : inherited;
   env.AGENTRIX_DISPATCH_DEPTH = String(depth);
@@ -94,7 +95,7 @@ function withShims(source, { depth, runId, proof }) {
 
 // Whether a hook value lies in an Agentrix shim folder (<shims>/hooks/<file> or <shims>/hooks/zsh).
 const shimHook = value => !!value && fs.existsSync(path.join(path.dirname(path.dirname(process.platform === 'win32'
-  ? value.replace(/^\/([A-Za-z])(?=\/)/, '$1:') : value)), '.agentrix-shims'));
+  ? value.replace(/^\/([A-Za-z])(?=\/)/, '$1:') : value)), SHIM_MARKER));
 
 function readBootstrap(file, format = 'agentrix.bootstrap') {
   try {
@@ -130,7 +131,27 @@ function helperPath() {
 // A planner: the owner's own Claude Code or Codex, at depth zero with a bootstrap to report its rows to. Anything less fails
 // closed as nested.
 const planner = env => env.AGENTRIX_DISPATCH_DEPTH === '0' && !env.AGENTRIX_RUN_ID && !env.AGENTRIX_RUN_PROOF && !!env.AGENTRIX_BOOTSTRAP;
-const locateCli = (agent, env) => require(helperPath())[agent === 'codex' ? 'locateCodex' : 'locateClaude'](env);
+function locateCli(agent, env) {
+  if (!terminalFacets()[agent]?.terminal?.shimPassthrough) return require(helperPath())[agent === 'codex' ? 'locateCodex' : 'locateClaude'](env);
+  const value = key => Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1];
+  const windows = process.platform === 'win32';
+  const folders = (value('PATH') || '').split(path.delimiter).filter(Boolean);
+  if (windows && value('LOCALAPPDATA')) folders.push(path.join(value('LOCALAPPDATA'), agent, 'bin'));
+  if (!windows) folders.push(path.join(value('HOME') || os.homedir(), '.local', 'bin'));
+  const pinned = value(`AGENTRIX_${agent.toUpperCase()}_EXECUTABLE`);
+  const executable = windows ? `${agent}.exe` : agent;
+  const candidates = [...(pinned && path.isAbsolute(pinned) ? [pinned] : []),
+    ...folders.map(folder => path.resolve(folder.replace(/^"|"$/g, ''), executable))];
+  for (const file of candidates) {
+    try {
+      const real = fs.realpathSync(file);
+      if ([file, real].some(candidate => fs.existsSync(path.join(path.dirname(candidate), SHIM_MARKER))) || !fs.statSync(real).isFile()) continue;
+      fs.accessSync(real, windows ? fs.constants.F_OK : fs.constants.X_OK);
+      return file;
+    } catch { /* Try the next installed executable. */ }
+  }
+  return null;
+}
 function sessionMode(env) {
   if (!env.AGENTRIX_BOOTSTRAP) return 'native';
   try {
@@ -185,20 +206,31 @@ async function passThrough(agent, args, { env, cwd, stderr, locate, launch }) {
 
 async function intercept(argv, { env = process.env, cwd = process.cwd(), stderr = process.stderr, locate = locateCli, launch = spawn } = {}) {
   const [agent, ...rest] = argv, args = rest[0] === '--' ? rest.slice(1) : rest;
-  const adapter = Object.hasOwn(terminalFacets(), agent) ? terminalFacets()[agent] : null;
-  if (!planner(env) || !adapter) {
-    if (args.length === 1 && adapter?.words.harmless.includes(args[0])) return passThrough(agent, args, { env, cwd, stderr, locate, launch });
+  const options = { env, cwd, stderr, locate, launch };
+  const adapters = terminalFacets(), adapter = Object.hasOwn(adapters, agent) ? adapters[agent] : null;
+  const isPlanner = planner(env), terminal = adapter?.terminal;
+  if (terminal?.shimPassthrough) {
+    const utility = args.length === 1 && adapter.words.utilities.includes(args[0]);
+    if (utility) return passThrough(agent, args, options);
+    if (isPlanner && !terminal.delegates(args)) {
+      stderr.write(`[agentrix] Type ${agent} in the Agentrix terminal to open a native session.\n`);
+      return 2;
+    }
+  }
+  if (!isPlanner || !terminal) {
+    if (args.length === 1 && adapter?.words?.harmless?.includes(args[0])) return passThrough(agent, args, options);
     stderr.write('[agentrix] not run: a role cannot start another role\n');
     return 2;
   }
   const { delegates, converses } = adapter.terminal;
   const delegation = delegates(args);
   if (sessionMode(env) === 'conductor' && delegation) {
-    stderr.write('[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell\n');
+    if (terminal.shimPassthrough) stderr.write(`[agentrix] not run: in conductor mode a role starts with the start_role tool, not with ${agent} from the shell\n`);
+    else stderr.write('[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell\n');
     return 2;
   }
   // Native mode runs a delegation on the real CLI, as it was before Agentrix; a lead's conversation gets the role tools in both modes.
-  return passThrough(agent, converses(args) && !delegation ? [...roleToolArgs(agent, env), ...args] : args, { env, cwd, stderr, locate, launch });
+  return passThrough(agent, converses(args) && !delegation ? [...roleToolArgs(agent, env), ...args] : args, options);
 }
 
 // Both terminal protocols give the MCP server the same environment as its planner.
@@ -215,7 +247,9 @@ function terminalLaunch(source, agent, action, mode, args, lookup = id => Object
   if (!terminal) throw new Error('Unknown terminal adapter');
   const remote = mode === 'remote';
   if (action === 'classify') {
-    const classified = terminal.classify?.(args, { native: mode === 'native', remote, alias: remote ? undefined : source.AGENTRIX_LAUNCH_ALIAS });
+    const alias = remote ? undefined : source.AGENTRIX_LAUNCH_ALIAS;
+    const hasAliasArgument = Boolean(alias || (!remote && source.AGENTRIX_LAUNCH_HAS_ALIAS_ARGUMENT === '1'));
+    const classified = terminal.classify?.(args, { native: mode === 'native', remote, alias, hasAliasArgument });
     const words = adapter.manifest?.words ?? adapter.words;
     const route = classified ?? (words?.utilities.includes(args[0]) ? 'passthrough' : terminal.redirect ?? 'conversation');
     return legacy ? route : wire().writeKeyValue({ format: 'agentrix.launch-route', version: '1', route });
@@ -236,7 +270,7 @@ function terminalLaunch(source, agent, action, mode, args, lookup = id => Object
 
 const nulWords = words => words.map(word => word + '\0').join('');
 
-module.exports = { intercept, terminalLaunch, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };
+module.exports = { intercept, terminalLaunch, terminalFacets, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };
 
 if (require.main === module) {
   let argv = process.argv.slice(2);

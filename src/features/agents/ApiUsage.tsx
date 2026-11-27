@@ -26,6 +26,9 @@ import './activity-pane.css';
 // Read again a minute after the last read (the month turns over, a limit recovers), and a second after an event says the numbers moved.
 const REFRESH_MS = 60_000, REVISION_DELAY_MS = 1000;
 const AGENTS = adapters().filter(({ manifest }) => support(manifest, 'accountLimits').ok).map(({ manifest }) => manifest.id);
+const QUOTA_GROUP_NAMES: Partial<Record<NativeAgent, Record<string, string>>> = {
+  agy: { gemini: 'Gemini 模型', '3p': '第三方模型' },
+};
 // The last usage read per project, shown at once when its pane opens again. Nothing tells this file that a project was removed, so it keeps the most recently read ones.
 const HELD_PROJECTS = 32;
 const observations = new Map<string, { bridge: ReturnType<typeof nativeBridge>; usage: NativeUsage }>();
@@ -34,7 +37,10 @@ function observe(key: string, bridge: NonNullable<ReturnType<typeof nativeBridge
   if (observations.size > HELD_PROJECTS) observations.delete(observations.keys().next().value!);
 }
 
-const windowsOf = (limits: LimitsPayload) => Object.values(limits.limitsById ?? {}).flatMap(entry => [entry?.primary, entry?.secondary]);
+function windowsOf(limits: LimitsPayload | null | undefined, groupId?: string) {
+  const groups = limits?.limitsById ?? {};
+  return (groupId === undefined ? Object.values(groups) : [groups[groupId]]).flatMap(entry => [entry?.primary, entry?.secondary]);
+}
 // That the provider says the limit is reached, with when it recovers; null when it does not say so. A notice of the provider's own (below) says it in
 // the provider's words, so this line is for a provider that gave only the status.
 function reachedLine(limits: LimitsPayload) {
@@ -57,10 +63,10 @@ export function limitLines(limits: LimitsPayload | null | undefined): string[] {
 
 // One quota window as a bar needs it: its length, how much is used (null when not given), when it starts over.
 type QuotaWindow = { minutes: number | null; percent: number | null; resetsAt: number | null };
-// The windows the main process reports, one per length (the fullest when several limits share a length), shortest first.
-export function limitWindows(limits: LimitsPayload | null | undefined): QuotaWindow[] {
+// The windows the main process reports, one per length in the selected group or across all limits, shortest first.
+export function limitWindows(limits: LimitsPayload | null | undefined, groupId?: string): QuotaWindow[] {
   const found = new Map<string, QuotaWindow>();
-  for (const item of limits ? windowsOf(limits) : []) {
+  for (const item of windowsOf(limits, groupId)) {
     if (!item) continue;
     const next: QuotaWindow = { minutes: item.windowDurationMins ?? null, percent: typeof item.usedPercent === 'number' ? item.usedPercent : null, resetsAt: typeof item.resetsAtMs === 'number' ? item.resetsAtMs : null };
     const key = String(next.minutes), held = found.get(key);
@@ -109,20 +115,32 @@ function quotaSource(label: string, showUnavailable: boolean, limits: LimitsPayl
 }
 
 // The subscription's windows as bars, what is not known said as such, and the provider's rate-limit lines.
-function QuotaMetrics({ limits, current, usage }: { limits: LimitsPayload | null | undefined; current: boolean; usage: AgentUsage | null | undefined }) {
+function QuotaMetrics({ limits, current, usage, groupNames }: { limits: LimitsPayload | null | undefined; current: boolean;
+  usage: AgentUsage | null | undefined; groupNames?: Record<string, string> }) {
   const { windows, onScreen } = quotaWindows(limits, current, usage);
   // App's five-second clock rerenders this pane even when the snapshot is unchanged.
   const now = Date.now(), observed = onScreen ? usage?.limitsAt : limits?.observedAtMs;
   const updated = typeof observed === 'number' ? t('{time} 更新', { time: resetTime(observed) }) : null;
   const notes = limits && windows.length ? [reachedLine(limits), limits.state === 'stale' ? t('数据可能已过期') : null].filter((line): line is string => !!line) : [];
+  const bar = (window: QuotaWindow) => {
+    const name = limitName(window.minutes), expired = window.resetsAt != null && window.resetsAt <= now, known = window.percent !== null;
+    const label = t('{name}已用 {percent}%', { name, percent: Math.round(window.percent ?? 0) });
+    return <Metric key={window.minutes ?? 'unknown'} className="activity-limit" label={name} percent={known ? window.percent : undefined} meterLabel={label}
+      value={known ? `${Math.round(window.percent!)}%` : t('未知')} valueTitle={known ? [`${window.percent!.toFixed(1)}%`, updated].filter(Boolean).join(' · ') : undefined}
+      note={expired ? t('已到重置时间，等待更新') : window.resetsAt != null ? t('{time} 重置', { time: resetTime(window.resetsAt) }) : undefined} />;
+  };
+  const buckets = limits?.limitsById ?? {};
+  const groups = groupNames && [...new Set([...Object.keys(groupNames), ...Object.keys(buckets)])].map(id => {
+    const entries = limitWindows(limits, id);
+    if (!entries.length) return null;
+    const label = t(groupNames[id] ?? buckets[id]?.limitName ?? '额度');
+    return <div className="api-quota-group" role="group" aria-label={label} key={id}>
+      <h5 className="api-quota-group-title">{label}</h5>
+      {entries.map(bar)}
+    </div>;
+  });
   return <>
-    {windows.length ? windows.map(window => {
-      const name = limitName(window.minutes), expired = window.resetsAt != null && window.resetsAt <= now, known = window.percent !== null;
-      const label = t('{name}已用 {percent}%', { name, percent: Math.round(window.percent ?? 0) });
-      return <Metric key={window.minutes ?? 'unknown'} className="activity-limit" label={name} percent={known ? window.percent : undefined} meterLabel={label}
-        value={known ? `${Math.round(window.percent!)}%` : t('未知')} valueTitle={known ? [`${window.percent!.toFixed(1)}%`, updated].filter(Boolean).join(' · ') : undefined}
-        note={expired ? t('已到重置时间，等待更新') : window.resetsAt != null ? t('{time} 重置', { time: resetTime(window.resetsAt) }) : undefined} />;
-    }) : <Metric className="activity-tokens" label={t('额度')} note={limitLines(limits).join(' · ')} />}
+    {windows.length ? groups || windows.map(bar) : <Metric className="activity-tokens" label={t('额度')} note={limitLines(limits).join(' · ')} />}
     {notes.map(line => <Metric key={line} className="activity-tokens" label={t('额度')} note={line} />)}
   </>;
 }
@@ -140,26 +158,30 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const known = current || !!state?.next?.path;
   const manifest = adapterOf(agent)?.manifest, nativeOnly = manifest && !support(manifest, 'terminal').ok && support(manifest, 'native').ok;
   const display = manifest?.usage, label = display?.label ?? manifest?.label ?? agent;
+  const groupNames = QUOTA_GROUP_NAMES[agent], useScreen = current && !groupNames;
+  const unavailable = state?.limits?.state === 'unavailable' ? state.limits.reason || display?.quotaUnavailable : undefined;
   const channel = nativeOnly && known ? current && terminal.sessionId ? t('需用原生模式恢复') : t('原生模式')
     : (current && terminal.nativeMode || !current && state?.next?.path === 'api') ? t('原生模式') : null;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.
-  const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';
+  const plan = !unavailable && (kind === 'subscription' || (kind !== 'api' && (groupNames
+    ? windowsOf(state?.limits).some(Boolean) : useScreen && windowsFromScreen(tokens).length > 0)));
   // The console button is the owner's way to check a rejection for balance, shown only next to the notice that says it.
   const checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
   // Only Claude on the API, and only once main has a spend record, has a spend row; Codex on the API has nothing of its own, so no empty block.
   const spend = display?.apiSpend && kind === 'api' && !!usage?.apiRecords;
-  const source = plan ? quotaSource(label, !!display?.showUnavailable, state?.limits, current, tokens) : null;
+  const source = plan ? quotaSource(label, !!display?.showUnavailable, state?.limits, useScreen, tokens) : null;
   return <section className="api-agent" aria-label={label}>
     <h4 className="api-agent-title">{label}</h4>
     <dl className="api-usage">
       {channel && <Row label={t('通道')}><span>{channel}</span></Row>}
       <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
-      {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
+      {unavailable ? <Row label={t('额度')}><span>{t(unavailable)}</span></Row>
+        : !plan && kind !== 'api' && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
     {(current || plan || spend) && <div className="activity-metrics">
       {current && <ContextMetric usage={tokens} />}
-      {plan && <QuotaMetrics limits={state?.limits} current={current} usage={tokens} />}
+      {plan && <QuotaMetrics limits={state?.limits} current={useScreen} usage={tokens} groupNames={groupNames} />}
       {spend && <ApiSpend usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
@@ -172,7 +194,7 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   </section>;
 }
 
-// Both agents' usage sections take their natural height.
+// Each agent's usage section takes its natural height.
 export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) => <div className="api-agents">
   {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />)}
 </div>;

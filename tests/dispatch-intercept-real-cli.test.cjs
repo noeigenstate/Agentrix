@@ -15,7 +15,7 @@ const chunks=[];process.stdin.on('data',part=>chunks.push(part));process.stdin.o
   const words = ['exec', '-m', 'test', 'keep "quoted" words', 'Unicode 中文'];
   const inputs = [Buffer.from('input "quotes" 中文\n'), Buffer.from('mixed\r\nline\nwithout a final newline 中文'), Buffer.from([0, 255, 195, 40, 13, 10, 0, 10])];
   const suffixes = process.platform === 'win32' ? ['.ps1', '.cmd'] : [''];
-  for (const agent of ['codex', 'claude']) for (const suffix of suffixes) for (const input of inputs) {
+  for (const agent of ['codex', 'claude', 'agy']) for (const suffix of suffixes) for (const input of inputs) {
     const file = path.join(folder, agent + suffix);
     fs.copyFileSync(path.join(path.dirname(entry), agent + suffix), file);
     const env = { ...dispatchEnvironment(), AGENTRIX_SHIM_NODE: process.execPath, AGENTRIX_TEST_LAUNCHER_WORDS: JSON.stringify(words) };
@@ -40,7 +40,7 @@ const chunks=[];process.stdin.on('data',part=>chunks.push(part));process.stdin.o
   if (process.platform !== 'win32') return;
   // Inside PowerShell: a number argument arrives as a string, and a piped first string loses one leading byte-order mark.
   fs.writeFileSync(path.join(folder, 'pipe.ps1'), 'param([string]$Launcher)\nSet-Location -LiteralPath $PSScriptRoot\n([string][char]0xFEFF + [char]0xFEFF + \'piped words\'), \'second\' | & $Launcher exec 5\nexit $LASTEXITCODE\n');
-  for (const agent of ['codex', 'claude']) {
+  for (const agent of ['codex', 'claude', 'agy']) {
     const child = scope.spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(folder, 'pipe.ps1'), path.join(folder, `${agent}.ps1`)],
       { cwd: folder, env: { ...dispatchEnvironment(), AGENTRIX_SHIM_NODE: process.execPath }, stdio: ['ignore', 'pipe', 'pipe'] });

@@ -22,10 +22,11 @@ const { projectTeam, recordFindings } = require(path.join(runtime, 'features/tea
 const { RunInbox, runId, validText, readBoard } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { DISPATCH_TASK_KINDS, taskKind } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
+const { createAgyRuntime } = require(path.join(runtime, 'features/agy-acp/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { workerOf, agentOfModel, defaultWorkerRules, isReadOnly, word, count, workerRefusal } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
+const { workerOf, workerIds, agentOfModel, defaultWorkerRules, isReadOnly, word, count, workerRefusal } = require(path.join(runtime, 'features/cli-adapters/workers.cjs'));
 const { isolatedRoot } = require(path.join(runtime, 'features/cli-adapters/worker-git.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const { launchSeat, liveSeatMap, launchSeatMap, parseSeatMap } =
@@ -35,18 +36,21 @@ const { diagnosticLine, deniedAction } = require(path.join(runtime, 'features/ag
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
-const { withShims, runtimeFiles: shimRuntimeFiles } = require(path.join(shimDirectory, 'intercept.cjs'));
+const { withShims, terminalFacets, runtimeFiles: shimRuntimeFiles } = require(path.join(shimDirectory, 'intercept.cjs'));
 const dispatchCompanions = Object.freeze(['role-tools.cjs', 'role-artifacts.cjs']);
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs', 'features/agents/agent-command.cjs',
   'features/team/team.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
   'features/routing/agent-seat.cjs', 'features/agents/call-seat.cjs',
-  'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
+  'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/codex-rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
   'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
   'features/cli-adapters/workers.cjs', 'features/cli-adapters/worker-git.cjs', 'features/cli-adapters/manifests/worker.cjs',
-  'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
+  'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs',
+  'shared/agentrix-shims.cjs', 'shared/stdio-rpc.cjs', 'shared/native-events.cjs',
+  'features/agy-acp/index.cjs', 'features/agy-acp/session.cjs', 'features/agy-acp/events.cjs', 'features/agy-acp/requests.cjs',
+  'features/agy-acp/locator.cjs', 'features/agy-acp/models.cjs', 'features/agy-acp/history.cjs', 'features/agy-acp/turns.cjs', 'features/agy-acp/usage-reader.cjs'];
 const runtimeFiles = () => ({
   ...Object.fromEntries(RUNTIME_FILES.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
   'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'),
@@ -87,7 +91,7 @@ const PINNED_SEATS = Symbol('pinned dispatch seats');
 const POLL_INTERVAL = 250, EXIT_SETTLE = 500;
 const LIMIT = 4 * 1024 * 1024;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
-const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
+const USAGE = `Usage: node dispatch.cjs <${workerIds().join('|')}> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
   [--seat <id>[/<specialty>]] the team role for this run, for example --seat x-mobile
                              uses the launch seat for omitted --model, --effort and --fast
@@ -98,6 +102,7 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--kind <${DISPATCH_TASK_KINDS.join('|')}>] task category for long-term evaluation
   [--detach]             survive the launching shell; collect results with wait
   Codex: [--fast] [--image <file> ...] [--read-only]
+  Antigravity: [--read-only] (requires a local Agentrix broker)
   Claude: --permission <dontAsk|acceptEdits> (dontAsk is read-only)
 
   node dispatch.cjs stop <run id> [--reason <text>] [--no-resume] [--cwd <dir>]
@@ -189,7 +194,7 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) 
   if (agent === 'wait') return waitOptions(flags);
   if (agent === 'stop') return stopOptions(flags);
   const worker = workerOf(agent);
-  if (!worker) throw new Error('Expected codex or claude');
+  if (!worker) throw new Error(`Expected one of: ${workerIds().join(', ')}`);
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
   const keys = ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'kind', 'seat'];
   const names = new Map(keys.map(key => [`--${key}`, key]));
@@ -599,6 +604,11 @@ class WorkerOutput {
     else if (['fast', 'priority', 'standard', 'default', 'flex', 'auto'].includes(tier)) this.fast = ['fast', 'priority'].includes(tier);
   }
   nativeRouting({ observed, effective }) {
+    if (this.worker.observedRouting) {
+      this.model = this.effort = this.fast = null;
+      this.settings(observed ?? {});
+      return;
+    }
     this.settings({ model: observed?.model ?? effective?.model,
       effort: observed?.effort ?? effective?.effort, fast: observed?.fast ?? effective?.fast });
   }
@@ -1096,7 +1106,10 @@ async function waitDetached(options, { store = detachedRuns(options.cwd), observ
       if ((entry.started || legacyLine(entry, 'started')) && store.claimStart(id)) reportReceiptStart(entry, emit);
       if (entry.settled) { finish(id, entry); return; }
       if ((hasResult && !entry.ownerWait) || signal?.aborted || !Number.isSafeInteger(entry.helperPid) || entry.helperPid < 1) return;
-      if (await alive(entry.helperPid, entry) === false && observing) finish(id, entry, true);
+      if (await alive(entry.helperPid, entry) !== false || !observing) return;
+      // The helper publishes settlement before closing its socket. The earlier read may have missed that write.
+      const latest = read(id, { fresh: true });
+      if (latest !== undefined) finish(id, latest ?? entry, !latest?.settled);
     }));
     return done() || hasResult ? true : undefined;
   };
@@ -1137,7 +1150,7 @@ async function run(argv, deps = {}) {
   if (error) return fail(error);
   argv = args;
   if (roundtable) return fail(roundtablesRemoved);
-  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'stop', 'wait'].includes(argv[0]))) {
+  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && (workerOf(argv[0]) || ['stop', 'wait'].includes(argv[0])))) {
     if (jsonl) emit(dispatchEvent('notice', randomUUID(), { code: 'usage', detail: USAGE }));
     else stdout?.write(USAGE);
     return 0;
@@ -1150,6 +1163,13 @@ async function run(argv, deps = {}) {
     } catch (error) { return fail(error.message); }
   }
   return runWorker(argv, deps, emit);
+}
+
+function isCarriedSshHelper() {
+  if (!/^[a-f\d]{64}$/.test(path.basename(__dirname))) return false;
+  const state = path.join(homedir(), '.local', 'state', 'agentrix', 'ssh-dispatch');
+  try { return path.dirname(__dirname) === fs.realpathSync.native(state); }
+  catch { return false; }
 }
 
 async function runWorker(argv, { env = process.env, source = 'dispatch', launch = spawn, resolveExecutable = executable,
@@ -1182,15 +1202,17 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     catch (error) { spawnError ||= error; }
     return process;
   }
-  let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
+  let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false, nativeStartupFailure;
+  let continuedDeniedTurn = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
   let controlFailure = 'bootstrap/missing_environment', controlLeadMode = null, transportFallback = false, lastControlFailure, lastControlNotice;
-  let nativeBilling = null;
+  let nativeBilling = null, sshRuntime, roleDenial;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreReport;
   let beforeGit;
   const roleReadOnly = () => options.readOnly || ['审查', '调查'].includes(options.role);
   const controlReceipts = new Map(), pendingRequests = new Set();
   const refused = [], refusedItems = new Set();
+  const roleWarnings = new Set();
   function recordRefusal(refusal, itemId) {
     if (refused.length >= REFUSAL_LIMIT || !validRefusal(refusal)) return;
     if (refusal.reason === 'provider_declined' && itemId && refusedItems.has(itemId)) return;
@@ -1293,7 +1315,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       ...(warnings.length && { warnings }) });
   };
   const routeVerdict = () => workerOf(agentOfModel(options.model)).routingVerdict(output, declared());
-  const roleRouting = () => worker.pinEffort && output.model !== null
+  const roleRouting = () => worker.observedRouting || worker.pinEffort && output.model !== null
     ? { ...output.routing(), verdict: routeVerdict() } : null;
   // A start is confirmed only by the worker's own records: its session, and Codex's turn context in that session's file.
   // While it runs, every new record is checked at once. A worker that has exited is judged once, on everything it left
@@ -1325,9 +1347,9 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     }, rateInterval);
   };
   // A model reported after the start went out (app-server's turn can start before its session file names the model, or
-  // the server reroutes) is sent on, so the pane's row follows what the worker runs; an unknown model is never sent.
+  // the server reroutes) is sent on. Transcript-verified workers clear that observation when the next turn starts.
   const reroute = () => {
-    if (!started || output.model === null) return;
+    if (!started || output.model === null && !worker.observedRouting) return;
     const route = output.routing();
     if (['model', 'effort', 'fast'].every(key => route[key] === sentRoute[key])) return;
     sentRoute = route; send({ type: 'dispatch-routing', id, ...route });
@@ -1462,8 +1484,12 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
     options = argumentsOf(argv, env, env[PINNED_SEATS]);
-    worker = workerOf(options.agent); usesAppServer = worker.command(options) === 'native';
-    if (usesAppServer) options.readOnly = roleReadOnly();
+    worker = workerOf(options.agent);
+    const launchPath = worker.command(options);
+    sshRuntime = worker.sshRuntime && env.AGENTRIX_REMOTE_ROLE_TOOLS === '1' && isCarriedSshHelper();
+    const needsBroker = launchPath === 'broker' && !sshRuntime;
+    usesAppServer = launchPath === 'native';
+    if (usesAppServer || needsBroker || sshRuntime) options.readOnly = roleReadOnly();
     output = workerOutput();
     rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
     if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
@@ -1642,8 +1668,9 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         } else if (controlClient) lastControlFailure = null;
       }
     }
-    await openControl();
-    if (worker.brokerMethod && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
+    if (sshRuntime) bootstrap = send.bootstrap;
+    else await openControl();
+    if (!controlClient && (needsBroker || worker.brokerMethod && controlLeadMode === 'native')) throw new Error(controlFailure);
     // Lab's private helper is loaded from memory and has no script for a child MCP server to execute.
     if (fs.existsSync(__filename)) {
       artifacts = require('./role-artifacts.cjs');
@@ -1691,6 +1718,11 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       if (event.replay) return;
       const { type, payload, itemId } = event;
       if (type === 'worker.refused' && worker.brokerMethod) recordRefusal(payload);
+      else if (sshRuntime && type === 'request.resolved' && payload.resolution === 'denied' && payload.reason) {
+        const refusal = { action: payload.action || 'Tool request', reason: payload.reason };
+        recordRefusal(refusal, itemId);
+        roleDenial ??= refusal;
+      }
       else if (type === 'worker.awaiting-owner' && nativeBilling === 'subscription') {
         detached?.ownerWaiting?.(diagnosticLine(payload.detail) || null);
       } else if (type === 'worker.menu' && nativeBilling === 'subscription') {
@@ -1705,10 +1737,14 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
     function acceptNative(event) {
       observePermission(event);
       if (event.providerSessionId) output.sessionId = event.providerSessionId;
-      if (event.type === 'turn.started') {
+      if (event.type === 'worker.notice' && !event.replay) {
+        const warning = diagnosticLine(event.payload.text);
+        if (warning && roleWarnings.size < 4) roleWarnings.add(warning.slice(0, 240));
+      } else if (event.type === 'turn.started') {
+        roleDenial = null;
         nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true;
         if (usesAppServer) void rollout.read().then(() => confirm()); else confirm();
-        if (resumeControlIds.length) resumeInputId = event.payload.clientMessageId;
+        if (resumeControlIds.length && !resumeInputId) resumeInputId = event.payload.clientMessageId;
       } else if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && !event.replay) {
         const fact = workerInput(event, controlInputs, resumeControlIds, resumeInputId);
         if (fact) recordInput(fact.entryId, fact.inputId, fact.origin, fact.ownerMessageIds);
@@ -1726,11 +1762,14 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         && ['sdk_initialization_timeout', 'sdk_startup_failed', 'native_cli_required', 'native_cli_outdated'].includes(event.payload.code))) {
         signal('transport', { path: 'claude-sdk', reason: event.payload.message });
       }
+      else if (event.type === 'error' && worker.recoversDeniedTurn && event.payload.stage === 'startup') {
+        nativeStartupFailure = diagnosticLine(event.payload.message);
+      }
       else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
         const content = event.payload.content;
         if (typeof content?.text === 'string' && (!content.phase || content.phase === 'final_answer')) output.result = content.text;
       } else if (event.type === 'turn.completed' && event.turnId === nativeTurn) {
-        output.failed ||= event.payload.status === 'failed';
+        output.failed ||= event.payload.status === 'failed' && !worker.recoversDeniedTurn;
         output.capacity ||= ['serverOverloaded', 'policyCapacityUnavailable', 'flexUnavailable'].includes(event.payload.terminalReason);
         nativeRunning = false;
         settleNative?.({ code: event.payload.status === 'completed' ? 0 : 1, killedBy: event.payload.status === 'interrupted' ? 'SIGTERM' : null });
@@ -1779,7 +1818,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
       let roleResult;
       try {
-        roleResult = await artifacts?.settleRoleResult({ folder: roleFolder, runId: id, answer, legacyDecision: hasDecisionHeading });
+        roleResult = await artifacts?.settleRoleResult({ folder: roleFolder, runId: id, answer, legacyDecision: hasDecisionHeading, warnings: [...roleWarnings] });
         if (roleResult?.source === 'finish-role') fs.writeFileSync(options.out, roleResult.answer);
       } catch (error) {
         notice('role_result_unavailable', oneLine(error.code || 'write_error'));
@@ -1831,7 +1870,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         brief = briefOf(options, Buffer.from(messages.splice(0).map(text => `业主插话：${text}`).join('\n\n') + '\n\n继续执行当前任务。'), team,
           { id, repo, before: checking ? before : undefined });
       }
-      if (controlClient || usesAppServer) {
+      if (controlClient || usesAppServer || sshRuntime) {
         if (killed) throw new Error('Dispatch interrupted before launch');
         const readOnly = roleReadOnly();
         const spec = { owner: 'dispatch', projectId: bootstrap?.projectId || id, terminalId: bootstrap?.projectId || id, runtimeSessionId: id, runId: id,
@@ -1876,6 +1915,27 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
           const receipt = await activeRuntime.send({ clientMessageId: randomUUID(), text: brief.toString('utf8'), images: options.images });
           if (receipt.status !== 'delivered') throw new Error('native_input_' + receipt.status);
           result = await completion;
+        } else if (sshRuntime) {
+          // The SSH installer puts each helper digest under the private ssh-dispatch state directory.
+          const dataDir = path.dirname(__dirname);
+          const { notes, roleTools } = terminalFacets()[options.agent];
+          activeRuntime = createAgyRuntime({ dataDir, onTreeStopFailure: recordTreeStopFailure,
+            ...(resolveExecutable !== executable && { resolveExecutable: () => options.agent }),
+            spawnProcess: (file, args, spawnOptions) => {
+              const command = resolveExecutable(options.agent, args, spawnOptions.env, file);
+              workerStartedAt ??= Date.now();
+              return trackWorker(launch(command.file, command.args, spawnOptions));
+            },
+          }).create({ ...spec, decidePermission: () => null,
+            ...notes.startup('Follow the role brief and use the Agentrix role tools to report your result.').config,
+            ...(roleServer && roleTools.config(roleServer)) }, acceptNative);
+          nativeBilling = 'subscription';
+          try { await activeRuntime[effective.resume ? 'resume' : 'start'](); }
+          catch (error) { await activeRuntime.close(); activeRuntime = null; throw error; }
+          child = { pid: activeRuntime.pid, exitCode: null };
+          const receipt = await activeRuntime.send({ clientMessageId: randomUUID(), text: brief.toString('utf8') });
+          if (receipt.status === 'rejected') throw new Error('native_input_rejected');
+          result = await completion;
         } else {
           nativeBilling = 'api';
           activeRuntime = { send: async input => {
@@ -1910,9 +1970,22 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         for (;;) {
           await readInbox(true); await inboxRead;
           if (!nativeRunning) {
-            if (worker.brokerMethod && !segmentStopped && !killed && result.code === 0) {
-              const receipt = await controlClient.request('control.finish', {}).catch(() => ({ status: 'unknown' }));
-              if (receipt?.status === 'queued') { result = await new Promise(resolve => { settleNative = resolve; }); continue; }
+            const canFinish = result.code === 0 || worker.recoversDeniedTurn && nativeTurn && !result.killedBy;
+            if (sshRuntime && roleDenial && roleFolder && !continuedDeniedTurn && !segmentStopped && !killed && canFinish) {
+              const saved = await artifacts.readRoleResultFile(roleFolder, id).catch(() => true);
+              if (saved?.source !== 'finish-role' && saved !== true && !nativeRunning && !segmentStopped && !killed) {
+                continuedDeniedTurn = true;
+                const denied = roleDenial, next = new Promise(resolve => { settleNative = resolve; });
+                const text = `Agentrix denied this operation: ${denied.action} (${denied.reason}). Skip it and call finish_role with your result.`;
+                const receipt = await activeRuntime.send({ clientMessageId: randomUUID(), text });
+                if (receipt.status !== 'rejected') { result = await next; continue; }
+              }
+            } else if (controlClient && worker.brokerMethod && !segmentStopped && !killed && canFinish) {
+              const next = new Promise(resolve => { settleNative = resolve; });
+              const receipt = await controlClient.request('control.finish', continuedDeniedTurn ? { allowContinuation: false } : {})
+                .catch(() => ({ status: 'unknown' }));
+              continuedDeniedTurn ||= receipt?.continued === true;
+              if (receipt?.status === 'queued') { result = await next; continue; }
             }
             break;
           }
@@ -1925,14 +1998,16 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         if (remoteResult?.code) result = remoteResult;
         if ((result.code === 0 || segmentStopped) && !killed && !noResume) queueUnreadControls();
         await activeRuntime.close(); activeRuntime = null; child.exitCode = result.code; clearInterval(pollTimer);
-        if (!started) failed('worker ended without execution evidence', 1);
+        if (!started) failed(nativeStartupFailure || 'worker ended without execution evidence', 1);
         if (messages.length && (result.code === 0 || segmentStopped) && !killed && !noResume && !spawnError && output.sessionId) {
           const { changed, outOfScope } = inspectScope();
           if (checking && (changed === null || outOfScope.length)) break;
           resumeSession = output.sessionId; controlClient?.close(); controlClient = null;
           // The rejected correction is known not to have executed; resume only that input, on the same billing path.
-          await new Promise(resolve => setTimeout(resolve, 20)); await openControl();
-          if (!controlClient && !usesAppServer) throw new Error('native_resume_control_unavailable');
+          if (!sshRuntime) {
+            await new Promise(resolve => setTimeout(resolve, 20)); await openControl();
+            if (!controlClient && !usesAppServer) throw new Error('native_resume_control_unavailable');
+          }
           signal('resume', { state: 'resuming', message: 'native worker ended before correction' });
           continue;
         }

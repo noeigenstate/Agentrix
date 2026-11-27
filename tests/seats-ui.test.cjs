@@ -115,7 +115,9 @@ function compile(file, hooks, stubs = {}) {
     };
     if (name === './routing-seats') return seatsLib;
     if (['./RoleEditor', './RoutingReview'].includes(name)) return compile(name.slice(2) + '.tsx', hooks, stubs);
-    if (name.endsWith('/role-rules.mjs')) return original(name);
+    if (name === '../../shared/agent-label.ts' || name === './AgentBrandIcon.ts' || name === '../native-session/native-bridge.ts'
+      || name.endsWith('/seat-rules.mjs') || name.endsWith('/role-rules.mjs')
+      || name.includes('/cli-adapters/')) return original(name);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
       routingModelName: require('../src/shared/routing-command.ts').routingModelName,
       modelLabel: require('../src/shared/model-name.ts').modelLabel, aliasTarget: require('../src/shared/model-name.ts').aliasTarget,
@@ -154,6 +156,7 @@ const inlineComponents = new Set([
   'RoutingTabs', 'MenuHeader',
   'DialogHeader', 'DialogToolbar', 'RoutingStatus', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu',
   'TeamCard', 'SeatPicker', 'PickerSettings', 'TeamModelOptions', 'RoleLibrary', 'RoleActions', 'RoutingReview', 'RoleTextFields', 'RoleModel',
+  'ProviderMark', 'AntigravityPlaceholder', 'PathText',
 ]);
 const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
 const walk = (node, visit) => {
@@ -717,7 +720,7 @@ const ids = rows => rows.map(entry => entry.model);
 
 test('the 模型盘 groups the real 28-model catalog by family and line, aliases and the newest version first, older versions folded; a new line appears by itself', () => {
   const groups = paletteGroups(REAL);
-  assert.deepEqual(groups.map(group => [group.family, group.total]), [['claude', 14], ['codex', 11]]);
+  assert.deepEqual(groups.map(group => [group.family, group.shortLabel, group.total]), [['claude', 'Claude', 14], ['codex', 'Codex', 11]]);
   assert.deepEqual(groups[0].lines.map(line => line.name), ['Opus', 'Sonnet', 'Haiku', 'Fable'], 'Claude lines in catalog order');
   assert.deepEqual(groups[1].lines.map(line => line.name), ['Sol', 'Astra', 'Terra', 'Luna', ''], 'Codex lines, the unnamed one last');
   const opus = lineNamed(groups, 'claude', 'Opus');
@@ -775,6 +778,85 @@ test('the palette shows the newest of each line, folds earlier versions once per
   assert.equal(byAttr(picker, 'data-assign', 'claude-opus-4-8'), undefined);
   byAttr(picker, 'data-picker-fold', 'claude').props.onClick();
   assert.ok(byAttr(liveMenu(h), 'data-assign', 'claude-opus-4-8'));
+});
+
+test('agy is grouped with an icon and its models can be assigned to the orchestrator and workers', t => {
+  const model = 'gemini-3.8-flash', collision = 'agy:claude-opus-5-5';
+  const models = [...catalog(), row(model, 'Gemini 3.8 Flash', 'agy', 3, { efforts: ['low', 'high'] }),
+    row(collision, 'Claude Opus 5.5', 'agy', 3)];
+  assert.equal(rowFor(models, 'agy:gemini-3.8-flash').model, model);
+  assert.equal(sameModel(models, 'agy:gemini-3.8-flash', model), true);
+  assert.equal(sameModel(models, collision, 'claude-opus-5-5'), false);
+  assert.equal(assignCustom(clone(DEFAULTS), 'architect', 'agy:gemini-3.8-flash', models).map.architect.model, model);
+  const h = dialogHarness(t, seatsInfo({
+    catalog: models,
+    installed: { claude: true, agy: true, codex: true },
+  }));
+  const group = byAttr(h.render(), 'data-group', 'agy');
+  assert.match(textOf(group), /agy · 2/);
+  assert.equal(textOf(byAttr(group, 'data-chip', model)), model);
+  assert.equal(textOf(byAttr(group, 'data-chip', collision)), 'claude-opus-5-5');
+  assert.ok(find(group, node => node.type === 'svg' && node.props.className?.includes('agent-brand-agy')));
+  const lead = openMenu(h, 'orchestrator');
+  assert.ok(byAttr(lead, 'aria-label', 'agy'));
+  byAttr(lead, 'data-assign', model).props.onClick();
+  assert.equal(assignCustom(clone(DEFAULTS), 'orchestrator', model, models).map.orchestrator.model, model);
+  const menu = openMenu(h, 'architect');
+  assert.ok(byAttr(menu, 'aria-label', 'agy'));
+  assert.equal(byAttr(menu, 'data-assign', collision).props.title, 'claude-opus-5-5');
+  byAttr(menu, 'data-assign', model).props.onClick();
+  const controls = openMenu(h, 'architect');
+  assert.ok(byAttr(controls, 'data-pop-effort', 'low'));
+  assert.equal(byAttr(controls, 'data-tile-fast', 'architect'), undefined);
+  assert.equal(byAttr(controls, 'data-ultracode', 'architect'), undefined);
+});
+
+test('Antigravity settings show the official instructions when missing and the version and path when installed', t => {
+  const props = { agents: { npm: true, claude: { installed: true }, codex: { installed: false }, agy: { installed: false } }, visible: false };
+  globalThis.window = { agentrix: {} };
+  const h = mount(t, 'AgentsSettings.tsx', 'AgentsSettings', props, { '../../shared/platform': { isWindows: true } });
+  const agyRow = () => find(h.render(), node => node.props.className === 'agent-setting' && textOf(node).includes('Antigravity CLI'));
+  let row = agyRow();
+  assert.match(textOf(row), /Not installed/);
+  assert.match(textOf(row), /irm https:\/\/antigravity\.google\/cli\/install\.ps1 \| iex/);
+  const link = find(row, node => node.type === 'a');
+  assert.equal(link.props.href, 'https://antigravity.google/docs/getting-started?tab=cli');
+  assert.equal(link.props.target, '_blank');
+  assert.equal(find(row, node => node.type === 'button'), undefined);
+
+  props.agents.agy = { installed: true, version: '1.5.18', fileShown: 'C:\\tools\\agy.exe' };
+  row = agyRow();
+  assert.match(textOf(row), /Installed · Version 1\.5\.18/);
+  assert.equal(textOf(byAttr(row, 'className', 'agent-path')), 'C:\\tools\\agy.exe');
+  assert.equal(find(row, node => node.type === 'a' || node.type === 'code'), undefined);
+  props.agents.agy.version = '1.5.17';
+  assert.match(textOf(agyRow()), /1\.5\.17.*too old.*1\.5\.18/i);
+});
+
+test('an installed agy with no available models explains the failure without an empty group or age tooltip', t => {
+  const h = dialogHarness(t, seatsInfo({ installed: { claude: true, agy: true, codex: true },
+    catalogErrors: { agy: 'auth_required' }, catalog: [...catalog(), row('gemini-3.8-flash', 'Gemini 3.8 Flash', 'agy', 3)] }));
+  const tree = h.render();
+  assert.equal(byAttr(tree, 'data-group', 'agy'), undefined);
+  assert.doesNotMatch(byAttr(tree, 'data-catalog-at').props.title, /agy/);
+  assert.match(textOf(byAttr(byAttr(tree, 'id', 'seats-model-tray'), 'role', 'status')), /Sign in to Antigravity to load models/);
+});
+
+test('the SSH model tray shows the host’s Antigravity models without a local installation', async t => {
+  const h = dialogHarness(t, seatsInfo({ routing: { ...source(), remote: true }, installed: { claude: true, codex: true, agy: false },
+    catalog: [...catalog(), row('gemini-local', 'Local model', 'agy', 3)] }));
+  const called = Promise.withResolvers();
+  window.agentrix.nativeSession = { remoteModels: async (...args) => {
+    called.resolve(args);
+    return { ok: true, value: [{ model: 'gemini-remote', label: 'Remote model', efforts: ['low'], defaultEffort: 'low', fast: false }] };
+  } };
+  assert.equal(byAttr(h.render(), 'data-chip', 'gemini-local'), undefined);
+  assert.deepEqual(await called.promise, ['t1', 'agy']);
+  await settle();
+  const tree = h.render(), chip = byAttr(tree, 'data-chip', 'gemini-remote');
+  assert.ok(chip);
+  assert.equal(chip.props['aria-disabled'], undefined);
+  assert.equal(byAttr(tree, 'data-chip', 'gemini-local'), undefined);
 });
 
 test('dragging a model from the 模型盘 onto a seat assigns it, and a model the agent cannot run is greyed there', t => {
@@ -949,42 +1031,6 @@ test('org chart uses fixture order and gives each seat its own model, effort and
     assert.equal(byAttr(picker, 'data-tile-fast', id).type, 'button');
     byAttr(picker, 'data-menu-close').props.onClick();
   }
-});
-
-test('the host keeps a migration that arrives after closing and the next dialog translates it until acknowledged', async t => {
-  const migration = '总指挥沿用原领队 Claude 槽 sonnet·high·fast；原 Codex 槽 gpt-6.2-sol 未保留\nSample: 总指挥沿用原领队 Codex 槽 gpt-6.2-sol·high';
-  const info = seatsInfo(), window = new EventTarget();
-  let finishRefresh;
-  window.agentrix = { routingSeats: async () => info, refreshRouting: () => new Promise(resolve => { finishRefresh = resolve; }) };
-  const HTMLElement = globalThis.HTMLElement;
-  globalThis.HTMLElement = class {};
-  t.after(() => { globalThis.HTMLElement = HTMLElement; });
-  globalThis.window = window; globalThis.document = { activeElement: null };
-  const host = mount(t, 'SeatsHost.tsx', 'SeatsHost', {});
-  const props = () => find(host.render(), node => node.props.info)?.props;
-  const open = async () => {
-    window.dispatchEvent(new CustomEvent('agentrix:open-seats', { detail: { projectId: 'p1', terminalId: 't1', info } }));
-    await settle();
-    return mount(t, 'SeatsDialog.tsx', 'SeatsDialog', props());
-  };
-  host.render();
-  const first = await open();
-  assert.equal(byAttr(first.render(), 'data-migrated'), undefined);
-  first.props.onClose(); first.unmount();
-  const finishFirst = finishRefresh;
-  const next = await open();
-  assert.equal(byAttr(next.render(), 'data-migrated'), undefined);
-  finishFirst(seatsInfo({ migrated: migration })); await settle();
-  next.props = props();
-  const notice = byAttr(next.render(), 'data-migrated');
-  assert.deepEqual(findAll(notice, node => node.type === 'p').map(textOf), [
-    'The Orchestrator kept the previous Claude seat (sonnet·high·fast). The previous Codex seat (gpt-6.2-sol) was dropped.',
-    'Sample: The Orchestrator kept the previous Codex seat (gpt-6.2-sol·high).',
-  ]);
-  find(notice, node => node.type === 'button').props.onClick();
-  finishRefresh(seatsInfo({ migrated: migration })); await settle();
-  next.props = props();
-  assert.equal(byAttr(next.render(), 'data-migrated'), undefined);
 });
 
 test('the app seats host opens only when main supplies routing info', async t => {

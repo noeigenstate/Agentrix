@@ -1,10 +1,31 @@
 const { exact, id, text, assert, validImages, validSwitchAnswer, validHandoff } = require('./validate.cjs');
 const { CODEX_PERMISSIONS } = require('../../codex-permissions.cjs');
 const { routingOwned, routingPatch } = require('../agents/agent-command.cjs');
-function registerIpc({ handle, router, settings, claude }) {
+const { adapterOf } = require('../cli-adapters/registry.cjs');
+const { canLead } = require('../cli-adapters/capabilities.mjs');
+const { validModel, EFFORT } = require('../routing/seat-rules.mjs');
+function registerIpc({ handle, router, settings, claude, remoteModels }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
-  handle('native:start', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent', 'resume']) && ['claude', 'codex'].includes(options.agent) && (options.resume === undefined || typeof options.resume === 'boolean')); return router.start(terminalId, options); });
-  handle('native:resume', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent']) && ['claude', 'codex'].includes(options.agent)); return router.start(terminalId, { ...options, resume: true }); });
+  handle('native:start', (terminalId, options) => {
+    assert(id(terminalId) && exact(options, ['agent', 'resume']) && canLead(adapterOf(options.agent)?.manifest)
+      && (options.resume === undefined || typeof options.resume === 'boolean'));
+    return router.start(terminalId, options);
+  });
+  handle('native:resume', (terminalId, options) => {
+    const adapter = adapterOf(options?.agent);
+    assert(id(terminalId) && exact(options, ['agent', 'sessionId']) && canLead(adapter?.manifest)
+      && (options.sessionId === undefined || adapter.nativePolicy.historyList && typeof options.sessionId === 'string'
+        && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(options.sessionId)));
+    return router.start(terminalId, { ...options, resume: true });
+  });
+  handle('native:history', (terminalId, agent) => {
+    assert(id(terminalId) && adapterOf(agent)?.nativePolicy.historyList);
+    return router.history(terminalId, { agent, list: true });
+  });
+  if (remoteModels) handle('native:remote-models', (terminalId, agent) => {
+    assert(id(terminalId) && adapterOf(agent)?.nativePolicy.remoteProcessOptions);
+    return remoteModels(terminalId, agent);
+  });
   handle('native:send', (terminalId, runtimeSessionId, clientMessageId, value, images) => { binding(terminalId, runtimeSessionId); assert(id(clientMessageId) && text(value, 262144, !!images?.length) && validImages(images)); return router.send(terminalId, runtimeSessionId, { clientMessageId, text: value, images }); });
   handle('native:interrupt', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.interrupt(terminalId, runtimeSessionId); });
   handle('native:stop', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.stop(terminalId, runtimeSessionId); });
@@ -14,6 +35,12 @@ function registerIpc({ handle, router, settings, claude }) {
     if (answer.switch) assert(requestId === answer.switch.requestId);
     if (answer.handoff) assert(requestId === `handoff-${answer.handoff.changeId}`);
     return router.answer(terminalId, runtimeSessionId, requestId, answer);
+  });
+  handle('native:model-options', (terminalId, runtimeSessionId, patch = {}) => {
+    binding(terminalId, runtimeSessionId);
+    assert(exact(patch, ['model', 'effort']) && (!Object.hasOwn(patch, 'model') || validModel(patch.model))
+      && (!Object.hasOwn(patch, 'effort') || typeof patch.effort === 'string' && EFFORT.test(patch.effort)));
+    return router.modelOptions(terminalId, runtimeSessionId, patch);
   });
   handle('native:snapshot', terminalId => { assert(id(terminalId)); return router.snapshot(terminalId); });
   handle('native:commands', (...args) => { assert(args.length === 2); binding(...args); return router.commands(...args); });

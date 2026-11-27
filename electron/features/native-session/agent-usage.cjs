@@ -1,9 +1,11 @@
+const { adapterOf } = require('../cli-adapters/registry.mjs');
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 function createNativeUsage(agent) {
+  const manifest = adapterOf(agent)?.manifest;
   let total = null, round = null, context = null, model = null, rate = null, limits = [], limitsAt = null, limitsFrom = null;
   const tokens = value => {
     if (!value || count(value.input) === null || count(value.output) === null || count(value.cachedInput) === null) return null;
-    const input = agent === 'claude' ? value.input + value.cachedInput + (count(value.cacheWrite) ?? 0) : value.input;
+    const input = manifest?.usage?.inputExcludesCache ? value.input + value.cachedInput + (count(value.cacheWrite) ?? 0) : value.input;
     return { input, cached: value.cachedInput, output: value.output };
   };
   return {
@@ -27,7 +29,7 @@ function createNativeUsage(agent) {
         limitsAt = value.observedAtMs; limitsFrom = value.source;
       }
     },
-    snapshot(calls) { return { provider: agent === 'claude' ? 'Anthropic' : 'Codex', context, round, total, limits, limitsAt, limitsFrom, model, rate, calls: calls || [] }; },
+    snapshot(calls) { return { provider: manifest?.usage?.provider ?? manifest?.label ?? null, context, round, total, limits, limitsAt, limitsFrom, model, rate, calls: calls || [] }; },
   };
 }
 module.exports = { createNativeUsage };

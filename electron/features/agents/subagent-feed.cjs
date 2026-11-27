@@ -5,6 +5,7 @@ const { TranscriptTail } = require('../../agent-actions.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../../conversation.cjs');
 const { containedFile, sessionHeader, findRolloutSession, sameDirectory } = require('../../session-files.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 
 const ENTRY_LIMIT = 400, FINAL_LIMIT = 20, FINAL_TTL = 30 * 60000, PUSH_INTERVAL = 250;
 const time = value => Number.isFinite(value) && value >= 0 ? value : null;
@@ -27,7 +28,8 @@ class SubagentFeeds {
     this.entries = new Map(); this.notifications = new Set();
   }
   track(call) {
-    const home = this.local && call.dispatch ? rootValue(call.agent === 'Codex' ? this.codexHome : this.claudeHome) : null;
+    const home = this.local && call.dispatch && adapterOf(call.sourceAgent)?.transcript
+      ? rootValue(call.agent === 'Codex' ? this.codexHome : this.claudeHome) : null;
     const entry = { call, home, revision: 0, sentAt: -Infinity, dirty: true, replies: new Map(), inputs: new Map(), inputAliases: new Map(), ownerInputs: new Set(), ownerMessages: new Map(), bundles: new Map() };
     // Keep one extra entry to detect truncation without retaining an unbounded set of message identities.
     entry.log = new ConversationLog(() => { entry.dirty = true; }, ENTRY_LIMIT + 1);
@@ -239,6 +241,7 @@ class SubagentFeeds {
   }
   async location(call) {
     if (!this.local || !call.dispatch || !call.cwd || !/^[\w-]{1,160}$/.test(call.sessionId || '')) return null;
+    if (!adapterOf(call.sourceAgent)?.transcript) return null;
     const entry = this.owned(call);
     if (!entry) return null;
     entry.home ||= rootValue(call.agent === 'Codex' ? this.codexHome : this.claudeHome);

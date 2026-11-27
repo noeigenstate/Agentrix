@@ -9,9 +9,8 @@
 //   turn.completed  status, error, terminalReason, message, durationMs, costUsdMicros, costEstimated, tokens (how the provider says the turn ended)
 //   error  code, message, willRetry     switch.updated  a SwitchState (the whole payload)     limits.updated  providerStatus, notice { code, message, resetsAtMs }
 //   context.compacting  active     context.compacted  trigger, preTokens, postTokens     item.dropped  bytes  (the last two become a line of the conversation: native-notices.ts)
-// usage.updated and routing.updated are not part of the conversation: the usage panel asks the main process for the numbers (ApiUsage). Of limits.updated only
-// the provider's own notice that a limit was reached is kept, to be said in the conversation.
-import type { AgentEvent, LimitsPayload, SwitchState, TokenCounts } from '../../shared/agent-events';
+// usage.updated carries the session context counts. Of limits.updated only the provider's own notice is kept.
+import type { AgentEvent, AgentProvider, LimitsPayload, SwitchState, TokenCounts } from '../../shared/agent-events';
 
 export type Payload = Record<string, unknown>;
 export type NativeItem = {
@@ -26,7 +25,7 @@ export type TurnEnd = {
 export type LimitNotice = NonNullable<LimitsPayload['notice']>;
 export type NativeRequest = { id: string; kind: string; blocking: boolean; title: string; preview: string; questions: Payload[]; at: number };
 export type NativeModel = {
-  identity: { runtimeSessionId: string; epoch: string; provider: 'claude' | 'codex'; transport: string } | null;
+  identity: { runtimeSessionId: string; epoch: string; provider: AgentProvider; transport: string } | null;
   lastSequence: number | null; refused: string[];
   session: { state: string; reason: string | null } | null;
   turn: { running: boolean; status: string | null; error: string | null; end: TurnEnd | null };
@@ -34,6 +33,8 @@ export type NativeModel = {
   diff: string | null; plan: { explanation: string | null; steps: { text: string; status: string | null }[] } | null;
   path: { previous: string | null; selected: string; reason: string | null; at: number } | null;
   error: { code: string | null; message: string; willRetry: boolean } | null;
+  context: { used: number | null; size: number | null } | null;
+  routingRevision: number | null;
   // What the provider said about its allowance: whether it rejects, and the notice that a limit was reached (null while it says none).
   limits: { providerStatus: string | null; notice: LimitNotice | null } | null;
   // The run-mode change this session is going through (contract addendum): one state for both transports, replaced whole by each event.
@@ -44,7 +45,8 @@ export type NativeModel = {
 
 export const emptyModel = (): NativeModel => ({
   identity: null, lastSequence: null, refused: [], session: null, turn: { running: false, status: null, error: null, end: null },
-  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, limits: null, switchState: null, compacting: false,
+  order: [], items: {}, requests: [], receipts: {}, diff: null, plan: null, path: null, error: null, context: null, routingRevision: null,
+  limits: null, switchState: null, compacting: false,
 });
 
 const SEND_STATES = new Set(['starting', 'idle', 'running', 'waiting']);
@@ -135,6 +137,12 @@ function handle(draft: NativeModel, event: AgentEvent) {
     case 'input.receipt': { const id = text(payload.clientMessageId), status = text(payload.status); if (id && status) draft.receipts[id] = status; break; }
     case 'path.changed': draft.path = { previous: text(payload.previous), selected: text(payload.selected) ?? 'unknown', reason: text(payload.reason), at: event.occurredAtMs ?? event.receivedAtMs }; break;
     case 'switch.updated': draft.switchState = event.payload; break;
+    case 'usage.updated': {
+      const used = count(payload.contextTokens), size = count(payload.contextWindow);
+      draft.context = used !== null || size !== null ? { used, size } : null;
+      break;
+    }
+    case 'routing.updated': draft.routingRevision = event.sequence; break;
     case 'limits.updated': {
       const notice = object(payload.notice), code = text(notice.code), message = text(notice.message), url = text(notice.url);
       // The console action and its address are kept as given; the view opens only the one fixed address (native-words.ts consoleCheck).

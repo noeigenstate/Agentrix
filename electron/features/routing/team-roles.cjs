@@ -1,6 +1,7 @@
 const modelSeats = require('./model-seats.cjs');
 const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules } = require('./role-rules.mjs');
 const { adapterOfModel, agentOfModel } = require('./seat-rules.mjs');
+const { agentIds } = require('../cli-adapters/registry.mjs');
 const { outsideFences, region } = require('./guide-format.cjs');
 
 const seatKeys = ['model', 'effort', 'fast', 'ultracode'];
@@ -13,8 +14,8 @@ const unknownKey = (value, keys) => Object.keys(value).some(key => !keys.include
 const unsafeFileModel = value => typeof value === 'string' && (value.endsWith(':') || value.includes('://'));
 const fileEffort = value => {
   if (value?.effort === undefined || typeof value.model !== 'string') return true;
-  const { id, models: { efforts } } = adapterOfModel(value.model).manifest;
-  return efforts.includes(value.effort) || value.effort === (id === 'claude' ? 'adaptive' : 'minimal');
+  const { efforts, fileEfforts } = adapterOfModel(value.model).manifest.models;
+  return efforts.includes(value.effort) || fileEfforts.includes(value.effort);
 };
 
 function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
@@ -86,9 +87,14 @@ const seatFrom = override => override.model === undefined ? undefined : Object.f
 const sameSeat = (left, right) => left?.model === right?.model && left?.effort === right?.effort
   && !!left?.fast === !!right?.fast && !!left?.ultracode === !!right?.ultracode;
 
+function libraryDefault(defaults, lead) {
+  const model = 'sonnet', provider = agentOfModel(model);
+  return lead && (Object.values(defaults).some(seat => agentOfModel(seat.model) === provider) ? { model, effort: 'high' } : lead);
+}
+
 function resolveTeam(entry, config, defaults) {
   const builtIn = baseRows(entry), overrides = config.roles;
-  const lead = defaults[entry.seats[0]], librarySeat = needsCodexFallback(defaults) ? lead : lead && { model: 'sonnet', effort: 'high' };
+  const librarySeat = libraryDefault(defaults, defaults[entry.seats[0]]);
   const rows = new Map(builtIn.map(row => [row.id, row]));
   const picks = new Map();
   const chosen = id => {
@@ -123,7 +129,6 @@ function resolveTeam(entry, config, defaults) {
     effective: Object.fromEntries(team.filter(({ row, seat }) => row.enabled && seat).map(({ row, seat }) => [row.id, { ...seat }])) };
 }
 
-const needsCodexFallback = defaults => !Object.values(defaults).some(seat => agentOfModel(seat.model) === 'claude');
 const englishNamesByEntry = new WeakMap();
 
 function englishNames(entry) {
@@ -146,8 +151,8 @@ function validateTeam(team, entry) {
 }
 
 function compactConfig(entry, config) {
-  const both = { claude: true, codex: true };
-  const team = resolveTeam(entry, config, modelSeats.defaultsFor(both, [], entry.seats));
+  const installed = Object.fromEntries(agentIds().map(id => [id, true]));
+  const team = resolveTeam(entry, config, modelSeats.defaultsFor(installed, [], entry.seats));
   const roles = Object.fromEntries(team.team.flatMap(({ row, seat, inherited }) => {
     if (!Object.hasOwn(config.roles, row.id)) return [];
     const override = config.roles[row.id];

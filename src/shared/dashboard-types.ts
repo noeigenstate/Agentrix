@@ -1,5 +1,6 @@
 // The model dashboard's contract between its window (src/features/dashboard) and the main process
 // (electron/features/dashboard). Numbers are null when the records do not support a value: unknown, never 0.
+import type { AgentProvider } from './agent-events';
 import type { Result, Settings } from './types';
 
 export type DashboardRange = '7d' | '30d' | 'all';
@@ -11,7 +12,7 @@ export type DashboardFindingCategory = 'correctness' | 'security' | 'performance
 // that round and no rework after it; for the lead's model, a delivery the owner passed at its first submission.
 // Ratios are 0..1. A model row's weight is the lowest of its adopted per-kind weights (1 when none).
 export type DashboardModelRow = {
-  model: string; agent: 'codex' | 'claude'; runs: number; firstPassRate: number | null;
+  model: string; agent: AgentProvider; runs: number; firstPassRate: number | null;
   avgActiveMs: number | null; tokensPerSecond: number | null; findingsPerRun: number | null;
   sentBack: number; outOfScope: number; incidents: number;
   // The latest quota reading of this model's provider in the range (the larger window's percent).
@@ -62,7 +63,8 @@ export type DashboardSuggestion = {
 };
 export type DashboardKpis = {
   firstPassRate: number | null; runs: number; runsPrevious: number | null; incidents: number;
-  quota: { provider: 'claude' | 'codex'; percent: number; minutes: number } | null;
+  quota: { provider: AgentProvider; percent: number; minutes: number } | null;
+  quotaGroups?: { provider: AgentProvider; id: string; percent: number; minutes: number }[];
   reworkPerRound: number | null; reworkPerRoundPrevious: number | null; rounds: number;
   roundtableFirstConfirm: number | null; findingsPerRound: number | null; findingFixRate: number | null;
 };

@@ -77,7 +77,7 @@ export function NativeRequestCard({ request, terminalId, sessionId }: { request:
     if (!result.ok) { setError(result.error); setBusy(false); }
   };
   // A question has its own words and its options; the tool's name and its raw input are no part of it.
-  const asking = request.questions.length > 0, title = asking ? t(KIND_WORDS.question) : request.title || t(KIND_WORDS[request.kind] ?? '它在等你的回答');
+  const asking = request.questions.length > 0, title = asking ? t(KIND_WORDS.question) : t(request.title || KIND_WORDS[request.kind] || '它在等你的回答');
   return <section className={`reading-choice native-request${asking ? ' is-question' : ''}`} role="group" aria-label={title} aria-busy={busy}>
     <div className="reading-choice-head"><strong>{title}</strong></div>
     {request.preview && !asking && <pre className="reading-choice-context native-preview">{request.preview}</pre>}

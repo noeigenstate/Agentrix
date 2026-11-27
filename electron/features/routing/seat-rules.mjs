@@ -1,7 +1,6 @@
 import { adapterOfModel, agentOfModel } from '../cli-adapters/registry.mjs';
 
-// Terminal bootstrap still reads the previous export.
-export { adapterOfModel, agentOfModel, agentOfModel as familyOf };
+export { adapterOfModel, agentOfModel };
 
 const MODEL_ID = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
 export const EFFORT = /^[a-z][a-z0-9-]{0,31}$/;

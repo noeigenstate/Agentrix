@@ -1,5 +1,7 @@
 const path = require('node:path');
 const { realpath } = require('node:fs/promises');
+const { isDispatchAgent } = require('./dispatch-events.cjs');
+const { workerOf } = require('../cli-adapters/workers.cjs');
 
 const samePath = (left, right) => typeof left === 'string' && typeof right === 'string' && path.isAbsolute(left) && path.isAbsolute(right)
   && (process.platform === 'win32' ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase() : path.resolve(left) === path.resolve(right));
@@ -17,12 +19,13 @@ async function resolveRegistration({ sessions, store, locateTeam }, registration
   };
   let refused = refusal();
   if (refused) return { refused };
-  const leadMode = () => session.agent === 'claude' ? session.nativeStructured ? 'native' : 'terminal' : 'codex';
+  const leadMode = () => workerOf(session.agent)?.leadMode?.(session.nativeStructured) ?? (session.agent ? null : 'codex');
   const refuse = code => {
     const auth = refusal();
     return auth ? { refused: auth } : { refused: code, leadMode: leadMode() };
   };
-  if (typeof registration.cwd !== 'string' || !path.isAbsolute(registration.cwd) || !['claude', 'codex'].includes(registration.agent)
+  if (!leadMode()) return { refused: 'dispatch.control_unbound' };
+  if (typeof registration.cwd !== 'string' || !path.isAbsolute(registration.cwd) || !isDispatchAgent(registration.agent)
     || !validScope(registration.allow) || typeof registration.readOnly !== 'boolean') return refuse('dispatch.control_unbound');
   const [location, parent] = await Promise.all([locateTeam(registration.cwd, { details: true }), locateTeam(project.path, { details: true })]);
   refused = refusal();
@@ -47,10 +50,12 @@ async function resolveRegistration({ sessions, store, locateTeam }, registration
   }
   refused = refusal();
   if (refused) return { refused };
+  const mode = leadMode();
+  if (!mode) return { refused: 'dispatch.control_unbound' };
   const local = project.kind !== 'ssh';
   return { run: { runId: worker.id, projectId: registration.projectId, agent: worker.agent, cwd: worker.cwd, worktree: worker.cwd,
     allow: [...worker.allow], readOnly: worker.readOnly === true || ['调查', '审查'].includes(worker.role) || registration.readOnly,
-    local, leadMode: leadMode() } };
+    local, leadMode: mode } };
 }
 
 module.exports = { resolveRegistration };

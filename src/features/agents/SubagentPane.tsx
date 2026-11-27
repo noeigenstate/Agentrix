@@ -5,10 +5,11 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowDown, DotsThreeCircle, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
 import { t } from '../../shared/i18n';
+import { agentIdForLabel } from '../../shared/agent-label.ts';
 import { useNow } from '../../shared/useNow';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { ConversationFeed } from '../reading/ConversationFeed';
-import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
+import { brandIconOf } from './AgentBrandIcon';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { CALL_STATES, failureWord, rateValue } from './AgentCalls';
@@ -72,7 +73,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
     if ((event.target as HTMLElement).closest?.('.subagent-worker-term')) return;
     if ((event.target as HTMLElement).tagName === 'TEXTAREA') body.current?.focus(); else onClose();
   };
-  const name = feed ? callModelName(feed) : t('子 agent'), Mark = feed?.agent === 'Codex' ? CodexLogo : ClaudeLogo;
+  const agent = feed ? agentIdForLabel(feed.agent) ?? 'claude' : 'claude';
+  const name = feed ? callModelName(feed) : t('子 agent'), Mark = brandIconOf(agent);
   // The task first, then the model: two splits of one model are told apart by their task, in the header and in every accessible name.
   const title = feed?.title ?? '', who = title ? `${title} · ${name}` : name;
   // A finished Task subagent is 'reviewing' but has an end time; either way nothing more can be said to it.
@@ -110,7 +112,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name: who })}
         onScroll={event => { const end = atEnd(event.currentTarget); setPaused(current => end ? null : current ?? { after: lastId }); }}>
         {asking && noTerminal && <p className="subagent-empty">{t('这个 worker 的终端现在不能显示。')}</p>}
-        {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
+        {feed ? <ConversationFeed entries={feed.entries} agent={agent} projectId={projectId}
+          live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {/* Once the conversation shows a word, it is not shown again; a refused one stays, with why. Having been read needs no saying. */}
         {sent.filter(item => !delivered.has(item.id) || receipts.get(item.id)!.status === 'rejected').map(item => <div key={item.id} className="subagent-sent">

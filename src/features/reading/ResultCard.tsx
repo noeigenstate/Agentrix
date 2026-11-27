@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, PencilSimple, Question, TerminalWindow, XCircle } from '@phosphor-icons/react';
 import type { ConversationEntry } from '../../shared/types';
+import type { AgentProvider } from '../../shared/agent-events';
 import { t } from '../../shared/i18n';
 import './result-card.css';
 import { openLinkInPopup, showPopup } from '../files/file-popup';
@@ -170,7 +171,7 @@ export function StepState({ running, failed, filled = false, unconfirmed = false
 }
 
 // The agent at work, as its CLI shows it: a live mark, what it is doing, how long the round has run and how to stop it.
-export function WorkingLine({ agent, label }: { agent: 'claude' | 'codex'; label: string }) {
+export function WorkingLine({ agent, label }: { agent: AgentProvider; label: string }) {
   const [started] = useState(() => Date.now()), now = useNow(started);
   return <div className={`reading-status is-working is-${agent}`} role="status">
     {agent === 'codex' && <i className="reading-status-mark" aria-hidden="true">•</i>}

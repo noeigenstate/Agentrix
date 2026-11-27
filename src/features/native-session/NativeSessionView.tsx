@@ -5,6 +5,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { isRoutingCommand } from '../../shared/routing-command.ts';
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
+import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { actionText } from '../agents/action-text';
@@ -22,6 +24,7 @@ import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { BillingLink } from './native-billing-link.ts';
 import { NativeRequestCard } from './NativeRequestCard';
+import { NativeModelControls } from './NativeModelControls';
 import { NativePanel } from './NativePanel';
 import { NativeToast } from './NativeToast';
 import { useComposerActions } from './useComposerActions.ts';
@@ -42,7 +45,9 @@ type SessionProps = {
 // The view of a known session (exported for its tests); NativeSessionView below finds the terminal's session and shows this.
 export function NativeSession({ terminalId, projectId, entry, autoFocus, switchState = null, handoff, onError, onOpenLink }: SessionProps) {
   const { model } = entry, identity = model.identity!, kind = identity.provider, sessionId = identity.runtimeSessionId, change = resolveSwitch(switchState, entry);
-  const claude = kind === 'claude', agent = claude ? 'Claude Code' : 'Codex';
+  const manifest = adapterOf(kind)!.manifest, agent = manifest.label;
+  const sessionControls = identity.transport === 'agy-acp' && support(manifest, 'liveModel').ok;
+  const [settingModel, setSettingModel] = useState(false);
   const [text, setText] = useState(''), [sent, setSent] = useState<SentMessage[]>([]), [discarded, setDiscarded] = useState<ReadonlySet<string>>(new Set()), [error, setError] = useState<string | null>(null);
   // What a switch carries in: pictures that go with the next message, and messages the previous session never delivered. Neither is ever sent by itself.
   const [carried, setCarried] = useState<string[]>([]), [unsent, setUnsent] = useState<NativePendingInput[]>([]);
@@ -55,10 +60,12 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   useLayoutEffect(() => { if (caret.current !== null) { box.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
   // Both providers use the same native controls; a new conversation shuts this binding's box until its replacement arrives.
   const actions = useComposerActions({ projectId, terminalId, sessionId, agent: kind, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
-  const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model), working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
+  const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing && !settingModel, over = isOver(model);
+  const working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
   const pending = useMemo(() => nativePending(model, sent, discarded), [model, sent, discarded]);
-  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : actions.renewing ? t('正在开始新的对话') : t('会话已结束，不能再发消息')];
+  const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : actions.renewing ? t('正在开始新的对话')
+    : settingModel ? t('正在应用会话设置…') : t('会话已结束，不能再发消息')];
   const hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
 
   // The box's helpers, the reading view's own: ↑↓ through what was sent (the replayed history included), the "/" list of the commands the session runs without
@@ -70,7 +77,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // Model routing owns /model, /effort and /fast in a native session, so its list never offers them.
   const listed = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
   const commands: readonly ListLine[] = useMemo(() => listed.filter(command => !isRoutingCommand(command.name)), [listed]);
-  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu, note: open && text.startsWith('!') ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
+  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu,
+    note: open && composerAction(text, kind)?.kind === 'shell' ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
     complete: command => { if (actions.menu) { actions.choose(command.name); return; } edit(`${command.name} `); box.current?.focus(); }, send: () => void send(), close: actions.close });
   const edit = (value: string) => { setText(value); palette.dismiss(false); recall.forget(); actions.forget(); };
   const mentions = useMentions({ projectId, draft: text, input: box, disabled: !open || isCommandDraft(text), edit, onError: setError });
@@ -112,7 +120,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const send = async () => {
     const value = text.trim(), pictures = carried, quoted = quote;
     if (!(value || pictures.length) || !open) return;
-    const action = composerAction(value, claude ? 'claude' : 'codex');
+    const action = composerAction(value, kind);
     if (action) { void actions.run(action, value); return; }
     edit(''); setCarried([]); setQuote(null);
     if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
@@ -186,7 +194,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const noticed = model.limits?.notice?.code !== undefined && model.limits.notice.code === model.error?.code;
   const why = ended ?? (noticed ? null : sentence(model.error?.message));
   // Codex history replay has no turn end or trustworthy interval between its items.
-  const facts = useMemo(() => !claude && !end ? { durationMs: null } : turnFacts(end, kind, turnStatus === 'completed'), [claude, end, kind, turnStatus]);
+  const facts = useMemo(() => !support(manifest, 'terminal').ok && !end ? { durationMs: null }
+    : turnFacts(end, kind, turnStatus === 'completed'), [manifest, end, kind, turnStatus]);
   // The lines of a compaction or a dropped result are no reply and no step of the round: its result is the one it would have without them.
   const result = useMemo(() => unknown ? null : latestResult(entries.filter(entry => !isNotice(entry)), { idle: settled, interrupted: stopped, stopped, failure: failed ? why ?? turnFailed() : undefined, facts }),
     [entries, settled, stopped, failed, unknown, why, facts]);
@@ -224,6 +233,9 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   </>;
 
   return <div className={`reading-view${dropping ? ' is-dropping' : ''}`} data-agent={kind} data-native-session={sessionId} onDragOver={dragOver} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false); }} onDrop={drop}>
+    {sessionControls && <NativeModelControls terminalId={terminalId} sessionId={sessionId} kind={kind} agent={agent} context={model.context}
+      idle={model.session?.state === 'idle' && !model.turn.running && !locked && !actions.renewing && !pending.prompts.some(prompt => !pending.lost.has(prompt.id))}
+      routingRevision={model.routingRevision} busy={settingModel} onBusy={setSettingModel} onError={setError} />}
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}>
         <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
@@ -242,7 +254,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     {error && <p className="form-error native-error" role="alert">{error}</p>}
     {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span>
       <button type="button" className="button secondary small" disabled={actions.renewing} onClick={() => {
-        if (!claude && model.session?.state === 'failed') void actions.run({ kind: 'new' }, text);
+        if (!support(manifest, 'terminal').ok && model.session?.state === 'failed') void actions.run({ kind: 'new' }, text);
         else dismissNative(terminalId);
       }}>{t('开始新的对话')}</button>
     </div>}

@@ -2,11 +2,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const { readEnvelope, readLeadSeat } = require('./dispatch-events.cjs');
+const { agentOfModel, manifestOfModel } = require('../cli-adapters/workers.cjs');
 
 const DESCRIPTION_PREFIX = /^\[([a-z][a-z0-9-]{0,31}(?:\/[a-z][a-z0-9-]{0,23})?)\]\s*/;
 const CLAUDE_ALIAS = /^(sonnet|opus|haiku|fable)$/;
 const CLAUDE_EFFORT = /^(low|medium|high|xhigh|max)$/;
-const familyOf = model => /^(opus|sonnet|haiku|fable|claude-)/.test(model) ? 'claude' : 'codex';
+const isClaudeModel = model => agentOfModel(model) === 'claude';
 const SEAT_BYTES = 8192;
 const SEAT_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const MODEL = /^[A-Za-z0-9][\w.:@+/[\]-]{0,159}$/;
@@ -68,7 +69,7 @@ function claudeLeadSeat(bootstrap) {
     if (!stat.isFile() || stat.size > 2 * SEAT_BYTES) return null;
     const text = fs.readFileSync(file, 'utf8');
     const { model, effort } = next ? readLeadSeat(text) : legacyLeadSeat(text);
-    return familyOf(model) === 'claude' ? seatExpectation({ model, effort }) : null;
+    return isClaudeModel(model) ? seatExpectation({ model, effort }) : null;
   } catch { return null; }
 }
 
@@ -118,5 +119,5 @@ function callSeat(call, model) {
   return { seat, seatSource, ...(specialty ? { specialty } : {}), ...(seatName === undefined ? {} : { seatName }), ...(offTeam ? { offTeam } : {}) };
 }
 
-module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf,
+module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, agentOfModel, manifestOfModel, isClaudeModel,
   liveSeatMap, launchSeatMap, parseSeatMap, writeSeatMap, seatExpectation, claudeLeadSeat, SEAT_BYTES };

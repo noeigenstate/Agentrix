@@ -1,4 +1,4 @@
-const { agentDescription, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf, liveSeatMap, seatExpectation } = require('../agents/call-seat.cjs');
+const { agentDescription, CLAUDE_ALIAS, CLAUDE_EFFORT, manifestOfModel, isClaudeModel, liveSeatMap, seatExpectation } = require('../agents/call-seat.cjs');
 
 function agentSeat(input, seats) {
   if (!seats || !['Agent', 'Task'].includes(input?.tool_name)) return {};
@@ -9,7 +9,9 @@ function agentSeat(input, seats) {
   const choice = seats[seat], expected = seatExpectation(choice);
   if (!expected) return {};
   const { model, effort, agentModel: alias = model } = choice;
-  if (familyOf(model) !== 'claude') return { seat, expected, note: `[${seat}] uses Codex.` };
+  if (!isClaudeModel(model)) {
+    return { seat, expected, note: `[${seat}] uses ${manifestOfModel(model).label}.` };
+  }
   if (typeof alias !== 'string' || !CLAUDE_ALIAS.test(alias) || typeof effort !== 'string' || !CLAUDE_EFFORT.test(effort) || tool.subagent_type === 'fork') {
     return { seat, expected, note: `[${seat}] Claude Agent cannot apply this seat's model and effort.` };
   }

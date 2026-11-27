@@ -393,12 +393,19 @@
     }
   },
   "dynamicLoads": {
+    "electron/features/agy-acp/adapter.cjs": {
+      "targets": [
+        "electron/features/agy-acp/index.cjs"
+      ],
+      "reason": "Antigravity ACP loads on demand when the app probes models or starts a role.",
+      "digest": "8ef3e6573c6fa6f4b93c46e387bb76c23945a29163893ffed08551769115f65c"
+    },
     "electron/features/terminal-events/shell-events.cjs": {
       "targets": [
         "electron/features/agents/agent-command.cjs"
       ],
       "reason": "The shell event handler loads the Codex argument mapper when admitting a native launch.",
-      "digest": "f40c6425ba5ac339f8fba1b4fb3de2d390f343dc022a17db0d1e90327e4b9556"
+      "digest": "b2df97b037916a196282946dd608984446be8be83c0d0de00af34c1d0f13e9c9"
     },
     "electron/features/agents/agent-command.cjs": {
       "targets": [
@@ -437,7 +444,7 @@
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "c65a4cfb4c242fa80ea584459ba4759395798d30837a891c77d63b2cc393d6ee",
+      "digest": "243ab3c1f8cc2d8b80c81b24b0f342a82788397a7b2814a2906f72b694b6b14e",
       "targets": [
         "integration/dispatch.cjs"
       ],
@@ -449,17 +456,18 @@
       "reason": "Loads the external Sherpa wrapper and seeds it with the native engine chosen by the voice runtime."
     },
     "integration/agent-event.cjs": {
-      "digest": "149c6d1c52e337ab1930b3c7ca231c3a0c67f65c84084dbc3692c82b1ed098da",
+      "digest": "08d79d5f5e3dcf973e5b8cf20d787c66f7b9c69e99320d519508f94421967368",
       "targets": [
         "electron/features/routing/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
         "electron/features/agents/dispatch-events.cjs",
-        "electron/features/agents/start-failure.cjs"
+        "electron/features/agents/start-failure.cjs",
+        "electron/features/cli-adapters/manifests/worker.cjs"
       ],
-      "reason": "The packaged runtime root is electron."
+      "reason": "The packaged runtime root is electron. The carried manifest defines the supported shell event providers."
     },
     "integration/dispatch.cjs": {
-      "digest": "6a26e0fdd7930a10b5df254dff78ac13e053e5e9831bef1213ff8914fc74af6c",
+      "digest": "233d29fe209236a8f9bb7e2097310935e7077072c9e588e25ef965925d4c71f7",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -473,6 +481,9 @@
         "electron/features/routing/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
         "electron/features/codex-app-server/index.cjs",
+        "electron/features/agy-acp/index.cjs",
+        "electron/features/agy-acp/usage-reader.cjs",
+        "electron/shared/stdio-rpc.cjs",
         "electron/features/agents/dispatch-control.cjs",
         "electron/features/codex-runtime/locator.cjs",
         "electron/features/claude-runtime/locator.cjs",
@@ -491,7 +502,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "d18f974fb74acd884cea1eb35ffacca77646aceb28763d8ee99d4f2762a907c1",
+      "digest": "21f65ae18594b66e7ba2a4f2c7559510c2b2871ef8d79e5e38a7105375005b16",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
@@ -505,7 +516,7 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "ff9809c87e131428a0d9b37d864e9b67009117d0140aec0b81591c830602b2da",
+      "digest": "9d6fa183b0146472c0e389fad54944febdd4f0e638559275bd814fee318b48d3",
       "targets": [
         "integration/shims/intercept.cjs",
         "integration/dispatch.cjs"
@@ -513,7 +524,7 @@
       "reason": "The Lab loads the configured source or packaged dispatch helper to get its runtime bundle and render delegated events."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "4a8da1fc1757b8bc8e0f3cd1b06218d489aa3b90c5e88467a8d852cadc220ff1",
+      "digest": "7f1029dbcbfa683cf17a7e519d6c38378d08c84e27ad95a8c02e58fcb0f66b61",
       "targets": [
         "integration/dispatch.cjs",
         "electron/features/agents/call-seat.cjs",

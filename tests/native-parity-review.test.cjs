@@ -125,10 +125,12 @@ test('S9 subscription limits are isolated by project including SSH', async t => 
 });
 test('S13 oversized history response shrinks a page without a dropped-item notice', async () => {
   let drop; const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
-  const filename = path.join(__dirname, '../electron/features/codex-app-server/rpc.cjs');
-  const { createRpc } = loadWithStubs(filename, () => ({ MAX_FRAME: 1000, jsonFrames: (_receive, dropped) => {
+  const shared = path.join(__dirname, '../electron/shared/stdio-rpc.cjs');
+  const transport = loadWithStubs(shared, () => ({ MAX_FRAME: 1000, jsonFrames: (_receive, dropped) => {
     drop = dropped; const read = () => {}; read.end = read.clear = () => {}; return read;
   } }));
+  const wrapper = path.join(__dirname, '../electron/features/codex-app-server/codex-rpc.cjs');
+  const { createRpc } = loadWithStubs(wrapper, () => transport);
   let notices = 0; const rpc = createRpc(child, { onDropped: () => notices++ });
   const request = rpc.request('thread/turns/list', {}); drop({ id: '1' }, 1001);
   await assert.rejects(request, { code: 'history_frame_limit' }); assert.equal(notices, 0); rpc.close();

@@ -32,6 +32,8 @@ Assembles terminal sessions, IPC, window state and presentation from application
 
 ## May import
 - `electron/features/routing/store.cjs` (remote guide payload)
+- `electron/features/cli-adapters/capabilities.mjs` (owner session eligibility)
+- `electron/features/cli-adapters/registry.mjs` (provider of a selected quota model)
 - `electron/project-svg.cjs` (project image theming)
 - `electron/conversation-timing.cjs` (publication delay)
 - `electron/app/mac-menu.cjs` (native menu template)

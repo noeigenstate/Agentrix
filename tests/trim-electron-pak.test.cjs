@@ -96,7 +96,7 @@ for (const [platform, arch, key, relative] of [
     const calls = [], removed = [], created = [], written = [], modes = [];
     const runtime = { 'transcript-tail.cjs': 'tail source\n', 'features/agents/token-rate.cjs': 'rate source\n', 'features/native-session/routing.cjs': 'routing source\n',
       'shims/intercept.cjs': 'intercept source\n' };
-    const shimFiles = { codex: 'codex launcher\n', 'codex.cmd': 'cmd launcher\n' }, hookFiles = { 'hooks/zsh/.zshenv': 'zsh stub\n' };
+    const shimFiles = { codex: '#!/bin/sh\n', agy: '#!/bin/sh\n', 'codex.cmd': 'cmd launcher\n' }, hookFiles = { 'hooks/zsh/.zshenv': 'zsh stub\n' };
     const verified = [];
     const hook = await loadScript('after-pack.cjs', {
       './claude-sdk-pack.cjs': { verifyPackage: async resources => verified.push(resources) },
@@ -116,7 +116,7 @@ for (const [platform, arch, key, relative] of [
     assert.deepEqual(written, [...carried, ...installed, [path.join(shims, 'intercept.cjs'), runtime['shims/intercept.cjs']]]);
     assert.deepEqual(verified, [resources]);
     assert.deepEqual(created, [...carried.map(([file]) => path.dirname(file)), shims, ...installed.map(([file]) => path.dirname(file))]);
-    assert.deepEqual(modes, [[path.join(shims, 'codex'), 0o755]]);
+    assert.deepEqual(modes, [[path.join(shims, 'codex'), 0o755], [path.join(shims, 'agy'), 0o755]]);
     assert.equal(removed.some(file => file.endsWith('keep.sh')), false);
     assert.equal(removed.some(file => file.endsWith('dxcompiler.dll')), platform === 'win32');
     assert.equal(removed.some(file => file.endsWith('drop.ps1')), platform !== 'win32');

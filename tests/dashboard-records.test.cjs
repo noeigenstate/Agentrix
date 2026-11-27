@@ -181,6 +181,18 @@ test('quota snapshots throttle each provider and preserve zero', async t => {
   assert.equal(quota.at(-1).windows[0].percent, 1); assert.ok(!JSON.stringify(quota).includes('accountId'));
 });
 
+test('agy quota writes safe group identifiers in its own scope', async t => {
+  const { records } = await lab(t);
+  const scope = quotaScope('agy', { kind: 'local' }, { usageEnv: { HOME: path.resolve('fixture-agy-home') } });
+  records.quota('agy', [{ id: 'gemini', minutes: 300, percent: 12, accountId: 'private-fixture' },
+    { id: '3p', minutes: 10080, percent: 31 }, { id: 'private-fixture', minutes: 10080, percent: 26 }], scope);
+  const [saved] = await records.read('quota');
+  assert.deepEqual(saved, { at: saved.at, v: 1, scope, provider: 'agy', windows: [
+    { id: 'gemini', minutes: 300, percent: 12, resetsAt: null }, { id: '3p', minutes: 10080, percent: 31, resetsAt: null },
+    { minutes: 10080, percent: 26, resetsAt: null },
+  ] });
+});
+
 test('grades use only agent conversation ids and keep unknown identities null', async t => {
   const { records } = await lab(t), project = { id: 'p', path: path.join(os.tmpdir(), 'project') };
   const grade = { projectId: 'p', terminalId: 'terminal', outcome: 'passed', submission: 1 };

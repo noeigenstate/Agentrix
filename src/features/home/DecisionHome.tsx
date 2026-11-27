@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { ArrowUp, CircleNotch, FolderSimple, Keyboard, Paperclip, X } from '@phosphor-icons/react';
-import type { Project, Result } from '../../shared/types';
+import type { AgentsState, Project, ProjectTerminal, Result } from '../../shared/types';
+import type { AgentProvider } from '../../shared/agent-events';
 import type { Decision } from './decisions';
 import { DecisionCard } from './DecisionCard';
 import { DecisionInbox } from './DecisionInbox';
@@ -14,6 +15,11 @@ import { useDictatedBox } from '../voice/voice-input';
 import { showPopup } from '../files/file-popup';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
+import { nativeBridge } from '../native-session/native-bridge.ts';
+import { refreshNativeSession } from '../native-session/native-store.ts';
+import { reasonWords } from '../native-session/native-words.ts';
+import { adapterOf, adapters } from '../../../electron/features/cli-adapters/registry.mjs';
+import { canLead, support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import './home.css';
 
 // The home page as an inbox, for grading the work like a teacher: one list of what needs you and of every session, by
@@ -65,7 +71,62 @@ export function DecisionHome({ projects, decisions, snoozed, onOpenProject, onOp
 }
 
 const VOICE_TARGET = 'decision-home';
-const AGENT_OPTIONS = [{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }];
+const nativeFromHome = (manifest: NonNullable<ReturnType<typeof adapterOf>>['manifest']) =>
+  !manifest.install.npm && support(manifest, 'native').ok;
+const AGENT_OPTIONS = adapters().filter(({ manifest }) => canLead(manifest)).map(({ manifest }) => ({
+  value: manifest.id, label: manifest.label, native: nativeFromHome(manifest),
+}));
+
+function useInstalledAgents(local: boolean) {
+  const [agents, setAgents] = useState<AgentsState | null>(null);
+  useEffect(() => {
+    const api = typeof window === 'undefined' ? undefined : window.agentrix;
+    if (!local || !api?.getAgents) return;
+    let active = true, changed = false;
+    const off = api.onAgents?.(state => { changed = true; if (active) setAgents(state); });
+    void api.getAgents().then(result => { if (active && !changed && result.ok) setAgents(result.value); }, () => {});
+    return () => { active = false; off?.(); };
+  }, [local]);
+  return local ? agents : null;
+}
+
+async function goalWithImages(id: string, goal: string, files: readonly Blob[]): Promise<Result<string>> {
+  if (!files.length) return { ok: true, value: goal };
+  const paths: string[] = [];
+  for (const file of files) {
+    const saved = await window.agentrix.saveImage(id, await file.arrayBuffer(), file.type);
+    if (!saved.ok) return saved;
+    paths.push(saved.value);
+  }
+  return { ok: true, value: [goal, t('附图（请先打开看看）：'), ...paths].filter(Boolean).join('\n') };
+}
+
+async function sendNativeGoal(project: Project, terminal: ProjectTerminal, agent: AgentProvider, goal: string, files: readonly Blob[]) {
+  const bridge = nativeBridge();
+  if (!bridge) return t('当前版本还不支持这个命令');
+  let id = terminal.id, sessionId = terminal.nativeRuntimeSessionId;
+  if (!terminal.cliActive || !sessionId) {
+    if (terminal.sessionId && terminal.status !== 'exited') {
+      const spare = project.terminals.find(other => !other.sessionId && !other.nativeRuntimeSessionId && !other.agentStarting);
+      if (spare) id = spare.id;
+      else {
+        const added = await window.agentrix.addTerminal(project.id, false);
+        if (!added.ok) return reasonWords(added.error) ?? added.error;
+        id = added.value;
+      }
+    }
+    const started = await bridge.start(id, { agent });
+    refreshNativeSession(id);
+    if (!started.ok) return reasonWords(started.error) ?? started.error;
+    sessionId = started.value.runtimeSessionId;
+  }
+  const composed = await goalWithImages(id, goal, files);
+  if (!composed.ok) return composed.error;
+  const sent = await bridge.send(id, sessionId, crypto.randomUUID(), composed.value);
+  if (!sent.ok) return reasonWords(sent.error) ?? sent.error;
+  const receipt = sent.value as { status?: string } | null;
+  return receipt?.status === 'rejected' ? t('任务未发送，请稍后重试。') : null;
+}
 
 // "What next": a goal sent to a project's agent from here, without leaving the page. One that runs gets it at once (it
 // queues it while it works); otherwise the chosen agent is started first and gets it when its input is ready. Its
@@ -77,8 +138,12 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>; onDone: (message: string) => void; onError: (message: string) => void; children?: ReactNode;
 }) {
   const choices = useMemo(() => newWorkProjects(projects, selectedProjectId), [projects, selectedProjectId]);
-  const [text, setText] = useState(''), [dockProject, setDockProject] = useState(''), [agent, setAgent] = useState<'claude' | 'codex'>('claude'), [busy, setBusy] = useState(false);
+  const [text, setText] = useState(''), [dockProject, setDockProject] = useState(''),
+    [agent, setAgent] = useState<AgentProvider>(AGENT_OPTIONS[0].value), [busy, setBusy] = useState(false);
   const project = choices.find(item => item.id === (selectedProjectId ?? dockProject)) ?? choices[0], terminal = project?.terminals[0];
+  const agents = useInstalledAgents(project?.kind === 'local');
+  const options = AGENT_OPTIONS.filter(option => !option.native || agents?.[option.value]?.installed && !!nativeBridge());
+  const pickedAgent = options.some(option => option.value === agent) ? agent : options[0].value;
   const pickProject = (id: string) => selectedProjectId === undefined ? setDockProject(id) : onPickProject?.(id);
   const sshUnavailable = project?.kind === 'ssh' && !terminal?.cliActive;
   // Dictation (its microphone or the voice shortcut) puts the words where the cursor is; Enter only puts them in, since
@@ -103,32 +168,33 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
     event.preventDefault(); addImages(files);
   };
   const start = async () => {
-    let goal = text.trim();
+    const goal = text.trim(), files = images.map(image => image.blob);
     if ((!goal && !images.length) || !project || !terminal || busy || sshUnavailable) return;
-    const kind = terminal.cliActive ? (terminal.agent === 'codex' ? 'codex' : 'claude') : agent, name = kind === 'codex' ? 'Codex' : 'Claude Code';
+    const selected = adapterOf(terminal.cliActive ? terminal.agent ?? AGENT_OPTIONS[0].value : pickedAgent)?.manifest;
+    if (!selected || !canLead(selected)) return;
+    const { id: kind, label: name, command } = selected;
     setBusy(true);
     try {
-      if (!terminal.cliActive) {
-        if (terminal.sessionId && terminal.shellReady) window.agentrix.writeTerminal(terminal.id, `${agent}\r`);
-        else if (!terminal.sessionId && await onAction(window.agentrix.agentLaunch(terminal.id, agent, 'new')) === undefined) return;
-        onDone(t('正在启动 {agent}，准备好就把任务发给它…', { agent: name }));
-        if (!await untilAtPrompt(terminal.id, kind)) { onError(t('{agent} 还没准备好接收任务，任务留在这里，稍后再点开始。', { agent: name })); return; }
-      }
-      // A just-started terminal has its session only now.
-      const state = await window.agentrix.getState();
-      const sessionId = state.ok ? state.value.projects.flatMap(item => item.terminals).find(item => item.id === terminal.id)?.sessionId : null;
-      if (!sessionId) { onError(t('它的终端还没有准备好，请稍后再试。')); return; }
-      if (images.length) {
-        const paths: string[] = [];
-        for (const image of images) {
-          const saved = await window.agentrix.saveImage(terminal.id, await image.blob.arrayBuffer(), image.blob.type);
-          if (!saved.ok) { onError(saved.error); return; }
-          paths.push(saved.value);
+      if (nativeFromHome(selected)) {
+        const running = project.terminals.find(item => item.cliActive && item.agent === kind && item.nativeRuntimeSessionId) ?? terminal;
+        const failed = await sendNativeGoal(project, running, kind, goal, files);
+        if (failed) { onError(failed); return; }
+      } else {
+        if (!terminal.cliActive) {
+          if (terminal.sessionId && terminal.shellReady) window.agentrix.writeTerminal(terminal.id, `${command}\r`);
+          else if (!terminal.sessionId && await onAction(window.agentrix.agentLaunch(terminal.id, kind, 'new')) === undefined) return;
+          onDone(t('正在启动 {agent}，准备好就把任务发给它…', { agent: name }));
+          if (!await untilAtPrompt(terminal.id, kind)) { onError(t('{agent} 还没准备好接收任务，任务留在这里，稍后再点开始。', { agent: name })); return; }
         }
-        goal = [goal, t('附图（请先打开看看）：'), ...paths].filter(Boolean).join('\n');
+        // A just-started terminal has its session only now.
+        const state = await window.agentrix.getState();
+        const sessionId = state.ok ? state.value.projects.flatMap(item => item.terminals).find(item => item.id === terminal.id)?.sessionId : null;
+        if (!sessionId) { onError(t('它的终端还没有准备好，请稍后再试。')); return; }
+        const composed = await goalWithImages(terminal.id, goal, files);
+        if (!composed.ok) { onError(composed.error); return; }
+        const failed = await sendToAgent(terminal.id, sessionId, kind, composed.value);
+        if (failed) { onError(failed); return; }
       }
-      const failed = await sendToAgent(terminal.id, sessionId, kind, goal);
-      if (failed) { onError(failed); return; }
       setText(''); setImages([]); onDone(t('已交给「{project}」的 {agent}，它的进展会出现在下面。', { project: project.name, agent: name }));
     } catch (error) { onError(String(error)); } finally { setBusy(false); }
   };
@@ -148,7 +214,8 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
         <Select className="new-work-select" label={t('项目')} icon={<FolderSimple size={16} aria-hidden="true" />} value={project?.id ?? ''} onChange={pickProject} options={choices.map(item => ({ value: item.id, label: item.name }))} />
         {(sshUnavailable || !empty) && <span className="new-work-note">{sshUnavailable ? t('SSH 项目请先启动终端，再在终端里运行助手。') : terminal?.cliActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
         <span className="new-work-tools">
-          {terminal && !terminal.cliActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
+          {terminal && !terminal.cliActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={pickedAgent}
+            onChange={value => setAgent(value as AgentProvider)} options={options} />}
           <button type="button" className="icon-button new-work-attach" title={t('添加图片')} aria-label={t('添加图片')} onClick={() => picker.current?.click()}><Paperclip size={16} /></button>
           <input ref={picker} type="file" accept="image/*" multiple hidden onChange={event => { addImages([...(event.target.files ?? [])]); event.target.value = ''; }} />
           <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />

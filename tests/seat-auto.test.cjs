@@ -10,7 +10,7 @@ const { writeBootstrap, removeBootstrap, updateBootstrapLead, updateDispatchSeat
 const { argumentsOf, commandOf, WorkerOutput } = require('../integration/dispatch.cjs');
 const { seatRouting } = require('../integration/agent-event.cjs');
 const { adapterOfModel, agentOfModel } = require('../electron/features/routing/seat-rules.mjs');
-const { CLAUDE_EFFORT, familyOf } = require('../electron/features/agents/call-seat.cjs');
+const { CLAUDE_EFFORT, agentOfModel: workerAgentOfModel } = require('../electron/features/agents/call-seat.cjs');
 
 const seats = {
   designer: { model: 'claude-sonnet-5-5', agentModel: 'sonnet', effort: 'high', fast: false },
@@ -223,6 +223,7 @@ test('a running terminal and SDK query read new seats and fall back on malformed
   assert.deepEqual(seatRouting(JSON.stringify(payload), 'null', bootstrapFile).output, live);
   for (const [choice, tool, message] of [
     [seats.developer, input, /uses Codex/], [seats.qa, input, /cannot apply/],
+    [{ model: 'gemini-3.8-flash', effort: 'low' }, input, /uses Antigravity/],
     [seats.designer, { ...input, subagent_type: 'fork' }, /cannot apply/],
   ]) {
     updateDispatchSeats(bootstrapFile, { designer: choice });
@@ -231,7 +232,7 @@ test('a running terminal and SDK query read new seats and fall back on malformed
     assertSeatDenied(seatRouting(JSON.stringify(current), null, bootstrapFile).output, 'designer', message);
     assert.match(notices.at(-1), message);
   }
-  assert.equal(notices.length, 3);
+  assert.equal(notices.length, 4);
   if (process.platform !== 'win32') assert.equal(fs.statSync(sidecar).mode & 0o777, 0o600);
   for (const malformed of ['{', '{"designer":{"model":"-bad","effort":"low"}}', '{"bad/id":{"model":"haiku","effort":"low"}}',
     '{"designer":{"model":"haiku","effort":"HIGH"}}', JSON.stringify({ extra: '界'.repeat(3000) }), Buffer.from([0xff])]) {
@@ -304,7 +305,7 @@ test('a failed dispatch seat snapshot write leaves the required bootstrap usable
 
 test('the CLI registry and the carried CJS helper agree on Claude model family and built-in effort values', () => {
   const ids = ['opus', 'haiku', 'sonnet', 'fable', 'claude-internal', 'opus-next', 'gpt-6.2-sol', 'o4-mini', 'x-claude-opus'];
-  assert.deepEqual(ids.map(familyOf), ids.map(agentOfModel));
+  assert.deepEqual(ids.map(workerAgentOfModel), ids.map(agentOfModel));
   const effortValues = ['low', 'medium', 'high', 'xhigh', 'max', 'adaptive', 'HIGH'];
   assert.deepEqual(effortValues.filter(effort => CLAUDE_EFFORT.test(effort)), adapterOfModel('sonnet').manifest.models.efforts);
 });

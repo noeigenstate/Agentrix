@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
-const { readEnvelope, WIRE_FIELDS } = require('../agents/dispatch-events.cjs');
+const { readEnvelope, WIRE_FIELDS, isDispatchAgent } = require('../agents/dispatch-events.cjs');
 const { command, killMarked, aborted } = require('./process.cjs');
 const { inside, cleanupWorktrees } = require('./workspace.cjs');
 const { removePath } = require('./disk.cjs');
@@ -224,17 +224,17 @@ class LabSession {
     });
   }
   async checkArguments(args, cwd) {
+    const selectionCommand = Array.isArray(args) && ['wait', 'stop'].includes(args[0]);
     if (!Array.isArray(args) || args.length > 160 ||
       args.some(arg => typeof arg !== 'string' || arg.length > 8192 || /[\0\r\n]/.test(arg)) ||
-      !['codex', 'claude', 'wait', 'stop'].includes(args[0])) throw new Error('Invalid lab dispatch arguments.');
+      (!selectionCommand && !isDispatchAgent(args[0]))) throw new Error('Invalid lab dispatch arguments.');
     const roots = [this.workspaceRoot];
     await localPath(cwd, cwd, roots, true);
-    if (['wait', 'stop'].includes(args[0])) {
+    if (selectionCommand) {
       const selection = this.dispatchSelection(args);
       if (selection.cwd) await localPath(selection.cwd, cwd, roots, true);
       return args;
     }
-    if (args.includes('--detach') && !['codex', 'claude'].includes(args[0])) throw new Error('Only workers can detach.');
     const inputPaths = new Set(['--cwd', '--brief', '--ledger', '--summary', '--issues', '--incidents', '--findings', '--image']);
     for (let index = 1; index < args.length; index++) {
       const option = args[index];

@@ -6,7 +6,8 @@ import { t } from '../../shared/i18n';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
-import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
+import { brandIconOf } from './AgentBrandIcon';
+import { agentIdForLabel } from '../../shared/agent-label.ts';
 import { exactCount } from './Metric';
 import { callSeatRole, modelRow, roleGroups, routeVerdict } from './routing-seats.ts';
 import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, openSplit, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
@@ -35,7 +36,8 @@ export function ModelHead({ agent, name, effort, fast, ultracode, provider, titl
   agent: string; name: string; effort?: string | null; fast?: boolean | null; ultracode?: boolean | null;
   provider: string | null | undefined; title: string; rate: TokenRate | null | undefined; quiet?: boolean;
 }) {
-  const Mark = agent === 'Codex' ? CodexLogo : agent === 'Claude Code' ? ClaudeLogo : Circle;
+  const id = agentIdForLabel(agent);
+  const Mark = id ? brandIconOf(id) : Circle;
   const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : agent === 'Claude Code' ? 'Anthropic' : undefined) ? null : provider;
   const how = [effort === 'default' ? t('默认') : effort, fast != null && (fast ? t('快速') : t('普通')), ultracode === true && 'Ultracode'].filter(Boolean).join(' · ');
   return <li className="activity-call-head" title={[title, how].filter(Boolean).join('\n')}>

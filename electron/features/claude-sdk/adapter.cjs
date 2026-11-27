@@ -38,6 +38,7 @@ const nativePolicy = {
   unavailable: 'Claude API 路径当前不可用。',
   select,
   usageFacts: (runtime, projectId) => runtime.facts(projectId),
+  usesClaudeAvailability: true,
   configure(spec, getSettings, mayContinue) {
     spec.mayContinue = mayContinue;
     spec.quotaFallback = () => spec.owner !== 'dispatch' && fallbackEnabled(getSettings());

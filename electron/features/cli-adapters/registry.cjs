@@ -4,6 +4,7 @@ const claude = require('../claude-runtime/adapter.cjs');
 const codex = require('../codex-runtime/adapter.cjs');
 const claudeSdk = require('../claude-sdk/adapter.cjs');
 const codexAppServer = require('../codex-app-server/adapter.cjs');
+const agyAcp = require('../agy-acp/adapter.cjs');
 const { support } = require('./capabilities.mjs');
 const { workerOf } = require('./workers.cjs');
 const { terminalAdapters } = require('./terminal.cjs');
@@ -22,8 +23,12 @@ function runtimeInstall(createInstall, callbacks) {
 }
 
 const runtimes = new Map([
-  ['claude', { ...runtimeInstall(claude.createInstall, ({ claude: peek, refreshClaude: refresh }) => ({ peek, refresh })), transcript: claude.transcript, events: claude.events, ...claudeSdk }],
-  ['codex', { ...runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh })), transcript: codex.transcript, ...codexAppServer }],
+  ['claude', { ...runtimeInstall(claude.createInstall, ({ claude: peek, refreshClaude: refresh }) => ({ peek, refresh })),
+    transcript: claude.transcript, events: claude.events, modelProbe: claude.modelProbe, ...claudeSdk }],
+  ['agy', { ...runtimeInstall(agyAcp.createInstall, ({ agy: peek, refreshAgy: refresh }) => ({ peek, refresh })),
+    native: agyAcp.native, nativePolicy: agyAcp.nativePolicy, modelProbe: agyAcp.modelProbe }],
+  ['codex', { ...runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh })),
+    transcript: codex.transcript, modelProbe: codex.modelProbe, ...codexAppServer }],
 ]);
 
 function createAdapter(manifest, runtime = {}, pathOptions) {

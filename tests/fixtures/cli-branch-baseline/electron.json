@@ -1,4 +1,3 @@
 {
-  "electron/agent-commands.cjs": 5,
-  "electron/state.cjs": 3
+  "electron/agent-commands.cjs": 5
 }

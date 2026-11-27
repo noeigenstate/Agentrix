@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { t } from '../../shared/i18n';
+import type { AgentProvider } from '../../shared/agent-events';
 import { isWindows } from '../../shared/platform';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { parseAgentScreen } from '../agents/agent-screen';
@@ -10,7 +11,7 @@ import { normalizePrompt } from './pending-prompts';
 
 export type NativeImage = { id: number; src: string };
 type Paste = { before?: string[]; label?: string; ready?: Promise<void>; conflicted?: boolean };
-type Options = { owner: string; terminalId: string; sessionId: string | null; agent: 'claude' | 'codex'; sending: RefObject<boolean>; interaction: RefObject<number>;
+type Options = { owner: string; terminalId: string; sessionId: string | null; agent: AgentProvider; sending: RefObject<boolean>; interaction: RefObject<number>;
   onParsed: () => void; blocked: (frame?: Screen) => boolean; preserveDraft: (text: string) => boolean; onError: (message: string) => void };
 
 export function useNativePictures({ owner, terminalId, sessionId, agent, sending, interaction, onParsed, blocked, preserveDraft, onError }: Options) {

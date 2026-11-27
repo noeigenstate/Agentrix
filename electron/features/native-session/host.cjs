@@ -1,4 +1,6 @@
 const { remoteGuide } = require('../routing/store.cjs');
+const { canLead, support } = require('../cli-adapters/capabilities.mjs');
+const { adapters } = require('../cli-adapters/registry.cjs');
 
 // A role the conductor started has ended: a native conductor hears it as its next message, so it can report without polling.
 function roleEnded(deps, s, project, event) {
@@ -11,7 +13,8 @@ function roleEnded(deps, s, project, event) {
 // with the owner's next prompt (hook-response.cjs), and a switch back before that prompt leaves nothing to tell.
 function tellMode(deps, s, project) {
   const text = deps.routing.modeNote(project, s.skillSessionId || s.nativeSpec?.skillSessionId || s.sessionId, s.agent);
-  const delivery = (deps.adapterOf(s.agent) ?? deps.adapterOf('codex')).notes.message(text, { native: s.nativeStructured });
+  const delivery = deps.adapterOf(s.agent)?.notes.message(text, { native: s.nativeStructured });
+  if (!delivery) return;
   if (!s.nativeStructured) { s.modeNote = delivery.hook && !s.modeNote ? text : null; return; }
   if (s.nativeRuntimeSessionId) deps.nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: deps.randomUUID(), text: delivery.send }).catch(deps.report);
 }
@@ -90,7 +93,14 @@ async function initializeNativeSessions(deps) {
     return !deps.routing ? runtime : deps.routing.trackModelRuntime(runtime,
       { family: 'claude', local: args[0]?.kind !== 'ssh', runtimes: deps.seatModelRuntimes.claude });
   };
-  wireNativeSessions(deps, directory, codex, codexFactory);
+  const providers = Object.fromEntries(await Promise.all(adapters().filter(adapter => adapter.nativePolicy?.ownerContext).map(async adapter => {
+    const factory = await adapter.native.load();
+    const runtime = factory({ dataDir: deps.app.getPath('userData'), clientVersion: deps.app.getVersion?.(), onTreeStopFailure: deps.report,
+      launchRemote: launchRemote.bind(null, deps),
+      remoteContext: (spec, { context, roleServer }) => adapter.nativePolicy.ownerContext({ ...spec, context, roleServer }, adapter) });
+    return [adapter.manifest.id, { ...runtime, create: (spec, emit) => runtime.create({ ...spec, ...adapter.nativePolicy.ownerContext(spec, adapter) }, emit) }];
+  })));
+  wireNativeSessions(deps, directory, codex, codexFactory, providers);
 }
 
 function createClaudeProvider(deps, directory, createClaudeRuntime) {
@@ -116,8 +126,8 @@ function createCodexProvider(deps, createCodexRuntime) {
         current: () => evidence.current() && deps.nativeSessions?.getSettings().codexAutoReset === true }) });
 }
 
-function wireNativeSessions(deps, directory, codex, codexFactory) {
-  deps.nativeSessions = deps.createNativeSessions(nativeRouterOptions(deps, directory, codex, codexFactory));
+function wireNativeSessions(deps, directory, codex, codexFactory, providers) {
+  deps.nativeSessions = deps.createNativeSessions(nativeRouterOptions(deps, directory, codex, codexFactory, providers));
   deps.registerClaudeWorker({ control: deps.dispatchControl, claude: deps.claudeRuntime, settings: deps.nativeSessions.getSettings, terminals: deps.workerTerminals,
     roleResultServer: deps.roleResultServer,
     env: () => deps.claudeBackgroundEnvironment(deps.withoutAppImage((deps.process ?? process).env), deps.store.settings?.claudeBackgroundTasks) });
@@ -128,10 +138,10 @@ function registerUnavailableNative(deps, handle) {
   function start(id, options) {
     const adapter = deps.adapterOf(options?.agent);
     if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
-      !adapter || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
+      !canLead(adapter?.manifest) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
     const project = deps.findProject(id), saved = deps.store.findTerminal(id).record.restore;
-    if (!deps.support(adapter.manifest, 'terminal').ok) throw new Error('Codex 原生模式连接失败，请重试。');
-    if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
+    if (!deps.support(adapter.manifest, 'terminal').ok) throw new Error(adapter.nativePolicy.restoreWithoutNative);
+    if (project.kind === 'ssh') throw new Error('SSH 原生会话暂不可用，请重试。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
     deps.launchPlans.set(id, { agent: options.agent, command: deps.launchCommand(options.agent, history), threadId: history?.id || null });
     deps.startTerminal(id, true); deps.broadcast();
@@ -145,14 +155,17 @@ function registerUnavailableNative(deps, handle) {
     // Codex is the project's reading, where a dispatched worker's report counts. Nothing reads a project's Claude account
     // without the native runtime, so Claude keeps the global reading.
     const connections = await deps.readNativeConnections(projectId);
-    const limits = { claude: deps.readNativeSubscriptionLimits().claude, codex: deps.readNativeSubscriptionLimits(projectId).codex };
+    const globalLimits = deps.readNativeSubscriptionLimits(), projectLimits = deps.readNativeSubscriptionLimits(projectId);
     const summary = deps.claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
-    return { ...summary, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
-        next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
-        codex: { path: null, reason: 'native_unavailable', next: { path: null, reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } } };
+    const agents = Object.fromEntries(adapters().map(({ manifest }) => {
+      const { id } = manifest, path = support(manifest, 'terminal').ok ? 'terminal' : null;
+      const reason = 'native_unavailable', limits = (path ? globalLimits : projectLimits)[id] || null;
+      return [id, { path, reason, next: { path, reason }, limits, connection: connections[id] }];
+    }));
+    return { ...summary, switches: { waiting: 0 }, agents };
   });
-  for (const name of ['send', 'interrupt', 'stop', 'answer', 'commands', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
+  for (const name of ['send', 'interrupt', 'stop', 'answer', 'commands', 'history', 'remote-models', 'model-options', 'settings-set', 'key-save', 'key-clear', 'key-status']) {
     handle(`native:${name}`, () => { throw new Error('原生会话暂不可用，已保留终端模式。'); });
   }
   handle('native:test-connection', (...args) => {
@@ -161,33 +174,42 @@ function registerUnavailableNative(deps, handle) {
   });
 }
 
-async function launchRemote(deps, spec, { signal, readOnly = false }) {
+async function launchRemote(deps, spec, { signal, readOnly = false, purpose }) {
   const project = deps.findProject(spec.terminalId);
-  const launch = readOnly ? null : deps.routing.launch(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true });
+  const agent = spec.agent ?? deps.legacyRestoreAgent ?? 'codex';
+  const processOptions = deps.adapterOf(agent)?.nativePolicy.remoteProcessOptions?.(purpose);
+  const launch = readOnly ? null : deps.routing.launch(project, true, spec.skillSessionId || spec.sessionId, { agent, started: true });
   const routing = readOnly ? null : deps.routing.seatsInfo(project.id);
   const remote = new deps.RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir: deps.integrationDir, auth: deps.sshAuth,
     allowBackgroundTasks: deps.store.settings?.claudeBackgroundTasks,
     claudeLead: readOnly ? null : { conductor: routing?.conductor === true, seatsMap: deps.routing.dispatchSeats(project.id) ?? {}, launchSeatsMap: launch?.agentSeats ?? {} },
     sessionKey: spec.sessionKey, onEvent: deps.onEvent, codingPath: spec.cwd, askpassPath: deps.prepareAskpass(), native: true,
+    ...(processOptions && { nativeAgent: agent }),
     guide: remoteGuide(launch?.guide), readingNote: readOnly ? '' : deps.startupNote(deps.READING_NOTE, '{AGENTRIX_HANDOFF}',
       deps.path.posix.join(project.path, 'skills'), launch, '{AGENTRIX_DISPATCH}') });
   const cancel = () => remote.close();
   if (routing) remote.appliedRouting = { effective: routing.effective, roles: routing.roles, conductor: routing.conductor === true };
-  signal.addEventListener('abort', cancel, { once: true });
-  if (signal.aborted) cancel();
-  const host = deps.sessions.get(spec.terminalId); if (host && !readOnly) host.remoteConnection = remote;
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
+  const bindHost = () => {
+    const host = deps.sessions.get(spec.terminalId);
+    if (host && (!processOptions || host.nativeRuntimeSessionId === spec.runtimeSessionId)) host.remoteConnection = remote;
+  };
+  if (!readOnly) bindHost();
   try {
     const info = await remote.ready;
-    if (signal.aborted) throw new Error('session_closed');
+    if (signal?.aborted) throw new Error('session_closed');
+    if (processOptions && info.nativeAgent !== agent) throw Object.assign(new Error('Remote SSH worker does not support this CLI.'), { code: 'ssh_worker_outdated' });
     // The host's alias and address are redacted from a failed start's reason.
     return { cwd: info.cwd || info.root, context: info.context, roleServer: info.roleServer, hosts: [project.ssh.host, project.ssh.host.split('@').at(-1)],
-      child: deps.createRemoteCodexProcess(remote) };
+      child: processOptions ? deps.createRemoteAgyProcess(remote, processOptions) : deps.createRemoteCodexProcess(remote),
+      ...(processOptions && !readOnly && { bindHost }) };
   } catch (error) { remote.close(); throw error; }
-  finally { signal.removeEventListener('abort', cancel); }
+  finally { signal?.removeEventListener('abort', cancel); }
 }
 
-function nativeRouterOptions(deps, directory, codex, codexFactory) {
-  return { directory, claude: deps.claudeRuntime, codex, resolveSpec: deps.nativeSpec,
+function nativeRouterOptions(deps, directory, codex, codexFactory, providers = {}) {
+  return { directory, claude: deps.claudeRuntime, codex, ...providers, resolveSpec: deps.nativeSpec,
     prepareConversation: spec => {
       const project = deps.findProject(spec.terminalId), previous = spec.skillSessionId || spec.sessionId, skillSessionId = deps.randomUUID();
       const { nativePolicy } = deps.adapterOf(spec.agent);
@@ -210,23 +232,42 @@ function nativeRouterOptions(deps, directory, codex, codexFactory) {
         deps.routing.endSession(project.id, committed ? previous : skillSessionId);
       };
     },
-    readHistory: async (id, { signal } = {}) => {
+    readHistory: async (id, { signal, agent: requested, list = false } = {}) => {
       const project = deps.findProject(id);
       const spec = deps.nativeSpecs.get(id);
-      const agent = project.kind === 'ssh' ? deps.legacyRestoreAgent : spec?.agent;
-      const nativePolicy = deps.adapterOf(agent)?.nativePolicy;
-      if (!nativePolicy?.structuredHistory) return deps.folderHistory(deps.folderOf(id));
       const saved = deps.store.findTerminal(id).record.restore;
-      const history = await codexFactory.history({ kind: project.kind, owner: 'gui', projectId: project.id, terminalId: id,
-        cwd: spec?.cwd || saved?.cwd || project.path, env: spec?.env, sessionId: deps.randomUUID(), sessionKey: deps.randomUUID(), providerSessionId: null }, { signal }).catch(error => {
+      const agent = requested ?? (project.kind === 'ssh' ? deps.legacyRestoreAgent : spec?.agent ?? saved?.agent);
+      const { nativePolicy, manifest } = deps.adapterOf(agent) || {};
+      const provider = providers[agent] || (nativePolicy?.structuredHistory && codexFactory);
+      if (list && (!nativePolicy?.historyList || !provider)) throw new Error('此会话不提供历史列表。');
+      if (!provider) return deps.folderHistory(deps.folderOf(id));
+      if (project.kind === 'ssh' && !deps.support(manifest, 'ssh.native').ok) throw new Error('此 CLI 不支持 SSH 原生会话。');
+      const bound = project.kind === 'ssh' || spec?.agent === agent ? spec : null;
+      const history = await provider.history({ agent, kind: project.kind, owner: 'gui', projectId: project.id, terminalId: id,
+        cwd: bound?.cwd || saved?.cwd || project.path, env: bound?.env, geminiDir: bound?.geminiDir,
+        sessionId: deps.randomUUID(), sessionKey: deps.randomUUID(), providerSessionId: null }, { signal }).catch(error => {
         const message = project.kind === 'ssh' && nativePolicy.remoteHistoryError?.(error);
-        if (message) throw Object.assign(new Error(deps.t(message)), { code: error.code });
+        const detail = message || (nativePolicy.historyList && nativePolicy.startupMessage?.(error, { kind: project.kind }));
+        if (detail) throw Object.assign(new Error(deps.t(detail)), { code: error.code });
         throw error;
       });
       if (deps.findProject(id) !== project) throw new Error('项目已变化，请重试。');
-      return { claude: null, codex: history };
+      if (nativePolicy.historyList) return list ? history : { [agent]: history[0] ?? null };
+      return { [agent]: history, [deps.defaultNativeAgent ?? 'claude']: null };
+    },
+    remoteModels: async (id, agent) => {
+      const project = deps.findProject(id), { nativePolicy } = deps.adapterOf(agent) || {};
+      const provider = providers[agent];
+      if (project.kind !== 'ssh' || !provider?.models || !nativePolicy?.remoteProcessOptions) throw new Error('此 CLI 不提供远端模型目录。');
+      const rows = await provider.models({ agent, kind: project.kind, projectId: project.id, terminalId: id,
+        cwd: project.path, sessionId: deps.randomUUID(), sessionKey: deps.randomUUID() }).catch(error => {
+        throw Object.assign(new Error(deps.t(nativePolicy.startupMessage(error, { kind: project.kind }))), { code: error.code });
+      });
+      if (deps.findProject(id) !== project) throw new Error('项目已变化，请重试。');
+      return rows;
     },
     readCommands: spec => {
+      if (spec.kind === 'ssh' && deps.adapterOf(spec.agent)?.nativePolicy.remoteProcessOptions) return Promise.resolve([]);
       const env = spec.env || (deps.process ?? process).env;
       const value = name => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
       return deps.listAgentCommands({ agent: spec.agent, projectPath: spec.cwd,
@@ -235,6 +276,13 @@ function nativeRouterOptions(deps, directory, codex, codexFactory) {
         .then(rows => rows.map(row => ({ ...row, description: deps.t(row.description) })));
     },
     connections: deps.readNativeConnections, usageInputs: deps.readNativeUsageInputs,
+    remoteLimits: async (projectId, agent, read) => {
+      const host = deps.liveHost(projectId, agent);
+      const remote = host?.remoteConnection;
+      if (!remote) return null;
+      const result = await read(remote);
+      return deps.liveHost(projectId, agent) === host && !remote.closed ? result : null;
+    },
     validateProject: projectId => {
       const project = projectId && deps.store.projects.find(project => project.id === projectId);
       if (projectId && !project) throw new Error('项目已关闭。');
@@ -244,7 +292,8 @@ function nativeRouterOptions(deps, directory, codex, codexFactory) {
     retireTerminal: deps.retireTerminal, activateNative: deps.activateNative,
     emit: event => deps.send('native:event', event), changed: (id, event) => { if (event) deps.structuredEvent(id, event); else deps.scheduleState(); },
     saveSession: (id, saved) => deps.store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
-      nativeTransport: deps.adapterOf(saved.agent).nativePolicy.transport }),
+      nativeTransport: deps.adapterOf(saved.agent).nativePolicy.transport, ...(saved.cwd && { cwd: saved.cwd }) }),
+    saveModelOptions: (id, modelOptions) => deps.store.setRestore(id, { nativeModelOptions: modelOptions }),
     invalidateSession: (id, threadId, agent) => {
       const saved = deps.store.findTerminal(id)?.record.restore;
       if (threadId && saved?.threadId === threadId && (saved.agent || deps.legacyRestoreAgent) === agent) deps.store.setRestore(id, { threadId: null, interrupted: false });

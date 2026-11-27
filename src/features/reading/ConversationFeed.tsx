@@ -1,6 +1,8 @@
 import { createContext, Fragment, useContext, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { CaretDown, CaretUp, Robot } from '@phosphor-icons/react';
 import type { ConversationEntry, GeneratedPicture } from '../../shared/types';
+import type { AgentProvider } from '../../shared/agent-events';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { modelName } from '../../shared/model-name.ts';
@@ -104,7 +106,7 @@ function Message({ entry, text = entry.text, who, className, pathOf, onError, ch
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
 // (the agents are told they can show one this way: reading-note.cjs).
 export function AssistantReply({ entry, agent, projectId, result = false, pathOf, onError }: {
-  entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void;
+  entry: ConversationEntry; agent: AgentProvider; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void;
 }) {
   // The closing 【交付】 block is read by the homework card, not shown here; what is shown is also what 复制 and 引用 take.
   const shown = useMemo(() => withoutDelivery(entry.text || ''), [entry.text]);
@@ -116,7 +118,9 @@ export function AssistantReply({ entry, agent, projectId, result = false, pathOf
   const deferred = !entry.images?.[0] && entry.generated?.deferred;
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} picture={entry.generated} projectId={projectId} result={result} onError={onError}>{result && words}</GeneratedImage>
     : deferred ? <DeferredPicture picture={entry.generated!} projectId={projectId} result={result} onError={onError} /> : null;
-  return <Message entry={entry} text={shown} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} pathOf={pathOf} onError={onError}>{result && picture}{!(result && picture) && !deferred && words}
+  const name = adapterOf(agent)!.manifest.label;
+  return <Message entry={entry} text={shown} who={name} className={`reading-assistant is-${agent}`} pathOf={pathOf} onError={onError}>
+      {result && picture}{!(result && picture) && !deferred && words}
       {entry.generated && !picture && <GeneratedCopy picture={entry.generated} projectId={projectId} onError={onError} />}
       {named.length > 0 && <FileCards projectId={projectId} files={named} excludeImages={picture && entry.generated ? [entry.generated.path] : []} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}</Message>;
@@ -162,7 +166,7 @@ function ToolGroup({ entries, live, projectId, hideToolOutput = false, onError }
 }
 
 export function ConversationFeed({ entries, agent: kind, projectId, live, hideToolOutput = false, onError, onOpenLink, children }: {
-  entries: ConversationEntry[]; agent: 'claude' | 'codex'; projectId: string; live: boolean; hideToolOutput?: boolean;
+  entries: ConversationEntry[]; agent: AgentProvider; projectId: string; live: boolean; hideToolOutput?: boolean;
   onError: (message: string) => void; onOpenLink?: (target: string) => void; children?: ReactNode;
 }) {
   const decorations = useContext(ConversationDecorations);
@@ -172,7 +176,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   const result = useMemo(() => decorations ? null : latestResult(entries, { idle: !live, interrupted: false }), [entries, live, decorations]);
   const copies = useMemo(() => generatedCopies(entries), [entries]);
   const pathOf = useMemo(() => (target: string) => replyLinkPath(projectId, target, copies), [projectId, copies]);
-  const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
+  const agent = adapterOf(kind)!.manifest.label;
   // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.
   let latestUser = -1, latestAgent = -1;
   for (let index = turns.length - 1; index >= 0; index--) {

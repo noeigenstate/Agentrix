@@ -204,6 +204,26 @@
     "id": "electron/features/agents/codex-account-usage.cjs:88e087e71550c1efedf0cb78"
   },
   {
+    "text": "run(file, ['--version'], { env: cliEnvironment(env), windowsHide: true, timeout: 10000, maxBuffer: 65536 })",
+    "id": "electron/features/agy-acp/locator.cjs:2f8d415a6a2f4d5037114c16"
+  },
+  {
+    "text": "resolveExecutable(env)",
+    "id": "electron/features/agy-acp/session.cjs:3a908719d731205401b693b4"
+  },
+  {
+    "text": "spawnProcess(file, profile ? ['acp', '--gemini-dir', profile] : ['acp'], {\n      cwd, env: cliEnvironment(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32',\n    })",
+    "id": "electron/features/agy-acp/session.cjs:e3de876c83c4b2dee6c9aa02"
+  },
+  {
+    "text": "this.run(turn)",
+    "id": "electron/features/agy-acp/turns.cjs:f7df095862f4c29e40c223df"
+  },
+  {
+    "text": "spawnProcess(file, args, { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, detached: process.platform !== 'win32' })",
+    "id": "electron/features/agy-acp/usage-reader.cjs:c51f2e51e999c18b7ea88d12"
+  },
+  {
     "text": "run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => resolve(error ? null : Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')))",
     "id": "electron/features/claude-runtime/path-env.cjs:efd579f4e757ba5afe754b99"
   },
@@ -388,8 +408,8 @@
     "id": "electron/features/native-session/host.cjs:c7e13917011d4ea031c4ad7b"
   },
   {
-    "text": "deps.routing.launch(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true })",
-    "id": "electron/features/native-session/host.cjs:1ef82708757a08bec9fcbdd5"
+    "text": "deps.routing.launch(project, true, spec.skillSessionId || spec.sessionId, { agent, started: true })",
+    "id": "electron/features/native-session/host.cjs:93550b7a47945476100ed5f4"
   },
   {
     "text": "deps.routing.launch(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true })",
@@ -426,6 +446,10 @@
   {
     "text": "s.gate.input(data)",
     "id": "electron/features/terminal/ipc.cjs:6f6cb011c8493d7a7e324bee"
+  },
+  {
+    "text": "adapter.terminal.launch(event.args === undefined && !event.command ? [] : event.args, routingOwned)",
+    "id": "electron/features/terminal-events/shell-events.cjs:690a0a4639429f82fd6de329"
   },
   {
     "text": "deps.dashboard.run(project, call, value)",
@@ -592,6 +616,10 @@
     "id": "integration/dispatch.cjs:27e157b394c93d77890e1b77"
   },
   {
+    "text": "resolveExecutable(options.agent, args, spawnOptions.env, file)",
+    "id": "integration/dispatch.cjs:4cb826e3f7425925b1702275"
+  },
+  {
     "text": "resolveExecutable(options.agent, commandOf({ ...effective, roleConfig }), env, claudeFile)",
     "id": "integration/dispatch.cjs:1873dcf6e76c688644e0b963"
   },
@@ -604,12 +632,16 @@
     "id": "integration/dispatch.cjs:0c6d7608de831ab448c261b4"
   },
   {
-    "text": "subprocess.run([\"/bin/bash\", \"-lic\", CODEX_LOOKUP], env=dict(env),\n        stdin=subprocess.DEVNULL, start_new_session=True,\n        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)",
-    "id": "integration/remote-worker.py:8957a654aeab9fd26546b64a"
+    "text": "subprocess.run([\"/bin/bash\", \"-lic\", TOOL_LOOKUP], env=dict(env),\n        stdin=subprocess.DEVNULL, start_new_session=True,\n        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)",
+    "id": "integration/remote-worker.py:8c2aafdb62438c5c36158772"
   },
   {
-    "text": "subprocess.Popen([executable, \"app-server\", \"--listen\", \"stdio://\"], cwd=self.coding_root,\n                env=dict(self.agent_env, **login), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n                start_new_session=os.name == \"posix\")",
-    "id": "integration/remote-worker.py:1a8d3d328426de1084e6f45c"
+    "text": "subprocess.Popen([file, \"--version\"], env=launch_env, stdin=subprocess.DEVNULL,\n        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)",
+    "id": "integration/remote-worker.py:bbf0571ecb9bd54fab751427"
+  },
+  {
+    "text": "subprocess.Popen([server[\"command\"], \"-e\", script, module], env=dict(self.agent_env, PATH=server[\"env\"][\"PATH\"]),\n            cwd=self.coding_root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)",
+    "id": "integration/remote-worker.py:153e69f11e6a9b6fc0cbe8a3"
   },
   {
     "text": "subprocess.run([\"git\", \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)",
@@ -622,6 +654,10 @@
   {
     "text": "os.execve(bash, [bash, \"--noprofile\", \"--rcfile\", rc_file, \"-i\"], env)",
     "id": "integration/remote-worker.py:ec4020a5671fe40f524bebf1"
+  },
+  {
+    "text": "subprocess.Popen(argv + ([\"--gemini-dir\", profile] if profile else []), cwd=self.coding_root,\n                    env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n                    start_new_session=os.name == \"posix\")",
+    "id": "integration/remote-worker.py:880c81678563257dcfa5a87d"
   },
   {
     "text": "subprocess.run([\"git\", \"--version\"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3)",
@@ -772,12 +808,12 @@
     "id": "src/features/files/ExplorerFileActions.tsx:e55b68e6f530cb618da7f0eb"
   },
   {
-    "text": "window.agentrix.writeTerminal(terminal.id, `${agent}\\r`)",
-    "id": "src/features/home/DecisionHome.tsx:cfb483636562fa7f8bdaa3d8"
+    "text": "window.agentrix.writeTerminal(terminal.id, `${command}\\r`)",
+    "id": "src/features/home/DecisionHome.tsx:c4ba36518c0ad6b8223dc5b4"
   },
   {
-    "text": "sendToAgent(terminal.id, sessionId, kind, goal)",
-    "id": "src/features/home/DecisionHome.tsx:b8913d2d72d453e45d6e93fb"
+    "text": "sendToAgent(terminal.id, sessionId, kind, composed.value)",
+    "id": "src/features/home/DecisionHome.tsx:ff5b7be4c089e6257d4477d4"
   },
   {
     "text": "sendToAgent(decision.terminalId, decision.sessionId, decision.agent, text)",
@@ -856,8 +892,8 @@
     "id": "src/features/settings/AgentRuntimeSettings.tsx:5a1ee8ae53a834a55f100eb6"
   },
   {
-    "text": "launch(id, what)",
-    "id": "src/features/terminal/AgentLauncher.tsx:bd8744828cefec3360d570db"
+    "text": "launch(id, what, resumeSession?.id ?? (read?.ok ? read.value[0]?.id : undefined))",
+    "id": "src/features/terminal/AgentLauncher.tsx:777940941fd84b0da57710a2"
   },
   {
     "text": "entry.terminal.write(data, () => {\n    if (entries.get(id) !== entry) return;\n    entry.pending--;\n    if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };\n    publish(entry);\n  })",

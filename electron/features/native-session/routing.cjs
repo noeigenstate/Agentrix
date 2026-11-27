@@ -2,6 +2,8 @@
 // No clock, filesystem, credentials or Electron: the helper uses this same decision.
 const { decide } = require('../claude-runtime/decide.cjs');
 const { reason, codesOf } = require('../../shared/reason.cjs');
+const { adapterOf } = require('../cli-adapters/registry.mjs');
+const { support } = require('../cli-adapters/capabilities.mjs');
 
 // The fact a legacy API state names: its status is the code, its sentence the fact's message.
 const FACT_OF = { no_key: 'key', invalid_key: 'key', native_cli_required: 'cli', native_cli_unverified: 'cli', cli_too_old: 'cli',
@@ -13,7 +15,9 @@ function fromApiState({ status, reason: message } = {}) {
     ...(message || !known ? { message: message || name } : {}) }];
 }
 function choosePath({ agent, claudePath = 'api-then-terminal', apiState = {} }) {
-  const { path, wire } = decide(agent === 'codex' ? [] : fromApiState(apiState), { claudePath }, { agent });
+  const manifest = adapterOf(agent)?.manifest;
+  if (!manifest?.usage?.apiSpend) return { path: manifest && support(manifest, 'native').ok ? 'native' : null, reason: null };
+  const { path, wire } = decide(fromApiState(apiState), { claudePath });
   return { path, reason: wire };
 }
 module.exports = { choosePath, fromApiState };

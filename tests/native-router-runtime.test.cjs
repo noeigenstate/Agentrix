@@ -254,6 +254,15 @@ test('native IPC denies extra options and accepts only bound structured answers'
   assert.throws(() => handles.get('native:answer')('t', 's', 'r', { decision: 'allow', env: {} }));
   assert.throws(() => handles.get('native:answer')('t', 's', 'r', { answers: { q: { secret: true } } }));
 });
+test('native owner start and resume admit agy through the provider registry', () => {
+  const handles = new Map(), router = { start: (id, options) => ({ id, ...options }) };
+  registerIpc({ handle: (name, fn) => handles.set(name, fn), router });
+  assert.deepEqual(handles.get('native:start')('t', { agent: 'agy' }), { id: 't', agent: 'agy' });
+  const sessionId = '670f1895-da18-4940-b596-4e80e0c3c387';
+  assert.deepEqual(handles.get('native:resume')('t', { agent: 'agy', sessionId }), { id: 't', agent: 'agy', sessionId, resume: true });
+  assert.throws(() => handles.get('native:resume')('t', { agent: 'codex', sessionId }));
+  for (const name of ['native:start', 'native:resume']) assert.throws(() => handles.get(name)('t', { agent: 'unknown' }));
+});
 test('native IPC uses the existing main-frame and origin checks', async () => {
   const handles = new Map(), mainFrame = { url: 'agentrix://app/index.html' }, webContents = { mainFrame };
   const { handle } = createIpcAdapter({ ipcMain: { handle: (name, fn) => handles.set(name, fn) }, getWindow: () => ({ webContents }), t: value => value, report() {} });

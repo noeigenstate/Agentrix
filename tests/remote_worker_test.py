@@ -11,6 +11,7 @@ import queue
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,135 @@ GIT_TOO_OLD = _git_too_old()
 
 
 class RemoteFilesTest(unittest.TestCase):
+    def install_agy_usage_helper(self, node, modules):
+        self.dispatch_fixture()
+        self.worker.agent_env = dict(os.environ)
+        self.worker.dispatch_modules = modules
+        home = Path(self.temp.name)
+        cli_dir = home / "login-path"
+        cli_dir.mkdir()
+        fake_agy = cli_dir / ("agy.exe" if os.name == "nt" else "agy")
+        fake_agy.touch()
+        fake_agy.chmod(0o700)
+        with mock.patch.object(remote.os.path, "expanduser", return_value=str(home)), \
+             mock.patch.object(self.worker, "dispatch_requirements", return_value=(str(node), str(cli_dir))):
+            self.worker.install_dispatch()
+        helper = Path(self.worker.dispatch_server["args"][0])
+        return helper.parent / "electron/features/agy-acp/usage-reader.cjs"
+
+    def test_agy_usage_carried_helper_reads_only_sanitized_numeric_windows(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "the repository's Node runtime is required")
+        repo = MODULE_PATH.parent.parent
+        script = "process.stdout.write(JSON.stringify(require('./integration/dispatch.cjs').runtimeFiles()))"
+        modules = json.loads(subprocess.check_output([node, "-e", script], cwd=repo, encoding="utf-8"))
+        fake_node = Path(self.temp.name) / "fake-node"
+        module = self.install_agy_usage_helper(fake_node, modules)
+        self.assertEqual(module.read_text(encoding="utf-8"), modules["features/agy-acp/usage-reader.cjs"])
+        launch = subprocess.Popen
+        def fake_node_process(argv, **options):
+            self.assertEqual([argv[0], argv[1], argv[3]], [str(fake_node), "-e", str(module)])
+            return launch([node, "--require", str(FIXTURES / "agy-acp/usage-peer.cjs"), *argv[1:]], **options)
+        with mock.patch.object(remote.subprocess, "Popen", side_effect=fake_node_process):
+            self.assertEqual(self.worker.agy_usage(), [
+                {"id": "gemini", "minutes": 300, "percent": 25, "resetsAt": 1767225600000},
+                {"id": "3p", "minutes": 10080, "percent": 50, "resetsAt": None},
+            ])
+
+    def test_agy_usage_stops_the_fake_node_on_timeout(self):
+        node = Path(self.temp.name) / "fake-node"
+        self.install_agy_usage_helper(node, {"features/agy-acp/usage-reader.cjs": "// fixture module"})
+        child = mock.Mock()
+        child.communicate.side_effect = [subprocess.TimeoutExpired(str(node), 12), subprocess.TimeoutExpired(str(node), 3), (b"", None)]
+        with mock.patch.object(remote.subprocess, "Popen", return_value=child):
+            self.assertIsNone(self.worker.agy_usage())
+        child.terminate.assert_called_once_with()
+        child.kill.assert_called_once_with()
+        self.assertEqual(child.communicate.call_args_list, [mock.call(timeout=12), mock.call(timeout=3), mock.call()])
+
+    def test_agy_usage_without_a_dispatch_service_starts_no_process(self):
+        self.assertIsNone(self.worker.dispatch_server)
+        with mock.patch.object(remote.subprocess, "Popen") as launch:
+            self.assertIsNone(self.worker.agy_usage())
+        launch.assert_not_called()
+
+    def test_agy_lookup_skips_shims_and_checks_version_on_the_login_path(self):
+        root = Path(self.temp.name)
+        shim, installed = root / "shim", root / "login"
+        for folder in (shim, installed):
+            folder.mkdir()
+            binary = folder / "agy"
+            binary.write_text("test only", encoding="utf-8")
+            binary.chmod(0o700)
+        (shim / ".agentrix-shims").touch()
+        tools = {"AGENTRIX_AGY": str(shim / "agy"), "AGENTRIX_PATH": os.pathsep.join(map(str, (shim, installed)))}
+        process = mock.Mock(returncode=0)
+        with mock.patch.object(remote, "login_tools", return_value=tools), mock.patch.object(remote.subprocess, "Popen", return_value=process) as launch:
+            process.communicate.return_value = (b"Antigravity 1.5.17\n", None)
+            with self.assertRaises(ValueError) as failure: remote.resolve_agy({}, "1.5.18")
+            self.assertEqual(failure.exception.code, "agy_cli_outdated")
+            process.communicate.return_value = (b"Antigravity 1.5.18\n", None)
+            binary, env = remote.resolve_agy({}, "1.5.18")
+            self.assertEqual(launch.call_args[0][0], [str(installed / "agy"), "--version"])
+        self.assertEqual(binary, str(installed / "agy"))
+        self.assertEqual(env, {"PATH": tools["AGENTRIX_PATH"], "AGY_CLI_DISABLE_AUTO_UPDATE": "true"})
+
+    def test_agy_catalog_uses_channel_bytes_and_releases_its_profile_on_stop(self):
+        worker = self.worker
+        worker.temp = self.temp.name
+        worker.agent_env = dict(os.environ, AGY_CLI_DISABLE_AUTO_UPDATE="true")
+        data, exited, profiles = queue.Queue(), threading.Event(), []
+        original = subprocess.Popen
+        def emit(event):
+            if event["type"] == "agy-exit": exited.set()
+            elif event["type"] == "agy-data": data.put(base64.b64decode(event["data"]))
+        def launch(argv, **options):
+            self.assertEqual(argv[:3], ["/fake/agy", "acp", "--gemini-dir"])
+            self.assertEqual(options["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
+            self.assertEqual(options["start_new_session"], os.name == "posix")
+            profiles.append(Path(argv[3]))
+            return original([sys.executable, "-u", "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.readline()); sys.stdin.read()"], **options)
+        worker.emit = emit
+        with mock.patch.object(remote, "resolve_agy", return_value=("/fake/agy", worker.agent_env)), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+            worker.agy_open("catalog", "catalog", "1.5.18")
+        try:
+            self.assertTrue(profiles[0].is_dir())
+            worker.codex_input("catalog", base64.b64encode(b"ACP frame\n").decode("ascii"), "agy")
+            self.assertEqual(data.get(timeout=3), b"ACP frame\n")
+        finally:
+            worker.codex_close("catalog", "agy")
+        self.assertTrue(exited.wait(5))
+        self.assertFalse(profiles[0].exists())
+        self.assertEqual(worker.native_processes["agy"], {})
+
+    def test_native_open_echoes_agy_and_addresses_the_role_server_to_agy(self):
+        writes = []
+        channel = remote.Channel(1, writes.append)
+        self.addCleanup(channel.close)
+        worker = channel.worker
+        worker.coding_root = self.temp.name
+        worker.claude_lead = {"conductor": True}
+        worker.dispatch_server = {"command": "/bin/node", "args": ["/helper", "mcp"], "env": {}}
+        with mock.patch.object(worker, "initialize", return_value={}), mock.patch.object(worker, "agent_environment"):
+            channel.open({"native": True, "nativeAgent": "agy"})
+        self.assertEqual(writes[0]["type"], "ready", writes)
+        self.assertEqual(writes[0]["info"]["nativeAgent"], "agy")
+        self.assertEqual(writes[0]["info"]["roleServer"]["args"], ["/helper", "mcp", "agy"])
+
+    def test_agy_stop_signals_the_remote_process_group_even_after_its_leader_exits(self):
+        child = mock.Mock(pid=1234)
+        child.poll.return_value = 0
+        processes = self.worker.native_processes["agy"]
+        processes["native"] = child
+        try:
+            with mock.patch.object(remote.os, "name", "posix"), mock.patch.object(remote.signal, "SIGKILL", 9, create=True), \
+                    mock.patch.object(remote.os, "killpg", create=True) as kill:
+                self.worker.codex_close("native", "agy")
+                kill.assert_called_once_with(1234, remote.signal.SIGKILL)
+                child.wait.assert_called_once_with(timeout=3)
+        finally:
+            processes.clear()
+
     def test_codex_process_uses_app_server_and_channel_scoped_bounded_bytes(self):
         events, commands = [], []
         self.worker.emit = events.append

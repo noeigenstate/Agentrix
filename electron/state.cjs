@@ -3,11 +3,16 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { normalizeSSH } = require('./ssh-config.cjs');
 const { CODEX_PERMISSIONS } = require('./codex-permissions.cjs');
+const { AGY_PERMISSIONS } = require('./agy-permissions.mjs');
 const { sanitizeProjectSvg } = require('./project-svg.cjs');
 const { MODELS: VOICE_MODELS, DEFAULT_MODEL: DEFAULT_VOICE_MODEL } = require('./voice.cjs');
 const { steps: UI_ZOOM_STEPS } = require('./window-zoom.json');
 const { retryFileOperation } = require('./file-retry.cjs');
 const { writeFileAtomic } = require('./atomic-write.cjs');
+const { adapterOf, legacyRestoreAgent } = require('./features/cli-adapters/registry.cjs');
+const { validModel, EFFORT } = require('./features/routing/seat-rules.mjs');
+
+const hasFocusedQuota = agent => !!adapterOf(agent)?.usage?.focusedLimits;
 
 // Local folders once opened as projects, newest first, so a removed project can be added again in one click.
 const HISTORY_LIMIT = 30;
@@ -34,10 +39,22 @@ function cleanSSHHistory(input) {
   }).slice(0, HISTORY_LIMIT);
 }
 
-// Which coding agent a terminal restores (Codex unless recorded as Claude Code), whether its last Claude turn was
-// left unfinished. Only non-default values are stored.
-const agentFields = restore => ({ ...(restore?.agent === 'claude' ? { agent: 'claude' } : {}), ...(restore?.interrupted === true ? { interrupted: true } : {}),
-  ...(restore?.nativeTransport === 'claude-sdk' || restore?.nativeTransport === 'codex-app-server' ? { nativeTransport: restore.nativeTransport } : {}) });
+// An absent agent restores the legacy default. Only non-default values are stored.
+const restorePolicy = agent => adapterOf(agent || legacyRestoreAgent)?.nativePolicy;
+const validTransport = (agent, transport) => typeof transport === 'string' && restorePolicy(agent)?.transport === transport;
+function restoredOptions(agent, value) {
+  if (!restorePolicy(agent)?.rememberModelOptions || !value || !validModel(value.model)) return null;
+  return { model: value.model, effort: typeof value.effort === 'string' && EFFORT.test(value.effort) ? value.effort : null };
+}
+function agentFields(restore) {
+  const agent = restore?.agent, modelOptions = restoredOptions(agent, restore?.nativeModelOptions);
+  return {
+    ...(agent !== legacyRestoreAgent && adapterOf(agent) ? { agent } : {}),
+    ...(restore?.interrupted === true ? { interrupted: true } : {}),
+    ...(validTransport(agent, restore?.nativeTransport) ? { nativeTransport: restore.nativeTransport } : {}),
+    ...(restore?.threadId && modelOptions && { nativeModelOptions: modelOptions }),
+  };
+}
 
 function cleanRestore(input, kind) {
   return {
@@ -62,7 +79,13 @@ const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST
 // Isolated test profiles keep pixel layouts exact at 100 % unless they choose 自动 themselves (a test machine's small
 // display would otherwise shrink every layout under test).
 const DEFAULT_ZOOM = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_ZOOM !== 'auto' ? 100 : null;
-const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL, updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full', claudeBackgroundTasks: false };
+const defaults = {
+  startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true,
+  notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true,
+  explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '',
+  restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL, updateChannel: 'stable', betaAgreement: null,
+  codexPermissions: 'full', agyPermissions: 'full', claudeBackgroundTasks: false,
+};
 
 // Keyboard shortcuts the user changed, by action; defaults live in the window (src/features/shortcuts/shortcuts.ts).
 // "Ctrl+Shift+F": Ctrl, Alt and Shift in that order, then one letter, digit, F-key or punctuation key.
@@ -97,6 +120,7 @@ function cleanSettings(input = {}) {
   return {
     claudeBackgroundTasks: input.claudeBackgroundTasks === true,
     codexPermissions: CODEX_PERMISSIONS.includes(input.codexPermissions) ? input.codexPermissions : defaults.codexPermissions,
+    agyPermissions: AGY_PERMISSIONS.includes(input.agyPermissions) ? input.agyPermissions : defaults.agyPermissions,
     updateChannel: ['stable', 'beta'].includes(input.updateChannel) ? input.updateChannel : defaults.updateChannel,
     betaAgreement: typeof input.betaAgreement === 'string' && input.betaAgreement.length > 0 && input.betaAgreement.length <= 80 && input.betaAgreement === input.betaAgreement.trim() && !/[\u0000-\u001f\u007f]/.test(input.betaAgreement) ? input.betaAgreement : defaults.betaAgreement,
     fontSize: Number.isInteger(input.fontSize) && input.fontSize >= 10 && input.fontSize <= 20 ? input.fontSize : defaults.fontSize,
@@ -200,6 +224,7 @@ class WorkspaceStore {
         ...(imageMode ? { imageMode } : {}),
         ...(p.kind === 'ssh' ? { ssh: { host: p.ssh.host, configFile: p.ssh.configFile || null } } : {}),
         primaryTerminalClosed: p.primaryTerminalClosed === true,
+        ...(Array.isArray(p.quotaAgents) ? { quotaAgents: [...new Set(p.quotaAgents.filter(hasFocusedQuota))] } : {}),
         restore: p.restore && typeof p.restore === 'object' ? cleanRestore(p.restore, p.kind) : null,
         terminals: Array.isArray(p.terminals)
           ? p.terminals.filter(item => item && /^[a-f\d-]{36}$/i.test(item.id || '')).map(item => ({ id: item.id, restore: cleanRestore(item.restore, p.kind) }))
@@ -319,16 +344,26 @@ class WorkspaceStore {
     if (typeof patch.cwd === 'string' && patch.cwd.length <= 4096 && !/[\0\r\n]/.test(patch.cwd) && (project.kind === 'ssh' ? patch.cwd.startsWith('/') : path.isAbsolute(patch.cwd))) next.cwd = patch.cwd;
     if (patch.threadId === null) delete next.threadId;
     else if (/^[a-f\d-]{36}$/i.test(patch.threadId || '')) next.threadId = patch.threadId;
-    if (patch.agent === 'codex' || patch.agent === 'claude') { delete next.agent; delete next.interrupted; Object.assign(next, agentFields({ ...record.restore, agent: patch.agent })); }
+    if (adapterOf(patch.agent)) {
+      delete next.agent;
+      delete next.interrupted;
+      Object.assign(next, agentFields({ ...record.restore, agent: patch.agent }));
+    }
     if (typeof patch.interrupted === 'boolean') { delete next.interrupted; Object.assign(next, agentFields({ interrupted: patch.interrupted })); }
     if (patch.nativeTransport === null) delete next.nativeTransport;
-    else if (['claude-sdk', 'codex-app-server'].includes(patch.nativeTransport)) next.nativeTransport = patch.nativeTransport;
+    else if (validTransport(next.agent, patch.nativeTransport)) next.nativeTransport = patch.nativeTransport;
+    if (!validTransport(next.agent, next.nativeTransport)) delete next.nativeTransport;
+    if (next.threadId !== record.restore?.threadId || next.agent !== record.restore?.agent) delete next.nativeModelOptions;
+    const modelOptions = restoredOptions(next.agent, patch.nativeModelOptions);
+    if (next.threadId && modelOptions) next.nativeModelOptions = modelOptions;
     const wasClosed = project.primaryTerminalClosed;
     if (record === project) {
       if (patch.terminal === true) project.primaryTerminalClosed = false;
       else if (patch.primaryClosed === true) project.primaryTerminalClosed = true;
     }
-    if (JSON.stringify(next) === JSON.stringify(record.restore) && wasClosed === project.primaryTerminalClosed) return;
+    const newQuotaAgent = next.threadId && hasFocusedQuota(next.agent) && !project.quotaAgents?.includes(next.agent);
+    if (newQuotaAgent) (project.quotaAgents ??= []).push(next.agent);
+    if (!newQuotaAgent && JSON.stringify(next) === JSON.stringify(record.restore) && wasClosed === project.primaryTerminalClosed) return;
     record.restore = next;
     try { this.save(); }
     catch (error) {

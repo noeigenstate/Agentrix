@@ -1,6 +1,6 @@
 import type { AgentProvider } from '../../../src/shared/agent-events';
 
-export { adapterOfModel, agentOfModel, agentOfModel as familyOf } from '../cli-adapters/registry.mjs';
+export { adapterOfModel, agentOfModel } from '../cli-adapters/registry.mjs';
 
 export const EFFORT: RegExp;
 export function validModel(model: unknown): model is string;

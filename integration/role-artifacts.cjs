@@ -43,7 +43,7 @@ async function readStamp(folder, name, limit) {
   try {
     if (!sameFile(stat, await handle.stat())) return null;
     const buffer = Buffer.alloc(stat.size + 1);
-    const { bytesRead } = await handle.read(buffer);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     return bytesRead === stat.size ? buffer.toString('utf8', 0, bytesRead) : null;
   } finally { await handle.close(); }
 }
@@ -130,14 +130,16 @@ function createRoleResultTools({ folder, runId, now = Date.now }) {
   return { list: () => [finishRole], tools: { finish_role } };
 }
 
-async function settleRoleResult({ folder, runId, answer, legacyDecision, now = Date.now }) {
+async function settleRoleResult({ folder, runId, answer, legacyDecision, warnings = [], now = Date.now }) {
+  let saved;
   if (folder) {
     await checkResultFolder(folder, runId);
-    const saved = await readRoleResultFile(folder, runId);
-    if (saved?.source === 'finish-role') return saved;
+    saved = await readRoleResultFile(folder, runId);
   }
-  const result = { format: FORMAT, version: 1, runId, source: legacyDecision?.(answer) ? 'legacy-heading' : 'final-text',
+  if (saved?.source === 'finish-role' && !warnings.length) return saved;
+  const result = saved?.source === 'finish-role' ? saved : { format: FORMAT, version: 1, runId, source: legacyDecision?.(answer) ? 'legacy-heading' : 'final-text',
     answer, needsDecision: null, needsApproval: [], findings: [], calls: 0, at: now() };
+  if (warnings.length) result.warnings = warnings;
   if (folder) await writeRoleResult(folder, result);
   return result;
 }

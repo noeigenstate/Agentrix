@@ -1,3 +1,5 @@
+const { canLead } = require('../features/cli-adapters/capabilities.mjs');
+
 function registerApplicationIpc(host) {
   const { createIpcAdapter, ipcMain, devUrl, t, report, nativeSessions, registerUnavailableNative, registerRoutingIpc, routing, dialog, store,
     workerTerminals, registerAgentsIpc, agents, shell, sessions, findProject, dashboard, readingHistory, listAgentCommands, interventions,
@@ -134,11 +136,11 @@ function registerAgentLaunch(host, handle) {
   });
   handle('agent:launch', async (id, agent, mode) => {
     const project = findProject(id), adapter = adapterOf(agent);
-    if (!adapter) throw new Error('无效的助手。');
+    if (!canLead(adapter?.manifest)) throw new Error('无效的助手。');
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     if (adapter.terminal?.redirect === 'native') {
       const { nativeSessions } = host;
-      if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
+      if (!nativeSessions) throw new Error(adapter.nativePolicy.restoreWithoutNative);
       launchPlans.delete(id); restorePlans.delete(id);
       // start resolves the saved thread, or queries folder history, only after this click.
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;

@@ -353,11 +353,11 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
     './native-words': { viaWords: via => via, installerCommand: win => (win ? 'irm-installer' : 'curl-installer') },
     './native-bridge.ts': { nativeBridge: () => bridge },
   });
-  // The first render starts the key read, the second shows its answer. `index` 0 reads the Codex row.
-  const render = async (claude, { codex = { installed: true }, index = 1, detail = false } = {}) => {
+  // The first render starts the key read, the second shows its answer.
+  const render = async (claude, { codex = { installed: true }, agent = 'claude', detail = false } = {}) => {
     const props = { agents: { codex, claude, npm: true, installing: null, message: '', error: '' }, onChange() {}, visible };
     harness.render('AgentsSettings', props); await settle();
-    const section = elements(harness.render('AgentsSettings', props).result).filter(node => node.props?.className === 'agent-setting')[index];
+    const section = elements(harness.render('AgentsSettings', props).result).find(node => node.props?.className === 'agent-setting' && node.key === agent);
     const inside = elements(section.props.children);
     // A path is a PathText element (it may wrap after \ or /): `paths` are their texts, `markup` the rendered blocks.
     const smalls = inside.filter(node => node.type === 'small' && !node.props.role), hints = smalls.filter(node => node.props.className === 'agent-hint').map(node => elementsText(node.props.children));
@@ -374,7 +374,7 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
 const NPM_COMMAND = 'npm install -g @anthropic-ai/claude-code';
 
 test('the agents page says how Codex was found and which file it runs, why its check printed no version, or where the search looked and what to do next', async () => {
-  const view = agentsPage(true), codex = async value => view.render({ installed: true }, { codex: value, index: 0, detail: true });
+  const view = agentsPage(true), codex = async value => view.render({ installed: true }, { codex: value, agent: 'codex', detail: true });
   const reason = (code, fields = {}) => ({ code, source: 'codex-runtime locator', observedAt: 1, ...fields });
   try {
     const bare = await codex({ installed: true });
@@ -431,7 +431,7 @@ test('the Codex row keeps its button inside the row however long a path is', asy
   assertRule(css, '.agent-setting .agent-status', { color: 'var(--text-1)' });
   const view = agentsPage(false);
   try {
-    const row = await view.render({ installed: true }, { codex: { installed: true, via: 'path', fileShown: '/long/' + 'x'.repeat(110) }, index: 0, detail: true });
+    const row = await view.render({ installed: true }, { codex: { installed: true, via: 'path', fileShown: '/long/' + 'x'.repeat(110) }, agent: 'codex', detail: true });
     assert.equal(row.infoClass, 'agent-info');
   } finally { view.done(); }
 });
@@ -545,6 +545,19 @@ test('the Codex permission row keeps its own note and does not repeat the select
     assert.deepEqual(options.map(option => option.description), descriptions);
     assert.equal(view.html().includes(options[1].description), false);
     assert.ok(view.html().includes('只影响之后新建的原生 Codex 会话'));
+  } finally { view.done(); }
+});
+
+test('Antigravity permissions use the two shared values and the next start or resume', () => {
+  const changes = [], view = page(fake(), wordsStub, { onAgyPermissions: value => changes.push(value) });
+  try {
+    const { props } = view.select('Antigravity 权限');
+    assert.equal(props.value, 'full');
+    assert.deepEqual(props.options.map(option => [option.value, option.label]), [['full', '自动允许（默认）'], ['ask', '先询问']]);
+    assert.match(view.html(), /下次新建或续接 Antigravity 会话时生效/);
+    props.onChange('ask');
+    props.onChange('config');
+    assert.deepEqual(changes, ['ask', 'full']);
   } finally { view.done(); }
 });
 

@@ -16,9 +16,10 @@ function createHostInputs(deps) {
       if (!host) { result[agent] = projectAccounts.snapshot(projectId)?.[agent]?.connection || { kind: 'none', source: null, observedAt: null };
         result[agent] = { ...result[agent], active: false }; continue; }
       observed.set(agent, host);
-      if (!host.nativeStructured) result[agent] = nativePolicy.terminalConnection(host);
+      const unknown = { kind: 'unknown', source: null, observedAt: null };
+      if (!host.nativeStructured) result[agent] = nativePolicy.terminalConnection?.(host) ?? unknown;
       else if (nativePolicy.readNativeConnection) result[agent] = await nativePolicy.readNativeConnection(host);
-      else result[agent] = nativePolicy.nativeConnection(host, claudeRuntime);
+      else result[agent] = nativePolicy.nativeConnection?.(host, claudeRuntime) ?? unknown;
     }
     for (const agent of observed.keys()) result[agent] = { ...result[agent], active: true };
     for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.cliActive || host.status === 'exited') result[agent] = { kind: 'none', active: false, source: null, observedAt: null };
@@ -41,7 +42,9 @@ function createHostInputs(deps) {
       limits: s.usage.limits, at: s.usage.limitsAt, source: s.usage.limitsFrom }, 'claude-account', 120000));
     const codex = projectId ? [subscriptionLimits(account?.codex, 'codex-account', 2 * codexAccounts.interval), dispatchReading(projectId, account?.codex, 2 * codexAccounts.interval)]
       : [...codexAccounts.entries].map(([key, entry]) => subscriptionLimits(entry.value, key, 2 * codexAccounts.interval));
-    return { claude: latest(claude), codex: latest(codex) };
+    const fallback = { claude: latest(claude), codex: latest(codex) };
+    const focused = projectAccounts.focusedLimits?.(projectId);
+    return Object.fromEntries(adapters().map(({ manifest: { id } }) => [id, focused?.[id] ?? fallback[id] ?? null]));
   }
 
   async function readNativeUsageInputs(projectId) {
@@ -51,8 +54,15 @@ function createHostInputs(deps) {
     const cli = { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } };
     // Read after the checks: the app can start quitting, or the project close, while they run.
     const { store } = deps, project = store.projects.find(project => project.id === projectId);
-    if (project && project.kind !== 'ssh') {
-      if (!deps.quitting && store.projects.includes(project)) await projectAccounts.read(project, { cli, env: nativeEnvironment('') });
+    if (project && project.kind !== 'ssh' && !deps.quitting) {
+      const env = nativeEnvironment('');
+      const accounts = await projectAccounts.read(project, { cli, env });
+      if (accounts && !deps.quitting && deps.store.projects.includes(project)) {
+        for (const { manifest: { id }, usage } of adapters()) {
+          const limits = accounts[id]?.limits;
+          if (usage?.focusedLimits && limits?.length) deps.dashboard.quota(id, limits, deps.quotaScope(id, project, { usageEnv: env }));
+        }
+      }
     }
     return { cli, limits: readNativeSubscriptionLimits(projectId) };
   }
@@ -86,7 +96,7 @@ function createHostInputs(deps) {
   function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     const { findProject, sessions, nativeSpecs, store, randomUUID, routing } = deps;
     const project = findProject(id), old = sessions.get(id);
-    if (project.kind === 'ssh' && !supportsNative(agent, project.kind)) throw new Error('SSH 原生会话目前仅支持 Codex。');
+    if (project.kind === 'ssh' && !supportsNative(agent, project.kind)) throw new Error('此 CLI 在 Agentrix 中不提供 SSH 原生会话。');
     if (validateOnly) return;
     if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
     if (old?.cliActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
@@ -97,14 +107,17 @@ function createHostInputs(deps) {
     const savedThread = resume && (saved?.agent || legacyRestoreAgent) === agent ? saved?.threadId || null : null;
     const providerSessionId = launch?.latest ? null : launch?.providerSessionId || savedThread;
     // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-    const lead = routing?.leadOptions?.(project.id, agent);
+    const modelOptions = nativePolicy.rememberModelOptions;
+    const lead = routing?.leadOptions?.(project.id, agent, { remote: project.kind === 'ssh' && !!modelOptions });
     const runOptions = { model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
       ...nativePolicy.permissions?.(store.settings) };
+    const launchModelOptions = modelOptions ? { model: runOptions.model, effort: runOptions.effort } : null;
+    if (modelOptions && savedThread && providerSessionId === savedThread) Object.assign(runOptions, saved.nativeModelOptions);
     const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
     if (project.kind === 'ssh') {
       routing?.launch?.(project, true, sessionId, { agent, started: true });
       const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
-        sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
+        sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId, ...(launchModelOptions && { launchModelOptions }) };
       nativeSpecs.set(id, spec); return spec;
     }
     // The outbox is beside this file and outlives a host process restart.
@@ -120,7 +133,7 @@ function createHostInputs(deps) {
     const context = deps.startupNote(deps.READING_NOTE, deps.handoffFile(id), path.join(project.path, 'skills'), launchInfo);
     const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
       sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: launchInfo?.agentSeats, providerSessionId,
-      roleServer: roleServer(env, agent) };
+      roleServer: roleServer(env, agent), ...(launchModelOptions && { launchModelOptions }) };
     const encodeSeats = seats => JSON.stringify({ format: 'agentrix.seat-map', version: 1, seats: seats ?? null });
     env.AGENTRIX_SEATS = nativePolicy.envSeats?.(dispatchSnapshot ?? encodeSeats(null)) ?? encodeSeats(spec.seatsMap);
     nativePolicy.observeSubagents?.(spec, (session, signal, binding) => deps.nativeSubagent(session, signal, binding));

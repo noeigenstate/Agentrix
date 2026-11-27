@@ -22,8 +22,8 @@ const SELF_REPORT = /测试(?:全部)?通过|tests? (?:all )?pass|all tests pass
 
 // A round's work handed in: what was asked, what the agent says it did, what changed, what it made and how it was
 // checked, then your call. Accepting records that you looked at it; it never commits, merges or pushes anything.
-export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
-  decision: Decision; now: number; kind: ReactNode; onOpen: (decision: Decision) => void; onDone: (message: string) => void; onError: (message: string) => void;
+export function ReviewCard({ decision, now, kind, source, onOpen, onDone, onError }: {
+  decision: Decision; now: number; kind: ReactNode; source: string; onOpen: (decision: Decision) => void; onDone: (message: string) => void; onError: (message: string) => void;
 }) {
   const [entries, setEntries] = useState<ConversationEntry[] | null>(null), [actions, setActions] = useState<AgentAction[]>([]), [git, setGit] = useState<GitStatus | null>(null);
   const [feedback, setFeedback] = useState(''), [revising, setRevising] = useState(false), [busy, setBusy] = useState(false), [fullReply, setFullReply] = useState(false);
@@ -78,7 +78,7 @@ export function ReviewCard({ decision, now, kind, onOpen, onDone, onError }: {
   const foldReply = !!delivery || round.reply.length > 900;
   const title = decisionTitle(decision);
   return <article className="decision-card is-review" aria-label={title}>
-    <header className="decision-card-head">{kind}<span className="decision-source">{decision.projectName}{decision.multipleTerminals ? ` · ${decision.terminalTitle}` : ''} · {decision.agent === 'claude' ? 'Claude Code' : 'Codex'} · {t('交付于 {time}', { time: waited(decision.since, now).replace(/^等了 /, '') })}</span></header>
+    <header className="decision-card-head">{kind}<span className="decision-source">{source} · {t('交付于 {time}', { time: waited(decision.since, now).replace(/^等了 /, '') })}</span></header>
     <h2 className="decision-title">{title}{history.submission > 1 && <span className="review-submission">{t('第 {count} 次提交', { count: history.submission })}</span>}</h2>
     <div className="decision-body">
       {lastNote && <section className="review-block review-last-note"><h4>{t('你上次的批语')}</h4><p>{lastNote.text}</p>

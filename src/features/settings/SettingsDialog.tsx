@@ -106,7 +106,12 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
       <section className="settings-section" id="settings-agents" aria-label={t('编码助手')} hidden={current.id !== 'agents'}>
       <AgentsSettings agents={agents} onChange={onAgents} visible={current.id === 'agents'} />
       </section>
-      {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}><AgentRuntimeSettings projectId={projectId} focusOnOpen={focusOnOpen} codexPermissions={settings.codexPermissions} onCodexPermissions={codexPermissions => update({ codexPermissions })} claudeBackgroundTasks={settings.claudeBackgroundTasks} onClaudeBackgroundTasks={claudeBackgroundTasks => update({ claudeBackgroundTasks })} /></section>}
+      {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}>
+        <AgentRuntimeSettings projectId={projectId} focusOnOpen={focusOnOpen}
+          codexPermissions={settings.codexPermissions} onCodexPermissions={codexPermissions => update({ codexPermissions })}
+          agyPermissions={settings.agyPermissions} onAgyPermissions={agyPermissions => update({ agyPermissions })}
+          claudeBackgroundTasks={settings.claudeBackgroundTasks} onClaudeBackgroundTasks={claudeBackgroundTasks => update({ claudeBackgroundTasks })} />
+      </section>}
       {current.id === 'shortcuts' && <ShortcutSettings settings={settings} update={update} />}
       <section className="settings-section" id="settings-about" aria-label={t('更新与关于')} hidden={current.id !== 'about'}>
       <AboutSettings updates={updates} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onDownloadPage={onDownloadPage} />

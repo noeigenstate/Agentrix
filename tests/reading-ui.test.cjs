@@ -163,6 +163,15 @@ function projectHeaderHarness(t) {
   return { props, render, listeners, focused, started };
 }
 
+test('the active project badge uses the CLI short name and retains the Codex fallback', t => {
+  const h = projectHeaderHarness(t);
+  for (const [agent, name] of [['claude', 'Claude'], ['codex', 'Codex'], [null, 'Codex']]) {
+    h.props.project.agent = agent;
+    const badge = h.render().find(node => node.props.className?.startsWith('status-badge'));
+    assert.equal(badge.props.title, `${name} 会话中`);
+  }
+});
+
 test('only a focused project with the activity toggle off omits the header actions, at every window width, and no card header has a mode toggle', t => {
   const h = projectHeaderHarness(t);
   for (const width of [1600, 1000, 800]) for (const focused of [false, true]) for (const activityOpen of [false, true]) {
@@ -4448,4 +4457,9 @@ test('claude: a screenIdle host signal over an idle frame leaves the composer id
   h.view.working = true; h.parsed();
   h.press('Escape');
   assert.deepEqual(h.written.map(item => item.text), [''], 'with the working line back, Esc interrupts');
+});
+test('Antigravity replies use the Antigravity mark', () => {
+  const { AgentMark } = loadUI('features/reading/Timeline.tsx');
+  const markup = renderToStaticMarkup(React.createElement(AgentMark, { agent: 'agy' }));
+  assert.match(markup, /agent-brand-agy/);
 });

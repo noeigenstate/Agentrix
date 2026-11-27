@@ -1,27 +1,32 @@
 // Seat choices are configuration, never evidence of which model actually ran.
 const { modelRow } = require('./model-catalog.cjs');
+const { canLead } = require('../cli-adapters/capabilities.mjs');
+const { adapters, adapterOf, localModel, canonicalModelId } = require('../cli-adapters/registry.mjs');
 const { adapterOfModel, agentOfModel, EFFORT, allowsUltracode, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const ALIASES = ['opus', 'sonnet', 'haiku'];
-const TEAM = { orchestrator: 'opus', product: 'opus', architect: 'opus', designer: 'sonnet', developer: 'opus',
-  reviewer: 'opus', qa: 'sonnet', researcher: 'sonnet', devops: 'sonnet', security: 'opus' };
-const CODEX_ROLES = new Set(['developer', 'devops']);
+const TEAM_ROLES = ['orchestrator', 'product', 'architect', 'designer', 'developer', 'reviewer', 'qa', 'researcher', 'devops', 'security'];
+const SONNET_ROLES = new Set(['designer', 'qa', 'researcher', 'devops']);
 const refusal = (code, seat, message) => ({ ok: false, code, ...(seat ? { seat } : {}), message });
 const fail = (code, seat, message) => { throw Object.assign(new Error(message), refusal(code, seat, message)); };
 
 function cleanSeat(raw, seat, models, stored = false, isLead = seat === 'orchestrator') {
   if (!object(raw) || !validModel(raw.model)) fail('invalid-model', seat, 'Expected a valid model id of at most 160 characters.');
-  const { id: agent, models: { efforts } } = adapterOfModel(raw.model).manifest;
-  const row = models?.find(row => row.model === raw.model);
+  const { manifest } = adapterOfModel(raw.model);
+  if (isLead && !canLead(manifest)) fail('invalid-model', seat, 'This CLI is available only for dispatched roles.');
+  const { id: agent, models: { efforts, fastDefault } } = manifest;
+  const model = canonicalModelId(raw.model);
+  const row = models?.find(row => row.model === model);
   if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || efforts).includes(raw.effort)) {
     fail('invalid-effort', seat, unsupportedEffort(agent));
   }
-  if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && (row ? !row.fast : agent === 'claude'))) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
-  const ultracode = allowsUltracode(raw.model, isLead);
+  if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && !(row ? row.fast : fastDefault))) {
+    fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
+  }
+  const ultracode = allowsUltracode(model, isLead);
   if (Object.hasOwn(raw, 'ultracode') && (typeof raw.ultracode !== 'boolean' || !stored && raw.ultracode && isLead && !ultracode)) {
     fail('ultracode-not-allowed', seat, 'Ultracode requires a Claude orchestrator and a boolean setting.');
   }
-  return { model: raw.model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}), ...(ultracode && raw.ultracode && { ultracode: true }) };
+  return { model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}), ...(ultracode && raw.ultracode && { ultracode: true }) };
 }
 
 // A corrupt stored choice must not erase another seat.
@@ -33,65 +38,78 @@ function cleanStoredSeats(raw, seatIds) {
   }));
 }
 
-function oldRoleValues(raw, claude, codex) {
-  return Object.fromEntries(Object.entries({ orchestrator: claude ?? codex, architect: raw.architect, designer: raw.visual,
-    developer: raw.core ?? raw.execution, reviewer: raw.reviewer, qa: raw.visual, researcher: raw.lookup }).filter(([, value]) => value != null));
-}
-
-function migrateSeats(raw) {
-  const source = cleanStoredSeats(raw, ['architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']);
-  const lead = cleanStoredSeats(raw?.lead, ['claude', 'codex']);
-  const claude = lead.claude && agentOfModel(lead.claude.model) === 'claude' ? lead.claude : undefined;
-  const codex = lead.codex && agentOfModel(lead.codex.model) === 'codex' ? lead.codex : undefined;
-  const kept = claude ?? codex;
-  const notice = kept ? `总指挥沿用原领队 ${claude ? 'Claude' : 'Codex'} 槽 ${kept.model}·${kept.effort}${kept.fast ? '·fast' : ''}${claude && codex ? `；原 Codex 槽 ${codex.model} 未保留` : ''}` : null;
-  return { map: oldRoleValues(source, claude, codex), notice };
-}
-
-function migrateDefaultModels(raw, seatIds) {
-  const old = raw || {};
-  const remapped = oldRoleValues(old, old['lead.claude'], old['lead.codex']);
-  // Lookup choices migrate, but the Haiku lookup default never belonged to the researcher seat.
-  delete remapped.researcher;
-  return Object.fromEntries(seatIds.flatMap(id => typeof (old[id] ?? remapped[id]) === 'string' ? [[id, old[id] ?? remapped[id]]] : []));
-}
-
 function catalog(installed, knownModels = []) {
-  const rows = [
-    ...ALIASES.map(model => ({ ...modelRow({ model, displayName: `${model[0].toUpperCase() + model.slice(1)} (follows latest)` }, 'alias') })),
-    ...(!knownModels.some(row => agentOfModel(row.model || row.value || '') === 'codex')
-      ? [modelRow({ model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', fast: true }, 'cached')] : []),
-  ];
+  const rows = adapters().flatMap(({ manifest }) => catalogDefaults(manifest, knownModels));
   for (const row of knownModels) {
     const normalized = modelRow(row, row.source || 'live');
     if (!normalized) continue;
     const index = rows.findIndex(item => item.model === normalized.model);
     if (index < 0) rows.push(normalized); else rows[index] = normalized;
-    if (ALIASES.includes(row.alias)) {
-      const aliasIndex = rows.findIndex(item => item.model === row.alias);
+    const aliasIndex = row.alias && aliasesOf(row.alias).includes(row.alias) ? rows.findIndex(item => item.model === row.alias) : -1;
+    if (aliasIndex >= 0) {
       rows[aliasIndex] = { ...normalized, model: row.alias, label: rows[aliasIndex].label, source: 'alias', listed: true };
     }
   }
-  return rows.map(row => ({ ...row, efforts: [...row.efforts], available: !!installed[row.family], ...(!installed[row.family] ? { reason: `${row.family === 'claude' ? 'Claude Code' : 'Codex'} is not installed.` } : {}) }));
+  return rows.map(row => {
+    const available = !!installed[row.family];
+    return { ...row, efforts: [...row.efforts], available, ...(!available && { reason: `${adapterOf(row.family).manifest.label} is not installed.` }) };
+  });
+}
+
+const titleCase = word => word.charAt(0).toUpperCase() + word.slice(1);
+
+function catalogDefaults({ id, models: { aliases, fallback, fastDefault } }, knownModels) {
+  if (aliases.length) return aliases.map(model => modelRow({ model, displayName: `${titleCase(localModel(model))} (follows latest)` }, 'alias'));
+  if (!fallback || knownModels.some(row => agentOfModel(row.model || row.value || '') === id)) return [];
+  const label = localModel(fallback).split('-').map((word, index) => index ? titleCase(word) : word.toUpperCase()).join('-');
+  return [modelRow({ model: fallback, label, fast: fastDefault }, 'cached')];
 }
 
 const versionOrder = (left, right) => Number(left[0]) - Number(right[0]) || Number(left[1] || 0) - Number(right[1] || 0);
 const high = model => ({ model, effort: 'high' });
 
-function codexDefault(models) {
-  const candidates = models.flatMap(row => {
-    const version = /^gpt-(\d+)(?:\.(\d+))?-sol$/.exec(row.model);
-    return version && row.available !== false && row.listed !== false ? [{ model: row.model, version: version.slice(1) }] : [];
-  });
-  const newest = candidates.sort((a, b) => versionOrder(b.version, a.version))[0];
-  return { ...high(newest?.model || 'gpt-6.1-sol'), fast: true };
+function providerDefault({ id, models: { fallback, preferred, fastDefault } }, rows) {
+  const choices = rows.filter(row => row.available !== false && row.listed !== false && agentOfModel(row.model) === id);
+  if (!fallback) {
+    const row = choices.find(row => row.isDefault) ?? choices[0];
+    return row ? { model: row.model, effort: row.defaultEffort ?? row.efforts?.[0] ?? 'high' } : null;
+  }
+  let model = fallback, bestVersion;
+  if (preferred) for (const row of choices) {
+    const match = preferred.exec(localModel(row.model));
+    if (!match) continue;
+    const version = match.slice(1);
+    if (!bestVersion || versionOrder(version, bestVersion) > 0) {
+      model = row.model;
+      bestVersion = version;
+    }
+  }
+  return { ...high(model), ...(fastDefault && { fast: true }) };
 }
 
-function defaultsFor(installed, models = [], seatIds = Object.keys(TEAM)) {
-  if (!installed.claude && !installed.codex) return {};
-  const codex = codexDefault(models);
-  return Object.fromEntries(seatIds.map((id, index) => [id, !installed.claude || installed.codex && index > 0 && CODEX_ROLES.has(id)
-    ? { ...codex } : high(index === 0 || !Object.hasOwn(TEAM, id) ? 'opus' : TEAM[id])]));
+function defaultsFor(installed, models = [], seatIds = TEAM_ROLES) {
+  const defaults = new Map(), roleProviders = new Map();
+  let lead, catalogLead;
+  for (const { manifest } of adapters()) {
+    if (!installed[manifest.id]) continue;
+    const seat = providerDefault(manifest, models);
+    if (!seat) continue;
+    defaults.set(manifest.id, seat);
+    for (const role of manifest.models.defaultRoles ?? []) roleProviders.set(role, manifest.id);
+    if (canLead(manifest)) {
+      if (manifest.models.fallback) lead ??= manifest.id;
+      else catalogLead ??= manifest.id;
+    }
+  }
+  // A provider whose models arrive in the background must not displace an existing default lead.
+  lead ??= catalogLead;
+  const primary = lead ?? defaults.keys().next().value;
+  return Object.fromEntries(seatIds.flatMap((id, index) => {
+    const provider = index === 0 ? lead : roleProviders.get(id) ?? primary;
+    if (!provider) return [];
+    const useSonnet = index > 0 && SONNET_ROLES.has(id) && agentOfModel('sonnet') === provider;
+    return [[id, useSonnet ? high('sonnet') : { ...defaults.get(provider) }]];
+  }));
 }
 
 function effective(defaults, global = {}, project = {}) {
@@ -99,7 +117,11 @@ function effective(defaults, global = {}, project = {}) {
 }
 
 // Date and context variants have the same reviewer identity. Explicit provider aliases take precedence for launch.
-const releaseOf = model => /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?$/.exec(model.replace(/\[1m\]$/, '').replace(/-\d{8}$/, ''));
+const aliasesOf = model => adapterOfModel(model).manifest.models.aliases;
+function releaseOf(model) {
+  const release = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/.exec(model.replace(/\[1m\]$/, '').replace(/-\d{8}$/, ''));
+  return release && aliasesOf(model).includes(release[1]) ? release : null;
+}
 function aliasTargets(models) {
   const latest = new Map();
   for (const row of models) {
@@ -115,7 +137,7 @@ function aliasTargets(models) {
 }
 
 function agentAlias(model, models) {
-  if (ALIASES.includes(model)) return model;
+  if (aliasesOf(model).includes(model)) return model;
   const alias = releaseOf(model)?.[1];
   return alias && aliasTargets(models).get(alias)?.model === model ? alias : null;
 }
@@ -133,8 +155,8 @@ function modelIdentity(models) {
 function resolveSeat(choice, fallback, installed, models, isLead = false) {
   const selected = choice && installed[agentOfModel(choice.model)] ? choice : fallback;
   if (!selected) return null;
-  const row = models.find(row => row.model === selected.model);
-  const seat = { ...selected };
+  const seat = { ...selected, model: canonicalModelId(selected.model) };
+  const row = models.find(row => row.model === seat.model);
   if (row && !row.efforts.includes(seat.effort)) seat.effort = row.defaultEffort || row.efforts[0];
   if (row && seat.fast && !row.fast) seat.fast = false;
   if (seat.ultracode !== true || !allowsUltracode(seat.model, isLead)) delete seat.ultracode;
@@ -142,16 +164,18 @@ function resolveSeat(choice, fallback, installed, models, isLead = false) {
 }
 
 function leadOptions(map, agent, installed, models = [], lead = 'orchestrator') {
-  if (!installed[agent]) return null;
-  const fallback = agent === 'claude' ? high('opus') : codexDefault(models);
+  const adapter = adapterOf(agent);
+  if (!adapter || !installed[agent] || !canLead(adapter.manifest)) return null;
+  const fallback = providerDefault(adapter.manifest, models);
   const selected = Object.hasOwn(map, lead) && agentOfModel(map[lead].model) === agent ? map[lead] : fallback;
   return resolveSeat(selected, fallback, installed, models, true);
 }
 
 function leadConfiguration(map, lead, installed, models) {
-  const leads = { claude: leadOptions(map, 'claude', installed, models, lead), codex: leadOptions(map, 'codex', installed, models, lead) };
+  const ids = adapters().filter(({ manifest }) => canLead(manifest)).map(({ manifest }) => manifest.id);
+  const leads = Object.fromEntries(ids.map(id => [id, leadOptions(map, id, installed, models, lead)]));
   const preferred = Object.hasOwn(map, lead) ? agentOfModel(map[lead].model) : null;
-  return { leads, leadAgent: preferred && leads[preferred] ? preferred : leads.claude ? 'claude' : leads.codex ? 'codex' : null };
+  return { leads, leadAgent: preferred && leads[preferred] ? preferred : ids.find(id => leads[id]) ?? null };
 }
 
 function seatIssues(map, models) {
@@ -165,5 +189,5 @@ function seatIssues(map, models) {
   return issues;
 }
 
-module.exports = { cleanSeat, cleanStoredSeats, migrateSeats, migrateDefaultModels, modelIdentity, catalog, defaultsFor, effective,
+module.exports = { cleanSeat, cleanStoredSeats, modelIdentity, catalog, defaultsFor, effective,
   leadOptions, leadConfiguration, resolveSeat, agentAlias, concreteAlias, seatIssues, rankOf };

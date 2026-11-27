@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { cleanSeat, cleanStoredSeats, migrateSeats, catalog, defaultsFor, effective, leadOptions } = require('../electron/features/routing/model-seats.cjs');
+const { cleanSeat, cleanStoredSeats, catalog, defaultsFor, effective, leadOptions } = require('../electron/features/routing/model-seats.cjs');
 const fixture = require('./fixtures/team-seats.json');
 const ids = fixture.seats;
 const both = { claude: true, codex: true };
@@ -12,14 +12,14 @@ test('seat validation rejects unsafe and oversized model ids and keeps dispatch 
   for (const model of ['gpt-6.1-sol', 'provider/model:v1@[q]+test', 'a'.repeat(160)]) assert.equal(cleanSeat(seat(model)).model, model);
 });
 
-test('effort and fast follow capabilities and orchestrator takes either family', () => {
+test('effort and fast follow capabilities and orchestrator takes each native provider', () => {
   rejected(seat('gpt-6.1-sol', 'max'), 'invalid-effort');
   rejected(seat('sonnet', 'ultra'), 'invalid-effort');
   assert.throws(() => cleanSeat(seat('claude-sonnet-5-5', 'high', true), 'designer',
     [{ model: 'claude-sonnet-5-5', efforts: ['high'], fast: false }]), error => error.code === 'fast-not-allowed');
   assert.throws(() => cleanSeat(seat('claude-next', 'high', true)), error => error.code === 'fast-not-allowed');
   rejected(seat('gpt-next', 'high', 'true'), 'fast-not-allowed');
-  for (const model of ['gpt-6.1-sol', 'opus']) assert.deepEqual(cleanSeat(seat(model), 'orchestrator'), seat(model));
+  for (const model of ['gpt-6.1-sol', 'opus', 'gemini-3.8-flash']) assert.deepEqual(cleanSeat(seat(model), 'orchestrator'), seat(model));
   assert.equal(cleanSeat(seat('opus', 'max')).effort, 'max');
   assert.equal(cleanSeat(seat('gpt-next', 'xhigh', true)).fast, true);
 });
@@ -47,6 +47,23 @@ test('team defaults follow the newest Sol and substitute on either single-agent 
   assert.deepEqual(defaultsFor({}), {});
 });
 
+test('Antigravity leads with its probed catalog and keeps the existing default when Codex is also installed', () => {
+  const agy = { agy: true }, flash = seat('gemini-3.8-flash', 'low');
+  assert.deepEqual(defaultsFor(agy), {});
+  assert.equal(catalog({ codex: true }).some(row => row.family === 'agy'), false);
+  const models = catalog(agy, [{ model: 'agy:retired', listed: false }, { model: flash.model, efforts: ['low', 'high'], defaultEffort: 'low' }]);
+  assert.deepEqual(defaultsFor(agy, models, ['lead', 'developer']), { lead: flash, developer: flash });
+  assert.equal(defaultsFor({ ...agy, codex: true }, models).orchestrator.model, 'gpt-6.1-sol');
+  assert.deepEqual(leadOptions({ orchestrator: flash }, 'agy', agy, models), flash);
+  assert.deepEqual(cleanSeat(flash, 'lead', models, false, true), flash);
+  assert.deepEqual(cleanSeat(flash, 'developer', models), flash);
+  const prefixed = { ...flash, model: 'agy:gemini-3.8-flash' };
+  assert.deepEqual(cleanSeat(prefixed, 'developer', models), flash);
+  assert.throws(() => cleanSeat({ ...prefixed, effort: 'xhigh' }, 'developer', models), { code: 'invalid-effort' });
+  assert.deepEqual(cleanStoredSeats({ developer: prefixed }, ids), { developer: flash });
+  assert.deepEqual(cleanStoredSeats({ orchestrator: flash }, ids), { orchestrator: flash });
+});
+
 test('project choices merge over global seat by seat including one orchestrator', () => {
   const defaults = defaultsFor(both), global = { orchestrator: seat('sonnet'), researcher: seat('haiku') };
   const project = { orchestrator: seat('gpt-next', 'medium', false), developer: seat('gpt-next') };
@@ -54,18 +71,6 @@ test('project choices merge over global seat by seat including one orchestrator'
   assert.deepEqual(merged.orchestrator, project.orchestrator);
   assert.equal(merged.researcher.model, 'haiku'); assert.equal(merged.developer.model, 'gpt-next');
   merged.designer.model = 'changed'; assert.equal(defaults.designer.model, 'sonnet');
-});
-
-test('v1 migration prefers Claude and core and copies visual and lookup to the new team', () => {
-  const old = { lead: { claude: seat('sonnet'), codex: seat('gpt-6.2-sol') }, core: seat('gpt-6.1-sol'), execution: seat('opus'),
-    visual: seat('sonnet'), lookup: seat('haiku'), architect: seat('opus'), reviewer: seat('opus') };
-  const before = structuredClone(old), { map, notice } = migrateSeats(old);
-  assert.deepEqual(map, { orchestrator: old.lead.claude, developer: old.core, designer: old.visual, qa: old.visual,
-    researcher: old.lookup, architect: old.architect, reviewer: old.reviewer });
-  assert.match(notice, /Claude.*sonnet.*Codex.*gpt-6\.2-sol/);
-  assert.deepEqual(old, before);
-  assert.deepEqual(migrateSeats({ lead: { codex: old.lead.codex }, execution: old.execution }).map,
-    { orchestrator: old.lead.codex, developer: old.execution });
 });
 
 test('the other-family lead uses its family default and an uninstalled family has no lead', () => {

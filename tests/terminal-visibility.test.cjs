@@ -25,6 +25,8 @@ function loadUI(name, overrides = {}) {
     if (key === '@phosphor-icons/react') return new Proxy({}, { get: () => () => React.createElement('svg') });
     if (key === 'i18n') return { t: translate };
     if (key === 'time') return { relativeTime: () => '' };
+    if (key === 'Select') return { Select: () => null };
+    if (key === 'native-words.ts') return { reasonWords: reason => reason };
     if (key === 'active-terminal') return { useActiveTerminal: () => null, setActiveTerminal() {} };
     if (key === 'reading-mode') return { useTerminalChoice: () => [], syncReading() {}, readingShown: item => !!item.sessionId && item.cliActive };
     if (key === 'NativeSessionView') return { NativeSessionView: () => null };

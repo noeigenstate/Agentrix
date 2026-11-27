@@ -41,3 +41,7 @@
 
 /* A file dragged over the view: the box says it takes it. */
 .reading-view[data-native-session].is-dropping .reading-composer { border-color: var(--focus-ring); }
+.native-model-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.native-model-agent { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.native-model-controls .select-trigger { min-width: 0; max-width: 100%; }
+.native-context-usage { color: var(--text-2); font-size: 12px; }

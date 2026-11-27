@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { Project } from '../../shared/types';
+import type { AgentProvider } from '../../shared/agent-events';
 import type { ScreenChoice } from '../agents/agent-screen-types';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen';
 import { screenAgent, signInScreen } from '../cli-screens/index.ts';
@@ -14,7 +15,7 @@ import { reviewHistory } from './review-history';
 export type DecisionKind = 'approval' | 'question' | 'choice' | 'signin' | 'attention' | 'review';
 export type Decision = {
   id: string; kind: DecisionKind; projectId: string; projectName: string; terminalId: string; sessionId: string | null; terminalTitle: string; multipleTerminals: boolean;
-  agent: 'claude' | 'codex'; title: string; context: string[]; choice: ScreenChoice | null; identity: string | null; message: string; since: number;
+  agent: AgentProvider; title: string; context: string[]; choice: ScreenChoice | null; identity: string | null; message: string; since: number;
 };
 
 // When each decision was first seen, so it can say how long it has waited and keep its place in the queue.

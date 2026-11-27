@@ -32,6 +32,7 @@ const nativePolicy = {
   canContinueInterrupted: true,
   trackShellInput: true,
   launchOptions: true,
+  shellHome: true,
   missingResume: '没有找到可恢复的 Codex 会话，请使用 codex 开始新会话。',
   newConversationIdentity: started => started.providerSessionId,
   permissions: settings => ({ permissions: settings.codexPermissions }),

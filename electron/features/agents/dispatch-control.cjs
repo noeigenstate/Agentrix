@@ -18,7 +18,7 @@ const validId = value => typeof value === 'string' && /^[\w-]{1,160}$/.test(valu
 const status = value => ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(value);
 const registrationCodes = new Set(['dispatch.session_mismatch', 'dispatch.control_unbound', 'dispatch.unknown_run',
   'dispatch.project_mismatch', 'dispatch.duplicate_run']);
-const leadModes = new Set(['native', 'terminal', 'codex']);
+const leadModes = new Set(['native', 'terminal', 'codex', 'native-independent']);
 function makeReceiptRoom(receipts, limit) {
   if (receipts.size < limit) return true;
   const oldest = [...receipts].find(([, entry]) => entry.settled);
@@ -135,7 +135,8 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           }
           client.brokerRequested = true;
         }
-        const handler = value.method === 'control.finish' ? async () => client.control ? client.control({ type: 'finish' }) : { status: 'delivered' }
+        const handler = value.method === 'control.finish' ? async (_run, payload) => client.control
+          ? client.control({ type: 'finish', ...(payload?.allowContinuation === false && { allowContinuation: false }) }) : { status: 'delivered' }
           : value.method === 'control.deliver' ? async (run, payload) => {
           if (!client.control || !validId(payload?.messageId) || !['intervene', 'stop'].includes(payload.type)) throw new Error('control_unavailable');
           const previous = client.delivered.get(payload.messageId), signature = JSON.stringify(payload);

@@ -78,7 +78,8 @@ function createSessionPresentation(host) {
       if (s.status === 'exited') continue;
       const project = store.projects.find(project => project.id === s.projectId);
       if (!project) continue;
-      const lead = s.nativeStructured && nativeSessions && routing.leadOptions(project.id, s.agent);
+      const remoteSeat = project.kind === 'ssh' && adapterOf(s.agent)?.nativePolicy?.rememberModelOptions;
+      const lead = s.nativeStructured && nativeSessions && routing.leadOptions(project.id, s.agent, { remote: !!remoteSeat });
       // A running terminal conductor reads its seats once; a change rides its next prompt, as a mode switch does.
       if (!s.nativeStructured && s.agent === 'claude' && s.cliActive && project.kind !== 'ssh') {
         const change = routing.routingChange(project.id, s.skillSessionId || s.sessionId, s.toldSeats);

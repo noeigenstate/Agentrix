@@ -1,16 +1,19 @@
-async function openCodexFromShell(deps, project, s, event) {
+async function openNativeFromShell(deps, project, s, event, adapter = deps.adapterOf(event.agent ?? deps.legacyRestoreAgent ?? 'codex')) {
   try {
-    const { codexLaunch } = require('../agents/agent-command.cjs');
-    const launch = codexLaunch(event.args === undefined && !event.command ? [] : event.args);
+    const { routingOwned } = require('../agents/agent-command.cjs');
+    const { manifest: { id: agent, label }, nativePolicy } = adapter;
+    const launch = adapter.terminal.launch(event.args === undefined && !event.command ? [] : event.args, routingOwned);
     const paths = project.kind === 'ssh' ? deps.path.posix : deps.path;
     if (typeof event.cwd !== 'string' || !paths.isAbsolute(event.cwd) || event.cwd.length > 4096 || event.cwd.includes('\0'))
-      throw new Error('Codex 启动目录无效，请重启终端后重试。');
+      throw new Error(`${label} 启动目录无效，请重启终端后重试。`);
     launch.cwd = launch.cwd ? paths.resolve(event.cwd, launch.cwd) : event.cwd;
-    if (launch.cwd.length > 4096) throw new Error('Codex 启动目录无效，请重启终端后重试。');
-    if (typeof event.codexHome === 'string' && paths.isAbsolute(event.codexHome) && event.codexHome.length <= 4096 && !event.codexHome.includes('\0')) launch.codexHome = event.codexHome;
-    if (!deps.nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
+    if (launch.cwd.length > 4096) throw new Error(`${label} 启动目录无效，请重启终端后重试。`);
+    if (nativePolicy.shellHome && typeof event.codexHome === 'string' && paths.isAbsolute(event.codexHome) && event.codexHome.length <= 4096 && !event.codexHome.includes('\0')) {
+      launch.codexHome = event.codexHome;
+    }
+    if (!deps.nativeSessions) throw new Error(nativePolicy.restoreWithoutNative);
     deps.launchPlans.delete(s.terminalId); deps.restorePlans.delete(s.terminalId);
-    const opened = await deps.nativeSessions.start(s.terminalId, { agent: 'codex', resume: launch.resume, launch });
+    const opened = await deps.nativeSessions.start(s.terminalId, { agent, resume: launch.resume, launch });
     if (launch.prompt) await deps.nativeSessions.send(s.terminalId, opened.runtimeSessionId, { clientMessageId: deps.randomUUID(), text: launch.prompt });
     deps.broadcast();
   } catch (error) {
@@ -43,7 +46,7 @@ function onEvent(deps, event, remote) {
   if (event.type === 'hook-channel') { deps.reportHookChannel(s, event.command, event.sequence); return; }
   if (event.type !== 'turn-complete' && !deps.acceptShellEvent(s, event)) return;
   const shellAdapter = event.type === 'agent-started' ? deps.adapterOf(event.agent) ?? deps.adapterOf('codex') : null;
-  if (shellAdapter?.terminal?.redirect === 'native') { void openCodexFromShell(deps, project, s, event); return; }
+  if (shellAdapter?.terminal?.redirect === 'native') { void openNativeFromShell(deps, project, s, event, shellAdapter); return; }
   if (event.type === 'agent-exited') {
     const terminal = deps.adapterOf(event.agent)?.terminal;
     if (!terminal || terminal.redirect) return;
@@ -334,7 +337,7 @@ function createShellEvents(deps) {
   return {
     onEvent: onEvent.bind(null, deps),
     structuredEvent: structuredEvent.bind(null, deps),
-    openCodexFromShell: openCodexFromShell.bind(null, deps),
+    openCodexFromShell: openNativeFromShell.bind(null, deps),
     watchCodexActivity: watchCodexActivity.bind(null, deps),
   };
 }

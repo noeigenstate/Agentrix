@@ -20,7 +20,7 @@ $global:AgentrixEventSequence = 0
 $global:AgentrixIntercept = if ($global:AgentrixSession.shims) { Join-Path $global:AgentrixSession.shims 'intercept.cjs' } else { Join-Path $PSScriptRoot 'shims/intercept.cjs' }
 $global:AgentrixNode = if ($global:AgentrixSession.nodePath) { $global:AgentrixSession.nodePath } else { $env:AGENTRIX_NODE }
 Remove-Item Env:AGENTRIX_ACCOUNT_BASELINE -ErrorAction SilentlyContinue
-# agent.ps1 (Command Prompt terminals) loads only the codex and claude wrappers below and keeps its own directory.
+# agent.ps1 (Command Prompt terminals) loads the wrappers below and keeps its own directory.
 $global:AgentrixAgentOnly = $env:AGENTRIX_AGENT_ONLY -eq '1'
 if (-not $global:AgentrixAgentOnly) { Set-Location -LiteralPath $global:AgentrixSession.projectPath }
 # An agent's CLI is the first file on PATH with its name, in PowerShell's own order within a folder: script, PATHEXT, bare
@@ -51,6 +51,9 @@ if ($global:AgentrixClaudeCommand -and [IO.Path]::GetExtension($global:AgentrixC
     $nativeClaude = Join-Path (Split-Path $global:AgentrixClaudeCommand -Parent) 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
     if (Test-Path -LiteralPath $nativeClaude) { $global:AgentrixClaudeExecutable = $nativeClaude }
 }
+$global:AgentrixAgyCommand = if ($env:AGENTRIX_AGY_EXECUTABLE -and [IO.File]::Exists($env:AGENTRIX_AGY_EXECUTABLE)) {
+    $env:AGENTRIX_AGY_EXECUTABLE
+} else { Find-AgentrixProgram agy }
 
 # The proxy variable that would carry this terminal's HTTP hooks to $Port, by hook-channel.cjs's rule over the live
 # environment, where every spelling is the one variable: HTTPS_PROXY or HTTP_PROXY, unless NO_PROXY exempts 127.0.0.1.
@@ -288,7 +291,7 @@ function global:Send-AgentrixEvent {
             cwd = (Get-Location).ProviderPath
             command = $Command
         }
-        if ($Type -eq 'agent-started' -and $Agent -eq 'codex') {
+        if ($Type -eq 'agent-started' -and $PSBoundParameters.ContainsKey('Arguments')) {
             $eventData.args = @($Arguments)
         }
         $eventData = $eventData | ConvertTo-Json -Compress
@@ -344,20 +347,27 @@ function global:agentrix_agent {
         Write-AgentrixLaunchError $code '启动方式的数据格式或版本不受支持' '请重开终端后重试'
         return
     }
+    $program = @{
+        codex = @{ command = $global:AgentrixCodexCommand; label = 'Codex' }
+        agy = @{ command = $global:AgentrixAgyCommand; label = 'agy'; requiresExecutable = $true }
+    }[$agent]
+    $programFile = $program.command
+    if ($program.requiresExecutable -and -not $programFile) {
+        Write-AgentrixLaunchError 127 "在 PATH 中找不到 $($program.label)" '请安装后重开终端'
+        return
+    }
     if ($route -ceq 'passthrough') {
-        if (-not $global:AgentrixCodexCommand) {
+        if (-not $programFile) {
             Write-Host 'Codex CLI was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
             $global:LASTEXITCODE = 127
-        } elseif ($MyInvocation.ExpectingInput) { $input | & $global:AgentrixCodexCommand @arguments }
-        elseif ([IO.Path]::GetExtension($global:AgentrixCodexCommand) -ne '.exe') { & $global:AgentrixCodexCommand @arguments }
-        else { $global:LASTEXITCODE = Invoke-AgentrixExecutable $global:AgentrixCodexCommand $arguments }
+        } elseif ($MyInvocation.ExpectingInput) { $input | & $programFile @arguments }
+        elseif ([IO.Path]::GetExtension($programFile) -ne '.exe') { & $programFile @arguments }
+        else { $global:LASTEXITCODE = Invoke-AgentrixExecutable $programFile $arguments }
         return
     }
     if ($route -ceq 'native') {
         Send-AgentrixEvent 'agent-started' -Arguments $arguments -Agent $agent
-        Write-Host @'
-已请求在原生模式打开 Codex。
-'@
+        Write-Host "已请求在原生模式打开 $($program.label)。"
         $global:LASTEXITCODE = 0
         return
     }
@@ -382,6 +392,9 @@ function global:codex {
 }
 function global:claude {
     if ($MyInvocation.ExpectingInput) { $input | agentrix_agent claude @args } else { agentrix_agent claude @args }
+}
+function global:agy {
+    if ($MyInvocation.ExpectingInput) { $input | agentrix_agent agy @args } else { agentrix_agent agy @args }
 }
 
 function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [string[]]$Arguments) {

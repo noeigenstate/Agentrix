@@ -1,10 +1,13 @@
 import type { CallRow } from './subagent-splits.ts';
+import type { AgentProvider } from '../../shared/agent-events';
 import type {
   RoleConfig, RoutingConfig, Seat, SeatId, SeatIssue, SeatMap, SeatModel,
   SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
 } from '../../shared/types';
 import { aliasTarget } from '../../shared/routing-command.ts';
-import { adapterOfModel, agentOfModel, allowsUltracode, rankByName, unsupportedEffort, validModel } from '../../../electron/features/routing/seat-rules.mjs';
+import { adapterOf, adapterOfModel, adapters, agentOfModel, canonicalModelId, localModel } from '../../../electron/features/cli-adapters/registry.mjs';
+import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
+import { allowsUltracode, rankByName, unsupportedEffort, validModel } from '../../../electron/features/routing/seat-rules.mjs';
 
 import { roleLocks } from '../../../electron/features/routing/role-rules.mjs';
 
@@ -20,7 +23,6 @@ export const seatSettingText = (seat: Seat, model: string, fast: string) =>
 // The dialog checks seat edits before saving. Main still validates saves and the dialog shows its refusal.
 export type SlotId = SeatId;
 export type Scope = 'template' | 'project';
-type Family = 'claude' | 'codex';
 type EditRefusal = 'unknown-model' | 'unavailable' | 'same' | 'effort' | 'fast' | 'invalid-id';
 export type Edit = { ok: true; map: SeatMap } | { ok: false; reason: EditRefusal };
 
@@ -43,11 +45,14 @@ export const getSlot = (map: SeatMap, slot: SlotId): Seat | undefined => map[slo
 export const withSlot = (map: SeatMap, slot: SlotId, seat: Seat): SeatMap => ({ ...map, [slot]: seat });
 export const sameSeat = (a?: Seat, b?: Seat) => !!a && !!b && a.model === b.model && a.effort === b.effort
   && !!a.fast === !!b.fast && !!a.ultracode === !!b.ultracode;
-export const modelRow = (catalog: SeatModel[], model: string) => catalog.find(row => row.model === model);
+export const modelRow = (catalog: SeatModel[], model: string) => {
+  const id = canonicalModelId(model);
+  return catalog.find(row => row.model === id);
+};
 // A model the catalog does not know is not judged unavailable.
 export const isAvailable = (catalog: SeatModel[], model: string) => modelRow(catalog, model)?.available !== false;
 // An agent that is not installed cannot run its models: its rows are greyed with the reason, whatever the list says.
-export const withInstalled = (catalog: SeatModel[], installed: SeatsInfo['installed'] | undefined, reasonOf: (family: Family) => string): SeatModel[] =>
+export const withInstalled = (catalog: SeatModel[], installed: SeatsInfo['installed'] | undefined, reasonOf: (family: AgentProvider) => string): SeatModel[] =>
   catalog.map(row => installed && installed[row.family] === false && row.available ? { ...row, available: false, reason: reasonOf(row.family) } : row);
 // An alias (opus) and the newest listed id of its tier (claude-opus-5-5) are one model; a [1m] or date suffix does not make another.
 const TIER = /^claude-(opus|sonnet|haiku)-(\d+(?:-\d{1,2})*)(?:-\d{8})?$/;
@@ -55,21 +60,23 @@ const bare = (model: string) => model.replace(/\[[^\]]*\]$/, '');
 const versionOf = (model: string) => (TIER.exec(bare(model))?.[2] ?? '').split('-').map(Number);
 const newer = (a: number[], b: number[]) => { for (let at = 0; at < Math.max(a.length, b.length); at++) if ((a[at] ?? 0) !== (b[at] ?? 0)) return (a[at] ?? 0) > (b[at] ?? 0); return false; };
 export function canonicalModel(catalog: SeatModel[], model: string): string {
-  const id = bare(model);
+  const id = bare(canonicalModelId(model));
   if (!/^(opus|sonnet|haiku)$/.test(id)) return id.replace(/-\d{8}$/, '');
   let best: string | null = null;
   for (const row of catalog) if (row.listed !== false && TIER.exec(bare(row.model))?.[1] === id && (!best || newer(versionOf(row.model), versionOf(best)))) best = row.model;
   return best ? bare(best).replace(/-\d{8}$/, '') : id;
 }
 export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
-// A typed-in id the catalog does not list: its family comes from the id, its efforts from the family's base list, fast only where Codex can apply it.
+// An unlisted model takes its adapter's base efforts. Fast is available when the adapter can set it through the API.
 const customRow = (model: string): SeatModel => {
-  const { id: family, models: { efforts } } = adapterOfModel(model).manifest;
-  return { model, label: model, family, efforts: [...efforts], fast: family === 'codex',
-    ...(family === 'codex' ? {} : { fastReason: 'unknown' as const }), rank: rankByName(model), available: true, source: 'custom' };
+  const { manifest } = adapterOfModel(model);
+  const fast = support(manifest, 'fast').via === 'api';
+  return { model, label: model, family: manifest.id, efforts: [...manifest.models.efforts], fast,
+    ...(!fast && { fastReason: 'unknown' as const }), rank: rankByName(model), available: true, source: 'custom' };
 };
 // The catalog's row, or the row a valid typed-in id would get.
-export const rowFor = (catalog: SeatModel[], model: string) => modelRow(catalog, model) ?? (validModel(model) ? customRow(model) : undefined);
+export const rowFor = (catalog: SeatModel[], model: string) =>
+  modelRow(catalog, model) ?? (validModel(model) ? customRow(canonicalModelId(model)) : undefined);
 // The issues main reported for a slot.
 export const issuesOf = (info: SeatsInfo, slot: SlotId): SeatIssue[] => (info.issues ?? []).filter(issue => issue.slot === slot);
 // How long ago a model list was read, as a unit and a count for the dialog to word.
@@ -153,10 +160,10 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
   return { roles: Object.fromEntries(entries), ...(config.conductor && { conductor: true }) };
 }
 
-// A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).
 function fitSeat(seat: Seat, row: SeatModel, ultracode = seat.ultracode): Seat {
   const effort = fitEffort(row, seat.effort);
-  const fast = row.family === 'codex' ? seat.fast ?? true : agentOfModel(seat.model) === 'claude' && !!seat.fast;
+  const fastDefault = adapterOf(row.family)?.manifest.models.fastDefault ?? false;
+  const fast = fastDefault ? seat.fast ?? fastDefault : agentOfModel(seat.model) === row.family && !!seat.fast;
   return { model: row.model, effort, ...(row.fast && { fast }), ...(allowsUltracode(row.model, !!ultracode) && { ultracode: true }) };
 }
 
@@ -238,19 +245,20 @@ export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string |
 // 模型盘: the catalog grouped by family and then by model line, the line read from the id (never from a list of names, so a new line shows up by itself). Each line shows its aliases
 // and its newest version first; older versions fold away. A search keeps only the matching rows.
 type PaletteLine = { name: string; shown: SeatModel[]; older: SeatModel[] };
-type PaletteGroup = { family: Family; total: number; lines: PaletteLine[] };
+type PaletteGroup = { family: AgentProvider; shortLabel: string; total: number; lines: PaletteLine[] };
 const idVersion = (model: string): number[] => (model.replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '').match(/\d+(?:\.\d+)*/g) ?? []).flatMap(part => part.split('.').map(Number));
 const versionNewer = (a: number[], b: number[]) => { for (let at = 0; at < Math.max(a.length, b.length); at++) if ((a[at] ?? 0) !== (b[at] ?? 0)) return (a[at] ?? 0) > (b[at] ?? 0); return false; };
 const isAliasRow = (row: SeatModel) => row.source === 'alias' || /^[a-z]+$/i.test(row.model);
 // The line is the first word of the id that is not the vendor prefix or a number ("claude-opus-5" and "opus" are Opus, "gpt-6.2-sol" is Sol, "gpt-5.5" has none).
 export function lineOf(row: SeatModel): string {
-  const word = row.model.replace(/\[[^\]]*\]$/, '').split(/[-_\s.:/]+/).find(part => /^[a-z]/i.test(part) && !/^(gpt|claude)$/i.test(part));
+  const word = localModel(row.model).replace(/\[[^\]]*\]$/, '').split(/[-_\s.:/]+/).find(part => /^[a-z]/i.test(part) && !/^(gpt|claude)$/i.test(part));
   return word ? word[0].toUpperCase() + word.slice(1).toLowerCase() : '';
 }
 export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] {
   const q = query.trim().toLowerCase(), match = (row: SeatModel) => !q || row.label.toLowerCase().includes(q) || row.model.toLowerCase().includes(q);
-  const groups = (['claude', 'codex'] as Family[]).map(family => {
+  const groups = adapters().flatMap(({ manifest: { id: family, shortLabel, models: { fallback } } }) => {
     const rows = catalog.filter(row => row.family === family), names: string[] = [], byLine = new Map<string, SeatModel[]>();
+    if (!fallback && !rows.some(row => row.available && row.listed !== false)) return [];
     for (const row of rows) { const name = lineOf(row); if (!byLine.has(name)) { byLine.set(name, []); names.push(name); } byLine.get(name)!.push(row); }
     names.sort((a, b) => Number(a === '') - Number(b === ''));
     const lines = names.map(name => {
@@ -263,7 +271,7 @@ export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] 
       const older = all.filter(row => !current(row)).sort((a, b) => versionNewer(idVersion(a.model), idVersion(b.model)) ? -1 : versionNewer(idVersion(b.model), idVersion(a.model)) ? 1 : 0);
       return { name, shown: shown.filter(match), older: older.filter(match) };
     }).filter(line => line.shown.length || line.older.length);
-    return { family, total: rows.filter(row => !(isAliasRow(row) && aliasTarget(catalog, row.model))).length, lines };
+    return [{ family, shortLabel, total: rows.filter(row => !(isAliasRow(row) && aliasTarget(catalog, row.model))).length, lines }];
   });
   return q ? groups.filter(group => group.lines.length) : groups;
 }

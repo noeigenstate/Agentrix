@@ -1,4 +1,5 @@
 const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
+const { workerOf } = require('../cli-adapters/workers.cjs');
 const { createHash, createHmac, timingSafeEqual } = require('node:crypto');
 const path = require('node:path');
 const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
@@ -88,9 +89,11 @@ function dispatchAccount(event) {
 }
 const envelope = event => !!event && uuid(event.id) && Buffer.byteLength(JSON.stringify(event)) <= 16384;
 
+const isDispatchAgent = agent => !!workerOf(agent);
+
 function validDispatch(event) {
   if (!envelope(event)) return false;
-  if (event.type === 'dispatch-declared') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role)
+  if (event.type === 'dispatch-declared') return isDispatchAgent(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role)
     && line(event.title, 1024) && line(event.cwd, 4096) && line(event.worktree, 4096) && routing(event.requested)
     && (event.expected == null || routing(event.expected) && event.expected.effort !== null && typeof event.expected.fast === 'boolean')
     && Number.isSafeInteger(event.helperPid) && event.helperPid > 0 && ['dispatch', 'intercepted'].includes(event.source)
@@ -109,7 +112,7 @@ function validDispatch(event) {
   if (event.type === 'dispatch-account') return !!dispatchAccount(event);
   if (!routing(event)) return false;
   if (event.type === 'dispatch-routing') return true;
-  if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
+  if (event.type === 'dispatch-start') return isDispatchAgent(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
     line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&
     (event.seat == null || validSeat(event.seat)) && (event.log == null || line(event.log, 4100) && event.log === `${event.out}.log`) &&
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
@@ -144,7 +147,7 @@ function acceptDispatch(session, event, calls, observeAccount, admissionKey = se
     return !!payload && (observeAccount?.(payload) || false);
   }
   if (!validDispatch(event)) return false;
-  const agent = ['claude', 'codex'].includes(session.agent) ? session.agent : null;
+  const agent = isDispatchAgent(session.agent) ? session.agent : null;
   const model = session.nativeStructured ? session.nativeObservedModel : session.usage?.rates?.model;
   const planner = { kind: 'planner', agent, model: line(model, 160) && model !== '<synthetic>' ? model : null };
   return calls?.dispatch(['dispatch-declared', 'dispatch-start'].includes(event.type) ? { ...event, planner } : event) || false;
@@ -222,7 +225,7 @@ const WIRE_FIELDS = Object.freeze({
     'agentrix.seat-map': fileFields('seats'),
     'agentrix.terminal-wire': fileFields('words claude'),
     'agentrix.board': fileFields('id pid title role agent model cwd allow startedAt', 'session controls closing'),
-    'agentrix.role-result': fileFields('runId source answer needsDecision needsApproval findings calls at', 'verification'),
+    'agentrix.role-result': fileFields('runId source answer needsDecision needsApproval findings calls at', 'verification warnings'),
     'agentrix.lead-seat': fileFields('model effort fast ultracode seats'),
     'agentrix.session-mode': fileFields('mode'),
     'agentrix.launch-route': fileFields('route'),
@@ -302,7 +305,8 @@ function readRoleResult(input) {
   if (required.some(key => !Object.hasOwn(value, key)) || !uuid(value.runId) || typeof value.answer !== 'string'
     || !['finish-role', 'final-text', 'legacy-heading'].includes(value.source) || !optionalCount(value.calls) || value.calls == null
     || !number(value.at) || !(value.needsDecision === null || Array.isArray(value.needsDecision))
-    || !Array.isArray(value.needsApproval) || !Array.isArray(value.findings)) {
+    || !Array.isArray(value.needsApproval) || !Array.isArray(value.findings)
+    || value.warnings !== undefined && (!Array.isArray(value.warnings) || value.warnings.length > 4 || !value.warnings.every(warning => line(warning, 240)))) {
     throw wireError('invalid', format, 'invalid role result');
   }
   return Object.fromEntries([...required, ...optional].filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
@@ -329,5 +333,5 @@ function readLeadSeat(text) {
 
 module.exports = {
   REFUSAL_LIMIT, validRefusal, validRefusals, acceptDispatch, validDispatch, validSeat, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame,
-  WIRE_FIELDS, readEnvelope, readKeyValue, writeKeyValue, readRoleResult, readSessionMode, readLeadSeat,
+  WIRE_FIELDS, readEnvelope, readKeyValue, writeKeyValue, readRoleResult, readSessionMode, readLeadSeat, isDispatchAgent,
 };

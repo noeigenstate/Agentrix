@@ -31,6 +31,11 @@ const codexRoleTools = {
   args: ({ command, args, env }) => ['-c', `mcp_servers.agentrix.command=${JSON.stringify(command)}`, '-c', `mcp_servers.agentrix.args=${JSON.stringify(args)}`,
     '-c', `mcp_servers.agentrix.env={${Object.entries(env).map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(', ')}}`],
 };
+const agyRoleTools = {
+  config: ({ command, args = [], env = {} }) => ({
+    mcpServers: [{ name: 'agentrix_role', command, args, env: Object.entries(env).map(([name, value]) => ({ name, value })) }],
+  }),
+};
 
 function claudeLaunch({ resume, seat, note, roleServer, roleTools = roleServer ? claudeRoleTools.args(roleServer) : [], hooks, roleError, remote = false, env = [] }) {
   let startup = note || '';
@@ -71,6 +76,10 @@ function codexLaunch(args, words, routingOwned) {
   return result;
 }
 
+function agyClassify(args, { alias, hasAliasArgument = Boolean(alias) } = {}) {
+  return Array.isArray(args) && args.length === 0 && !hasAliasArgument ? 'native' : 'passthrough';
+}
+
 const claudeResumeLine = (id, interrupted) => id ? `claude --resume ${id}${interrupted ? ' "继续"' : ''}\r` : 'claude --continue\r';
 
 function terminalAdapters(words) {
@@ -96,6 +105,22 @@ function terminalAdapters(words) {
       notes: {
         startup: note => ({ argv: note ? [claudeWire.flags.note, note] : [] }),
         message: (note, { native = false } = {}) => native ? { send: note } : { hook: { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: note } } },
+      },
+    },
+    agy: {
+      words: words.agy, roleTools: agyRoleTools,
+      terminal: {
+        redirect: 'native', classify: agyClassify, shimPassthrough: true,
+        delegates: args => agyClassify(args) === 'passthrough',
+        converses: () => false,
+        launch: args => {
+          if (agyClassify(args) !== 'native') throw new Error('只有不带参数的 agy 命令可以打开原生会话。');
+          return { resume: false };
+        },
+      },
+      notes: {
+        startup: note => ({ config: note ? { _meta: { antigravity: { systemPrompt: { append: note } } } } : {} }),
+        message: note => ({ send: note }),
       },
     },
     codex: {

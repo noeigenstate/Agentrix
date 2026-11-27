@@ -1,8 +1,0 @@
-{
-  "electron/features/routing/agent-seat.cjs": 2,
-  "electron/features/routing/guide-render.cjs": 2,
-  "electron/features/routing/model-catalog.cjs": 5,
-  "electron/features/routing/model-seats.cjs": 7,
-  "electron/features/routing/store.cjs": 2,
-  "electron/features/routing/team-roles.cjs": 2
-}

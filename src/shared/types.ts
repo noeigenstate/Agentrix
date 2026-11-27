@@ -1,6 +1,7 @@
 import type { ThemeId } from './themes';
 import type { CodexPermissions } from './codex-permissions.ts';
-import type { AgentEvent, NativeAnswer, NativeSettings, NativeSnapshot, NativeUsage, SwitchState } from './agent-events';
+import type { AgyPermissions } from './agy-permissions.ts';
+import type { AgentEvent, AgentProvider, NativeAnswer, NativeSettings, NativeSnapshot, NativeTransport, NativeUsage, SwitchState } from './agent-events';
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 // A delivery the owner passed or sent back (the review card). submission counts from 1; note is the sent-back text.
 export type DeliveryGrade = { projectId: string; terminalId: string; outcome: 'passed' | 'sent-back'; submission: number; note?: string };
@@ -16,7 +17,7 @@ export type Project = {
   lastCompletedAt: number | null;
   sessionId: string | null; status: 'stopped' | 'starting' | 'shell' | 'codex' | 'exited';
   action: AgentActionBrief | null;
-  cliActive: boolean; agent: 'codex' | 'claude' | null; codexActivity: 'unknown' | 'working' | 'complete' | 'interrupted'; shellReady: boolean; codexAvailable: boolean | null; error: string | null;
+  cliActive: boolean; agent: AgentProvider | null; codexActivity: 'unknown' | 'working' | 'complete' | 'interrupted'; shellReady: boolean; codexAvailable: boolean | null; error: string | null;
   terminals: ProjectTerminal[];
 };
 // A document, page or video an agent wrote, as its card in the reading view shows it.
@@ -35,7 +36,11 @@ export type AgentTokens = { input: number; cached: number; output: number };
 export type TokenRate = { outputTokens: number; activeMs: number; samples: number; updatedAt: number; partial: boolean };
 // done: a dispatched worker that ended cleanly — shown as 已完成 and removed 3 s later; a failure stays until the lead's next round.
 // modelUnconfirmed: the worker has not reported its model yet; model is then the one the lead asked for, or null.
-export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null; preparing: number; starting?: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'starting' | 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
+export type AgentCall = {
+  agent: string; provider: string | null; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null;
+  preparing: number; starting?: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null;
+  items: { id: string; state: 'starting' | 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string;
+    startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
   notice?: 'unconfirmed'; resumed?: boolean; controlFailure?: string;
   seat?: SeatId; specialty?: string; seatSource?: 'declared' | 'inferred'; seatName?: string; offTeam?: true; worktree?: string;
   expected: { model: string; effort: string; fast: boolean } | null;
@@ -67,7 +72,7 @@ export type ProjectTerminal = {
   readingHistory?: ReadingHistoryScope | null;
   mainTurn?: MainAgentTurn | null;
   agentStarting?: boolean;
-  nativeMode?: 'codex-native' | 'claude-sdk' | 'codex-app-server' | null;
+  nativeMode?: 'codex-native' | NativeTransport | null;
   nativeRuntimeSessionId?: string | null;
   nativePathReason?: string | null;
   agentStartedAt?: number | null;
@@ -128,6 +133,7 @@ export type Settings = {
   updateChannel: 'stable' | 'beta';
   betaAgreement: string | null;
   codexPermissions: CodexPermissions;
+  agyPermissions: AgyPermissions;
   claudeBackgroundTasks: boolean;
 };
 export type RecentProject = { path: string; name: string; lastOpenedAt: number; exists: boolean };
@@ -171,7 +177,7 @@ export type AgentAction = AgentActionBrief & { id: string; at: number; descripti
 // receivedAt: a queued message's confirmed handoff, separate from the time it was sent.
 // clientMessageId: a child feed's main-confirmed owner control identity, never a text match.
 // Main-owned channel provenance for child messages. Missing planner identity stays unknown; text never identifies a sender.
-export type ConversationSender = { kind: 'owner' } | { kind: 'planner'; agent: 'claude' | 'codex' | null; model: string | null };
+export type ConversationSender = { kind: 'owner' } | { kind: 'planner'; agent: AgentProvider | null; model: string | null };
 // A picture Codex generated: where it was saved, its prompt, and its copy in the project (copied, a path from the project's
 // folder) or a line on that copy (copyNote: being made, or why it could not be). deferred: not read back yet; the reader
 // asks for it (an older picture of a resumed SSH conversation).
@@ -183,7 +189,7 @@ export type ConversationEntry = {
   generated?: GeneratedPicture; tool?: AgentActionBrief & { failed: boolean };
 };
 export type ConversationPacket = { id: string; sessionId?: string; historyKey?: string; list?: ConversationEntry[]; changes?: ConversationEntry[] };
-export type ReadingHistoryScope = { key: string; agent: 'codex' | 'claude'; threadId: string };
+export type ReadingHistoryScope = { key: string; agent: AgentProvider; threadId: string };
 export type ConversationPage = { key: string; entries: ConversationEntry[]; beforeCursor: string | null };
 // Full snapshots, newest 400 entries; omitted on the first entry means earlier steps were dropped.
 export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null;
@@ -228,7 +234,7 @@ export type TeamRole = SeatRole & {
 };
 export type RoleConfig = Partial<Seat> & { enabled?: boolean; fresh?: boolean; from?: SeatId; name?: string; duty?: string; outputs?: string };
 export type SeatModel = {
-  model: string; label: string; family: 'claude' | 'codex'; efforts: string[]; defaultEffort?: string;
+  model: string; label: string; family: AgentProvider; efforts: string[]; defaultEffort?: string;
   fast: boolean; fastReason?: 'unsupported' | 'unknown' | 'agent-tool'; rank: 1 | 2 | 3; available: boolean; reason?: string;
   source: 'alias' | 'live' | 'cached' | 'custom'; listed?: boolean; isDefault?: boolean;
 };
@@ -272,8 +278,8 @@ export type SeatsInfo = {
   seats: SeatId[];
   roles: TeamRole[];
   lead: SeatId;
-  leadAgent: 'claude' | 'codex' | null;
-  leads: { claude: Seat | null; codex: Seat | null };
+  leadAgent: AgentProvider | null;
+  leads: Partial<Record<AgentProvider, Seat | null>>;
   authors: SeatId[];
   fresh: SeatId[];
   defaults: SeatMap;
@@ -284,13 +290,13 @@ export type SeatsInfo = {
   currentRoles: TeamRole[] | null;
   routing: RoutingSource;
   catalog: SeatModel[];
-  installed: { claude: boolean; codex: boolean };
+  installed: Record<AgentProvider, boolean>;
   issues: SeatIssue[];
   // When each family's model list was last read (null: never).
-  catalogAt: { claude: number | null; codex: number | null };
+  catalogAt: Record<AgentProvider, number | null>;
+  catalogErrors?: Partial<Record<AgentProvider, 'auth_required' | 'cli_required' | 'cli_outdated' | 'no_models' | 'probe_failed'>>;
   // Seats whose default moved to a newer model, reported once.
   defaultsMoved?: { seat: string; from: string; to: string }[];
-  migrated?: string;
 };
 export type SeatsSaveError = {
   ok: false;
@@ -319,7 +325,8 @@ export type CodexVia = 'path' | 'npm-shim' | 'npm-vendor' | 'npm-hoisted' | 'npm
 // searched ('running'), were, all of them ('done'), or only in part ('partial'). Before the first search only
 // `installed` is known.
 export type CodexAgentState = { installed: boolean; version?: string | null; via?: CodexVia; fileShown?: string; reason?: Reason; scan?: 'running' | 'done' | 'partial' };
-export type AgentsState = { codex: CodexAgentState; claude: ClaudeAgentState; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
+export type AgyAgentState = { installed: boolean; version?: string | null; fileShown?: string; reason?: 'not_found' | 'unreadable' | 'too_old' | null };
+export type AgentsState = { codex: CodexAgentState; claude: ClaudeAgentState; agy: AgyAgentState; npm: boolean; installing: AgentProvider | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }
   | { kind: 'image' | 'video'; mimeType: string; url: string; previewId: string }
@@ -368,13 +375,21 @@ export type NativeRunOptionsPatch = {
   permissions?: Settings['codexPermissions'];
 };
 export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean; permissions?: Settings['codexPermissions'] };
+export type NativeHistorySession = { id: string; title: string | null; at: number | null };
+export type NativeModelOptionsPatch = { model?: string; effort?: string };
+export type NativeModelOptions = { model: string | null; effort: string | null; models: NativeModelChoice[]; efforts: NativeModelChoice[] };
+type NativeModelChoice = { value: string; label: string };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
-type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {
+type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<AgentProvider, NativeUsage['agents'][AgentProvider] & {
   connection: BillingConnection; next: { path: 'api' | 'native' | 'terminal' | null; reason: string | null };
 }> };
 type Bridge = {
   nativeSession: {
-    start(terminalId: string, options: { agent: 'claude' | 'codex'; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;
+    start(terminalId: string, options: { agent: AgentProvider; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;
+    resume(terminalId: string, options: { agent: AgentProvider; sessionId?: string }): Promise<Result<{ runtimeSessionId: string }>>;
+    history(terminalId: string, agent: AgentProvider): Promise<Result<NativeHistorySession[]>>;
+    remoteModels(terminalId: string, agent: AgentProvider): Promise<Result<Pick<SeatModel, 'model' | 'label' | 'efforts' | 'defaultEffort' | 'fast' | 'isDefault'>[]>>;
+    modelOptions(terminalId: string, runtimeSessionId: string, patch?: NativeModelOptionsPatch): Promise<Result<NativeModelOptions>>;
     send(terminalId: string, runtimeSessionId: string, clientMessageId: string, text: string, images?: string[]): Promise<Result<unknown>>;
     interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
     stop(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
@@ -396,7 +411,7 @@ type Bridge = {
   };
   getState(): Promise<Result<Workspace>>;
   getAgents(): Promise<Result<AgentsState>>;
-  installAgent(agent: 'codex' | 'claude'): Promise<Result<AgentsState>>;
+  installAgent(agent: AgentProvider): Promise<Result<AgentsState>>;
   openNode(): Promise<Result<void>>;
   onAgents(callback: (state: AgentsState) => void): () => void;
   getUpdateState(): Promise<Result<AppUpdateState>>;
@@ -486,8 +501,8 @@ type Bridge = {
   saveImage(terminalId: string, bytes: ArrayBuffer, type: string): Promise<Result<string>>;
   clipboardImage(terminalId: string): Promise<Result<string | null>>;
   fileCard(id: string, file: string): Promise<Result<FileCard>>;
-  agentHistory(id: string): Promise<Result<{ claude: { id: string; at: number } | null; codex: { id: string; at: number } | null }>>;
-  agentLaunch(id: string, agent: 'claude' | 'codex', mode: 'new' | 'continue'): Promise<Result<boolean>>;
+  agentHistory(id: string): Promise<Result<Partial<Record<AgentProvider, { id: string; at: number } | null>>>>;
+  agentLaunch(id: string, agent: AgentProvider, mode: 'new' | 'continue'): Promise<Result<boolean>>;
   onRouting(callback: () => void): () => void;
   // A null terminal id reads the configured seats without a running session.
   routingSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;

@@ -15,6 +15,46 @@ const entry = (type, meeting, extra = {}) => ({ type, meeting, time: now - 500, 
 const summary = (extra = {}) => summarize({ now, query, projects, prices, ...extra });
 const model = (result, name = sol) => result.models.find(row => row.model === name);
 
+test('agy runs and grades use their own models, weights and quota', () => {
+  const gemini = 'gemini-3.8-flash', collision = 'agy:claude-sonnet-5-5';
+  const records = { runs: [run('codex'), run('claude', { agent: 'claude', model: sonnet }),
+    run('agy', { agent: 'agy', model: gemini }), run('agy-collision', { agent: 'agy', model: sonnet })],
+  grades: [{ at: now - 1, agent: 'agy', model: collision, projectId: 'a', submission: 2, outcome: 'sent-back' }],
+  quota: ['codex', 'claude', 'agy'].map((provider, i) => ({ provider, at: now - 3 + i, windows: [{ minutes: 10080, percent: 20 * i }] })) };
+  const result = summary({ records, decisions: [{ id: 'weight', state: 'adopted', at: now - 1, weight: { model: collision, kind: 'core', from: 1, to: 0.8 } }] });
+  assert.deepEqual(result.models.map(row => [row.model, row.agent, row.runs, row.quotaPercent, row.weight]), [
+    [collision, 'agy', 1, 40, 0.8], [sonnet, 'claude', 1, 20, 1], [gemini, 'agy', 1, 40, 1], [sol, 'codex', 1, 0, 1],
+  ]);
+  assert.equal(model(result, collision).sentBack, 1);
+  assert.equal(model(result, collision).costUsd, null);
+  assert.equal(result.kpis.quota.provider, 'agy');
+});
+
+test('unconfirmed agy runs do not inherit the legacy unconfirmed row or its quota', () => {
+  const result = summary({ records: { runs: [run('legacy', { model: null }), run('agy', { agent: 'agy', model: 'unreported' })],
+    quota: [{ provider: 'codex', at: now - 1, windows: [{ minutes: 300, percent: 20 }] }] } });
+  assert.deepEqual(result.models.map(row => [row.model, row.agent, row.runs, row.quotaPercent]), [
+    ['agy:unreported', 'agy', 1, null], ['unreported', 'codex', 1, 20],
+  ]);
+});
+
+test('dashboard assigns each agy model its own longest quota window', () => {
+  const gemini = 'gemini-3.8-flash', thirdParty = 'agy:claude-sonnet-5-5';
+  const result = summary({ records: {
+    runs: [run('agy-gemini', { agent: 'agy', model: gemini }), run('agy-third-party', { agent: 'agy', model: thirdParty }), run('codex')],
+    quota: [{ provider: 'agy', at: now - 2, windows: [
+      { id: 'gemini', minutes: 300, percent: 90 }, { id: 'gemini', minutes: 10080, percent: 25 }, { id: '3p', minutes: 10080, percent: 50 },
+    ] }, { provider: 'codex', at: now - 1, windows: [{ minutes: 300, percent: 5 }] }],
+  } });
+  assert.equal(model(result, gemini).quotaPercent, 25);
+  assert.equal(model(result, thirdParty).quotaPercent, 50);
+  assert.equal(model(result).quotaPercent, 5);
+  assert.deepEqual(result.kpis.quota, { provider: 'codex', minutes: 300, percent: 5 });
+  assert.deepEqual(result.kpis.quotaGroups, [
+    { provider: 'agy', id: 'gemini', minutes: 10080, percent: 25 }, { provider: 'agy', id: '3p', minutes: 10080, percent: 50 },
+  ]);
+});
+
 test('SDK billing provenance deduplicates root charges and excludes included subagent cost', () => {
   const root = run('root', { title: 'root', agent: 'claude', model: sonnet, source: 'native', billingPath: 'api', reportedCostUsd: 2, usageRecordId: 'session:result' });
   const child = run('child', { title: 'child', agent: 'claude', model: sonnet, source: 'subagent', reportedCostUsd: 1, costIncludedIn: 'session:result' });

@@ -3,6 +3,7 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new"; highlight?: true }[] = [
+  { title: "agy 支持", text: "Google Antigravity CLI 可以用作原生主会话和派发角色。模型可在「模型分工」里选择，使用前请自行安装并登录 agy。" },
   { title: "技能归项目", text: "Agentrix 不再替你管理技能。技能放在每个项目自己的 skills 文件夹里，助手像读写其他项目文件一样读写它。", highlight: true },
   { title: "设置简化", text: "设置移除了技能页，技能开关、触发方式、版本记录和待确认修改也一并取消。" },
   { title: "内置规则", text: "Agentrix 启动会话时不再自动提供代码规范、界面规范和日常话回复这三份规则。" },

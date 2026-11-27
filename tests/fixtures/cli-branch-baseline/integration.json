@@ -1,6 +1,5 @@
 {
-  "electron/features/agents/dispatch-events.cjs": 4,
+  "electron/features/agents/dispatch-events.cjs": 1,
   "electron/features/agents/dispatch-intake.cjs": 1,
-  "electron/features/agents/dispatch-registration.cjs": 2,
   "integration/agent-event.cjs": 3
 }

@@ -202,13 +202,14 @@ test('grouped call rows lead with a labelled status icon and show only actionabl
     toggleFinished('t1');
   }
 });
-// The pane's run-mode and allowance block, rendered from a main-process usage answer: both agents' sections (the terminal's agent is the current one).
-// options.claude / options.codex: each agent's connection kind; options.limits: each agent's main-process limits; options.usage overrides parts of the answer.
+// The pane's run-mode and allowance block, rendered from a main-process usage answer.
+// options[agent] is its connection kind; options.limits holds each agent's main-process limits; options.usage overrides parts of the answer.
 function usageMarkup(language = 'zh', terminal = {}, options = {}) {
   const { AgentSections } = loadAgentsFile('ApiUsage.tsx', language);
   const connection = kind => ({ kind, source: null, observedAt: null });
   const state = agent => ({ path: null, reason: null, next: { path: null, reason: null }, limits: options.limits?.[agent] ?? null, connection: connection(options[agent] ?? 'subscription') });
-  const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, agents: { claude: state('claude'), codex: state('codex') }, ...options.usage };
+  const agents = { claude: state('claude'), codex: state('codex'), ...(options.agy && { agy: state('agy') }) };
+  const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, agents, ...options.usage };
   return renderToStaticMarkup(React.createElement(AgentSections, { usage, terminal: {
     id: 'placeholder', agent: 'claude', cliActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false }, agentUsage: { provider: 'Anthropic', limits: [] }, ...terminal } }));
 }
@@ -228,6 +229,7 @@ test('with routing off the lead panel is the main model and names no routing mod
   assert.match(on, /<h4>总指挥<\/h4>/);
   assert.match(on, /Fable 5\.2[\s\S]*正在切换到 Opus/);
   assert.doesNotMatch(markup({ conductor: true, leads: leads('fable') }), /正在切换到/, 'an alias names whichever model of that family runs');
+  assert.doesNotMatch(markup({ conductor: true, leads: { codex: { model: 'gpt-6.2-sol', effort: 'high' } } }), /正在切换到/);
   assert.match(markup(null), /<h4>总指挥<\/h4>/, 'the heading is unchanged until the routing is known');
 });
 
@@ -1017,6 +1019,51 @@ test('the session’s own windows win when the screen read them after main did; 
   const api = codex(screen(at), main(at - 60000), 'api');
   assert.doesNotMatch(api, /5 小时额度|20%|70%/, 'an API connection shows no subscription windows, whichever is newer');
   assert.doesNotMatch(agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: screen(at) }, { claude: 'subscription', limits: { claude: main(at - 60000) } }), 'Claude'), /20%/, 'the other agent never borrows the session’s windows');
+});
+
+test('agy shows separate five-hour and weekly quota windows for Gemini and third-party models', () => {
+  const window = (windowDurationMins, usedPercent) => ({ windowDurationMins, usedPercent, resetsAtMs: null });
+  const agy = { state: 'ready', limitsById: {
+    '3p': { primary: window(300, 51), secondary: window(10080, 77) },
+    gemini: { primary: window(300, 0), secondary: window(10080, 26) },
+  } };
+  for (const [language, gemini, thirdParty] of [['zh', 'Gemini 模型', '第三方模型'], ['en', 'Gemini models', 'Third-party models']]) {
+    const html = agentSection(usageMarkup(language, {}, { agy: 'subscription', limits: { agy } }), 'Antigravity');
+    const headings = [...html.matchAll(/<h5 class="api-quota-group-title">([^<]+)<\/h5>/g)];
+    assert.deepEqual(headings.map(([, label]) => label), [gemini, thirdParty]);
+    const values = group => [...group.matchAll(/aria-valuenow="(\d+)"/g)].map(([, percent]) => Number(percent));
+    const groups = [html.slice(headings[0].index, headings[1].index), html.slice(headings[1].index)];
+    assert.deepEqual(groups.map(values), [[0, 26], [51, 77]]);
+    const labels = language === 'zh' ? ['5 小时额度', '每周额度'] : ['5-hour limit', 'Weekly limit'];
+    for (const group of groups) {
+      assert.deepEqual([...group.matchAll(/<span class="activity-metric-label">([^<]+)<\/span>/g)].map(([, label]) => label), labels);
+    }
+  }
+});
+
+test('agy reports unreadable allowance without a zero or a window from any terminal', () => {
+  const agy = { state: 'unavailable', limitsById: {} };
+  const agentUsage = { limits: [{ minutes: 300, percent: 80 }] };
+  for (const [language, message] of [['zh', '暂时读不到 agy 的额度（未登录或版本过低时会这样）。'],
+    ['en', 'agy quota is unavailable right now (this happens when agy is signed out or outdated).']]) {
+    for (const agent of ['claude', 'agy']) {
+      const html = usageMarkup(language, { agent, agentUsage }, { agy: 'unknown', limits: { agy } });
+      const section = agentSection(html, 'Antigravity');
+      assert.ok(section.includes(message));
+      assert.doesNotMatch(section, /role="meter"|\d+%|api-quota-group/);
+      if (agent === 'claude') assert.match(agentSection(html, 'Claude'), /aria-valuenow="80"/);
+    }
+  }
+});
+
+test('agy explains unavailable SSH quota using the reason returned by main', () => {
+  const reason = '暂时无法读取远端 agy 的额度。';
+  for (const [language, message] of [['zh', reason], ['en', 'Unable to read agy quota from the remote host right now.']]) {
+    const limits = { agy: { state: 'unavailable', reason, limitsById: {} } };
+    const section = agentSection(usageMarkup(language, {}, { agy: 'unknown', limits }), 'Antigravity');
+    assert.ok(section.includes(message));
+    assert.doesNotMatch(section, /role="meter"|\d+%/);
+  }
 });
 
 test('the main card tells a round that ended unknown quietly: no check, not complete, not interrupted; a complete one keeps its check', () => {

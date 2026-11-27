@@ -94,9 +94,9 @@ test('the shell can look up shims with an empty bootstrap but reports a missing 
 test('Claude role arguments use the carried seat reader without loading dispatch and survive a reader failure', async t => {
   const folder = temporary(t), shimFile = path.join(folder, 'shims', 'intercept.cjs');
   const helper = path.join(folder, 'dispatch.cjs'), bootstrap = path.join(folder, 'bootstrap.json');
-  const seatFile = path.join(folder, 'electron', 'features', 'agents', 'call-seat.cjs');
+  const runtime = path.join(folder, 'electron');
   fs.mkdirSync(path.dirname(shimFile), { recursive: true });
-  fs.mkdirSync(path.dirname(seatFile), { recursive: true });
+  fs.mkdirSync(runtime);
   fs.copyFileSync(path.join(shims, 'intercept.cjs'), shimFile);
   fs.writeFileSync(path.join(path.dirname(shimFile), 'launchers.cjs'), shim().runtimeFiles()['shims/launchers.cjs']);
   fs.writeFileSync(helper, 'throw new Error("dispatch must not load");\n');
@@ -118,10 +118,11 @@ test('Claude role arguments use the carried seat reader without loading dispatch
   }
   const canonicalHelper = fs.realpathSync.native(helper);
   assert.deepEqual(await launchWords(), [canonicalHelper, 'mcp', 'claude']);
-  for (const name of ['agents/call-seat.cjs', 'agents/dispatch-events.cjs', 'dashboard/records-routing.cjs']) {
-    const relative = path.join('electron/features', name);
-    fs.mkdirSync(path.dirname(path.join(folder, relative)), { recursive: true });
-    fs.copyFileSync(path.join(root, relative), path.join(folder, relative));
+  const { runtimeFiles } = require('../integration/dispatch.cjs');
+  for (const [name, source] of Object.entries(runtimeFiles())) {
+    const file = path.join(runtime, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, source);
   }
   assert.deepEqual(await launchWords(), [canonicalHelper, 'mcp', 'claude', 'sonnet', 'low']);
 });

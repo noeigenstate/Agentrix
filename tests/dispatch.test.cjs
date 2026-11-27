@@ -25,6 +25,21 @@ const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
 const session = '22222222-2222-4222-8222-222222222222';
 const at = seconds => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
 
+test('Antigravity routing clears the prior turn and never borrows the configured model', () => {
+  const { workerOf } = require('../electron/features/cli-adapters/workers.cjs');
+  const effective = { model: 'gemini-3.8-flash', effort: 'low', fast: false };
+  const output = new WorkerOutput('agy'), worker = workerOf('agy');
+  output.nativeRouting({ effective, observed: { ...effective, fast: null } });
+  assert.equal(worker.routingVerdict(output, effective), 'ok');
+  output.nativeRouting({ effective, observed: { model: null, effort: null, fast: null } });
+  assert.deepEqual(output.routing(), { model: 'unreported', effort: null, fast: null });
+  assert.equal(worker.routingVerdict(output, effective), 'unverified');
+  const codex = new WorkerOutput('codex');
+  const legacy = { ...effective, model: 'gpt-6.2-sol' };
+  codex.nativeRouting({ effective: legacy, observed: { model: null } });
+  assert.deepEqual(codex.routing(), legacy);
+});
+
 test('custom and enabled specialty seats supply dispatch defaults while the original spelling is reported', () => {
   const base = ['codex', '--role', 'exec', '--title', 'Fixture', '--cwd', '.', '--brief', 'brief.md', '--out', 'answer.md', '--seat'];
   const developer = { model: 'gpt-6.1-sol', effort: 'high', fast: false };

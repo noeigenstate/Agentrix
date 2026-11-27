@@ -7,7 +7,8 @@ host; only validated usage windows reach the activity pane.
 - `electron/features/ssh/**`
 
 ## Interface
-- `createRemoteCodexProcess` (`electron/features/ssh/codex-process.cjs`) — a process-shaped byte stream over the project's own SSH channel; close never kills a local PID; `opened` settles once the host has looked Codex up and started it, and the runtime's handshake deadline starts after it
+- `createRemoteCodexProcess` (`electron/features/ssh/codex-process.cjs`) — a process-shaped byte stream over the project's SSH channel; `opened` settles after remote startup
+- `createRemoteAgyProcess` (`electron/features/ssh/codex-process.cjs`) — the same byte stream with the Antigravity startup and stop requests; close never kills a local PID
 - `createSshRuntime` (`electron/features/ssh/runtime.cjs`) — prepares and removes the private Windows askpass helper
 - `registerSshIpc` (`electron/features/ssh/ipc.cjs`) — registers SSH connection and authentication IPC with injected dependencies
 - `refreshRemoteRouting` (`electron/features/ssh/routing.cjs`) — queues the latest save while connecting, sets a three-second request deadline once ready and publishes the acknowledged routing for the current binding
@@ -20,7 +21,7 @@ host; only validated usage windows reach the activity pane.
 - A connecting channel never holds a routing save. Its newest queued settings apply when ready, and a ready channel has a three-second request deadline — test: `tests/remote-worker.test.cjs` › "routing saves queue only the latest connecting-host update and bound ready-host requests"
 - The conductor launch note names one read-only guide that stays available on resume after the terminal closes — test: `tests/remote_claude_test.py` › "test_resume_retains_old_guide_path_after_the_terminal_closes_and_the_guide_changes"
 - Guide cleanup expires unused copies after 30 days and protects guides leased by active channels — test: `tests/remote_skill_leases_test.py` › "test_another_channels_live_lease_keeps_an_old_guide_during_pruning"
-- SSH Codex starts and resumes through its remote app-server byte channel; local executables and account readers are never used — test: `tests/ssh-codex.test.cjs` › "SSH Codex starts, sends, resumes and reads accounts solely through its remote byte channel"
+- Native SSH sessions start and resume using the project's remote byte channel. The owner uses remote account readings, and Antigravity also reads its approvals and model choices there — test: `tests/ssh-codex.test.cjs` › "SSH Codex starts, sends, resumes and reads accounts solely through its remote byte channel"; test: `tests/ssh-agy.test.cjs` › "SSH agy uses remote ACP for owner turns, approval, interruption, history and models"
 - Account replies contain only validated numeric windows and fixed status words; credentials, diagnostic strings and remote response bodies never reach the pane — the remote host owns its account — test: `tests/remote-claude-account.test.cjs` › "remote account boundary copies only validated numeric limits and fixed status words"
 - A closed or replaced terminal cannot publish a late account result, and polling uses read-only requests with the existing rate limit — background account reads must not affect a different session — test: `tests/remote-claude-account.test.cjs` › "remote polling is read-only, rate limited, aborted on disposal and rejects late or rebound results"
 - SSH questions retain the CLI's captured shape through UTF-8 packet boundaries — transport must not hide a live question or invent a form interaction — test: `tests/remote-ssh-cards.test.cjs` › "SSH carries Claude quota numbers and real-shaped question, Review, permission and waiting screens"

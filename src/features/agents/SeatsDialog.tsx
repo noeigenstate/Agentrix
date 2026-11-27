@@ -8,6 +8,9 @@ import { aliasTarget, modelLabel } from '../../shared/routing-command.ts';
 import { routingNotice, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
 import { unverifiedScreenSwitch } from '../cli-screens/index.ts';
 import { useScreen } from '../terminal/terminal-screen.ts';
+import { nativeBridge } from '../native-session/native-bridge.ts';
+import type { AgentProvider } from '../../shared/agent-events';
+import { agentShortLabel } from '../../shared/agent-label.ts';
 import type { RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
 import {
@@ -16,6 +19,10 @@ import {
   sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, agentOfModel, allowsUltracode, withSlot,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
 } from './routing-seats';
+import { adapters, adapterOf, adapterOfModel } from '../../../electron/features/cli-adapters/registry.mjs';
+import { canLead, support } from '../../../electron/features/cli-adapters/capabilities.mjs';
+import { rankByName } from '../../../electron/features/routing/seat-rules.mjs';
+import { roleBrandIcons } from './AgentBrandIcon.ts';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/routing/role-rules.mjs';
 import { copyRole, roleName, RoleEditor, sameRoleConfig } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
@@ -43,7 +50,13 @@ const REFUSALS = {
 };
 // Why a model has no fast switch, and what a model that has one costs.
 const FAST_REASONS = { unsupported: '这个模型不支持快速', unknown: '还不确定这个模型是否支持快速', 'agent-tool': '通过 Agent 工具运行，没有快速模式' };
-const FAST_BILLING = '快速模式可能按不同价格计费（例如 Opus 快速）';
+function catalogError(code: NonNullable<SeatsInfo['catalogErrors']>[AgentProvider], agent: string) {
+  if (code === 'auth_required') return t('请登录 {agent} 以获取模型。', { agent });
+  if (code === 'cli_outdated') return t('请升级 {agent} 以获取模型。', { agent });
+  if (code === 'cli_required') return t('找不到 {agent}，请检查安装。', { agent });
+  if (code === 'no_models') return t('{agent} 未返回可用模型。', { agent });
+  return t('无法读取 {agent} 的模型。', { agent });
+}
 // What main did with a saved seat it could not run as saved.
 const ISSUES: Record<SeatIssue['code'], string> = {
   'model-unlisted': '已调整：这个模型不在当前列表里，实际使用 {substitute}',
@@ -64,9 +77,9 @@ const inside = (node: unknown, target: unknown) => !!node && typeof (node as Nod
 function modelMenuItems(catalog: SeatModel[], selected: string | undefined, pick: (model: string) => void, unavailable?: string) {
   const current = selected && (aliasTarget(catalog, selected) ?? selected);
   return catalog.filter(row => !aliasTarget(catalog, row.model)).map(row => <button key={row.model} type="button" role="menuitemradio" className="seats-menu-item" aria-checked={row.model === current}
-    data-assign={row.model} title={unavailable ?? modelLabel(catalog, row.model)} disabled={!!unavailable || !row.available} onClick={() => pick(row.model)}>
+    data-assign={row.model} title={unavailable ?? modelLabel(catalog, row.model, true)} disabled={!!unavailable || !row.available} onClick={() => pick(row.model)}>
     <i className="seats-mk" data-family={row.family} />
-    <span className="seats-menu-model">{modelLabel(catalog, row.model)}</span>
+    <span className="seats-menu-model">{modelLabel(catalog, row.model, true)}</span>
     <span className="seats-menu-details">
       {!row.available && <small>{row.reason}</small>}
       {row.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}
@@ -101,24 +114,34 @@ function MenuHeader({ title, close }: { title: string; close: () => void }) {
   </div>;
 }
 
-function migrationLine(line: string) {
-  const parts = /^(.*?)总指挥沿用原领队 (Claude|Codex) 槽 (\S+?)(?:；原 Codex 槽 (\S+) 未保留)?$/.exec(line);
-  if (!parts) return line;
-  const [, prefix, family, model, dropped] = parts;
-  return prefix + (dropped ? t('总指挥沿用原领队 {family} 槽 {model}；原 Codex 槽 {dropped} 未保留', { family, model, dropped })
-    : t('总指挥沿用原领队 {family} 槽 {model}', { family, model }));
-}
-
 type SeatsDialogProps = {
-  info: SeatsInfo; projectId?: string; terminalId?: string; migration?: string;
-  onMigration: (text: string) => void; onDismissMigration: () => void; onClose: () => void;
+  info: SeatsInfo; projectId?: string; terminalId?: string;
+  onClose: () => void;
   onError: (message: string) => void;
 };
 
-function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDialogProps) {
+const remoteCatalogAgent = adapters().find(({ manifest }) => manifest.models.remoteCatalog)?.manifest.id;
+
+async function readRemoteCatalog(projectId?: string, terminalId?: string): Promise<SeatModel[]> {
+  const bridge = nativeBridge();
+  if (!bridge?.remoteModels || !remoteCatalogAgent) return [];
+  if (!terminalId && projectId) {
+    const state = await window.agentrix.getState();
+    if (state.ok) terminalId = state.value.projects.find(project => project.id === projectId)?.terminals[0]?.id;
+  }
+  if (!terminalId) return [];
+  const result = await bridge.remoteModels(terminalId, remoteCatalogAgent);
+  if (!result.ok) throw new Error(result.error);
+  return result.value.map(row => ({ ...row, family: remoteCatalogAgent, rank: rankByName(row.model),
+    available: true, source: 'live' }));
+}
+
+function useCatalog({ info: given, projectId, terminalId }: SeatsDialogProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [refreshed, setRefreshed] = useState<SeatsInfo | null>(null);
   const [refreshing, setRefreshing] = useState<'dialog' | 'manual' | null>(null);
+  const [remoteModels, setRemoteModels] = useState<SeatModel[]>([]), [remoteError, setRemoteError] = useState<string | null>(null);
+  const remote = given.routing?.remote === true;
   const reading = useRef<'dialog' | 'manual' | null>(null), queued = useRef(false), alive = useRef(true);
   const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
   const readVersion = useRef(0);
@@ -131,7 +154,6 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
     const next = await window.agentrix.routingSeats(projectId ?? null, terminalId).catch(() => null);
     rememberMoved(next);
     if (!next || !alive.current || version !== readVersion.current) return;
-    if (next.migrated) onMigration(next.migrated);
     setRefreshed(next);
     return next;
   };
@@ -144,7 +166,13 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
   useEffect(() => { setRefreshed(null); rememberMoved(given); }, [given]);
 
   const info = refreshed ?? given;
-  const catalog = withInstalled(info.catalog, info.installed, family => t('{agent} 未安装', { agent: family === 'codex' ? 'Codex' : 'Claude' }));
+  const localRows = remote ? info.catalog.filter(row => row.family !== remoteCatalogAgent) : info.catalog;
+  const catalog = withInstalled(localRows, info.installed, family => t('{agent} 未安装', { agent: agentShortLabel(family) })).map(row => {
+    const manifest = adapterOfModel(row.model).manifest, error = info.catalogErrors?.[row.family];
+    return manifest.models.catalogBackground && info.installed[row.family] && error
+      ? { ...row, available: false, reason: catalogError(error, manifest.label) } : row;
+  });
+  if (remote) catalog.push(...remoteModels);
   const roles = info.roles ?? [];
   const label = (model: string) => modelLabel(catalog, model);
 
@@ -155,8 +183,12 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
     setRefreshing(reading.current);
     const version = ++readVersion.current;
     try {
-      const next = await window.agentrix.refreshRouting(projectId ?? null, terminalId ?? null, opening ? 'dialog' : 'manual');
-      if (next?.migrated) onMigration(next.migrated);
+      const remoteRead = remote ? readRemoteCatalog(projectId, terminalId).then(rows => {
+        if (alive.current) { setRemoteModels(rows); setRemoteError(null); }
+      }, error => {
+        if (alive.current) setRemoteError(error.message);
+      }) : null;
+      const [next] = await Promise.all([window.agentrix.refreshRouting(projectId ?? null, terminalId ?? null, opening ? 'dialog' : 'manual'), remoteRead]);
       // Main reports moves once. Keep the receipt even if another read wins the data refresh.
       rememberMoved(next);
       if (!alive.current || version !== readVersion.current) return;
@@ -172,7 +204,7 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
       if (alive.current) { setRefreshing(null); if (queued.current) { queued.current = false; void refresh(); } }
     }
   };
-  return { info, catalog, roles, label, notice, setNotice, refreshing, refresh, moved, alive, loadInfo };
+  return { info, catalog, roles, label, notice, setNotice, refreshing, refresh, moved, alive, loadInfo, remote, remoteError };
 }
 
 type ScopeDraft = { config: RoutingConfig; base: string | null };
@@ -338,12 +370,19 @@ function useMenu({ catalog }: ReturnType<typeof useCatalog>, { setNowOpen }: Ret
 
 type SwitchReason = (slot: SlotId, control: Parameters<typeof unverifiedScreenSwitch>[1]) => string | undefined;
 
+function ProviderMark({ family }: { family: AgentProvider }) {
+  const Logo = roleBrandIcons[family];
+  return Logo ? <Logo size={12} /> : <i className="seats-mk" data-family={family} aria-hidden="true" />;
+}
+
 function choiceActions(
   source: ReturnType<typeof useCatalog> & ReturnType<typeof routingNames>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>, switchReason: SwitchReason,
 ) {
   const { label, seatName, catalog, setNotice } = source;
   const { working, setDraft, setDiscarding, saving } = draft;
   const { custom, setCustom, closeMenu } = popup;
+  const modelReason = (slot: SlotId, model?: string) => model && draft.enabled.some(role => role.id === slot && role.kind === 'lead')
+    && !canLead(adapterOfModel(model).manifest) ? t('此 CLI 当前只能用于被派出的角色。') : switchReason(slot, 'liveModel');
   const refusalText = (result: Extract<Edit, { ok: false }>, model: string) => {
     if (result.reason === 'same') return null;
     if (result.reason === 'unavailable') return t('{model}（{reason}）不能放入座位', { model: label(model), reason: modelRow(catalog, model)?.reason ?? t(REFUSALS.unavailable) });
@@ -356,12 +395,12 @@ function choiceActions(
     if (text) setNotice({ kind: 'error', text });
   };
   const assign = (slot: SlotId, model: string) => {
-    const reason = switchReason(slot, 'liveModel');
+    const reason = modelReason(slot, model);
     if (reason) { setNotice({ kind: 'error', text: reason }); return; }
     apply(assignModel(working, slot, model, catalog), t('草稿 · {seat} 换成 {model}', { seat: seatName(slot), model: label(model) }), model);
   };
   const swap = (from: SlotId, slot: SlotId) => {
-    const reason = switchReason(from, 'liveModel') ?? switchReason(slot, 'liveModel');
+    const reason = modelReason(from, getSlot(working, slot)?.model) ?? modelReason(slot, getSlot(working, from)?.model);
     if (reason) { setNotice({ kind: 'error', text: reason }); return; }
     const result = swapSlots(working, from, slot, catalog);
     apply(result, t('草稿 · {first} 与 {second} 互换了模型', { first: seatName(from), second: seatName(slot) }));
@@ -370,7 +409,7 @@ function choiceActions(
   // 其他模型…: a refused id stays in the box with its reason; an accepted one is assigned like a listed model.
   const submitCustom = (slot: SlotId) => {
     const model = (custom?.text ?? '').trim();
-    const reason = switchReason(slot, 'liveModel');
+    const reason = modelReason(slot, model);
     if (reason) { setCustom({ text: model, error: reason }); return; }
     const result = assignCustom(working, slot, model, catalog);
     if (!result.ok && result.reason !== 'same') { setCustom({ text: model, error: refusalText(result, model) ?? '' }); return; }
@@ -735,12 +774,12 @@ function TeamChart({ state }: DialogPart) {
 }
 
 function ModelPalette({ state }: DialogPart) {
-  const { catalog } = state.source, { paletteBox, paletteButton, paletteOpen, setPaletteOpen } = state.panels;
+  const { catalog, info } = state.source, { paletteBox, paletteButton, paletteOpen, setPaletteOpen } = state.panels;
   const { startDrag, ghost } = state.drag;
   const { query, setQuery, folds, setFolds } = state.panels;
   const searching = query.trim() !== '', groups = paletteGroups(catalog, query);
   const chip = (row: SeatModel, old = false) => {
-    const off = !row.available, name = modelLabel(catalog, row.model);
+    const off = !row.available, name = modelLabel(catalog, row.model, true);
     const hint = off ? t('{model}（{reason}）不能放入座位', { model: name, reason: row.reason ?? '' }) : t('{model} · 拖到座位上', { model: name });
     return <span key={row.model} className={`seats-chip${old ? ' is-old' : ''}${off ? ' is-off' : ''}`}
       data-chip={row.model} data-family={row.family} aria-disabled={off || undefined} title={hint}
@@ -760,11 +799,18 @@ function ModelPalette({ state }: DialogPart) {
       <input type="search" data-palette-search spellCheck={false} aria-label={t('搜索模型')} placeholder={t('搜索模型')}
         value={query} onChange={event => setQuery(event.target.value)} />
     </label>
+    {state.source.remoteError && <p className="seats-none" role="status">{state.source.remoteError}</p>}
+    {adapters().map(({ manifest: { id, label, models: { catalogBackground } } }) => {
+      if (state.source.remote && id === remoteCatalogAgent) return null;
+      const error = info.catalogErrors?.[id];
+      return catalogBackground && info.installed[id] && error
+        ? <p key={id} className="seats-none" role="status">{catalogError(error, label)}</p> : null;
+    })}
     <div className="seats-groups">{groups.map(group => {
       const key = group.family, older = group.lines.flatMap(line => line.older);
       const open = searching || !!folds[key];
       return <section key={key} className="seats-group" data-group={key}>
-        <h4><i className="seats-mk" data-family={key} />{key === 'claude' ? 'Claude' : 'Codex'} · {group.total}</h4>
+        <h4><ProviderMark family={key} />{group.shortLabel} · {group.total}</h4>
         {group.lines.filter(line => line.shown.length > 0).map(line =>
           <div key={line.name} className="seats-line" data-line={line.name || 'other'}>{line.shown.map(row => chip(row))}</div>)}
         {older.length > 0 && <div className="seats-line">
@@ -830,18 +876,19 @@ function DialogHeader({ state }: DialogPart) {
 }
 
 function DialogToolbar({ state }: DialogPart) {
-  const { info, refresh, refreshing } = state.source;
+  const { info, catalog, refresh, refreshing } = state.source;
   const { nowButton, nowOpen, setNowOpen, paletteButton, paletteOpen, setPaletteOpen } = state.panels;
   const { tab, switchTab } = state;
-  const { claude = null, codex = null } = info.catalogAt ?? {};
-  const latest = Math.max(claude ?? 0, codex ?? 0) || null;
+  const catalogs = adapters().flatMap(({ manifest: { id, shortLabel, models: { fallback } } }) =>
+    fallback || catalog.some(row => row.family === id && row.available && row.listed !== false) ? [{ shortLabel, at: info.catalogAt?.[id] ?? null }] : []);
+  const latest = Math.max(...catalogs.map(({ at }) => at ?? 0)) || null;
   const counts = { team: state.draft.enabled.length, library: state.draft.roles.length };
   return <div className="seats-toolbar">
     {!state.review.visible && <RoutingTabs tab={tab} choose={switchTab} counts={counts} />}
     <span className="seats-grow" />
     <button type="button" ref={nowButton} className="seats-btn" data-now aria-expanded={nowOpen}
       onClick={() => setNowOpen(!nowOpen)}>{t('本次对话')}<CaretDown size={16} aria-hidden="true" /></button>
-    <span className="seats-age" data-catalog-at title={`Claude ${ageText(claude)} · Codex ${ageText(codex)}`}>
+    <span className="seats-age" data-catalog-at title={catalogs.map(({ shortLabel, at }) => `${shortLabel} ${ageText(at)}`).join(' · ')}>
       {t('模型列表 {age}', { age: ageText(latest) })}
     </span>
     <button type="button" className="seats-btn is-icon" data-refresh disabled={refreshing === 'manual'}
@@ -882,7 +929,7 @@ function DialogStrip({ state }: DialogPart) {
   const { moved, label, seatName, notice, info } = state.source;
   const { count, scope, saving, refusal, discardShown, setDiscarding, teamError, stale, reload } = state.draft;
   const { keepButton } = state.panels;
-  const { migration, onDismissMigration, onClose } = state.props;
+  const { onClose } = state.props;
   const english = currentLanguage() === 'en';
   const movedText = moved.map(({ seat, from, to }) =>
     `${seatName(seat)}${english ? ': ' : '：'}${label(from)} → ${label(to)}`).join(english ? '; ' : '；');
@@ -899,10 +946,6 @@ function DialogStrip({ state }: DialogPart) {
       {teamError && <div className="seats-banner is-bad" role="alert">{routingError(teamError)}</div>}
       {moved.length > 0 && <div className="seats-banner" role="status" data-moved><CheckCircle size={14} aria-hidden="true" />
         <span>{t('默认已更新为 {changes}', { changes: movedText })}</span></div>}
-      {migration && <div className="seats-banner" role="status" data-migrated>
-        <div>{migration.split('\n').map(line => <p key={line}>{migrationLine(line)}</p>)}</div>
-        <button type="button" className="seats-btn" onClick={onDismissMigration}>{t('知道了')}</button>
-      </div>}
       {refusal && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
       {discardShown && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" />
         <span> {count ? t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count }) :
@@ -921,12 +964,15 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
   const slot = role.id, seat = getSlot(working, slot);
   if (!seat) return null;
   const model = rowFor(catalog, seat.model);
+  const { manifest } = adapterOfModel(seat.model);
+  const showFast = support(manifest, 'fast').ok;
   const showUltracode = allowsUltracode(seat.model, role.kind === 'lead');
   const effortReason = state.switchReason(slot, 'liveEffort'), fastReason = state.switchReason(slot, 'fast'), ultraReason = state.switchReason(slot, 'ultracode');
   const ultracodeNote = showUltracode ? ultraReason ?? t('每个任务都用多代理工作流，消耗更多') : null;
-  const refusal = config.conductor && role.kind === 'lead' && model?.family === 'claude' && model.fast ? info.claudeFastRefusal : undefined;
-  const fastNote = fastReason ?? (!model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported'])
-    : refusal ? t('Claude Code 上次拒绝了快速模式，再点一次可重试') : model.family === 'claude' ? t(FAST_BILLING) : undefined);
+  const notes = model?.fast ? manifest.models.fastNotes : undefined;
+  const refusal = config.conductor && role.kind === 'lead' && notes?.retry ? info.claudeFastRefusal : undefined;
+  const fastNote = showFast ? fastReason ?? (!model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported'])
+    : notes && t(refusal && notes.retry ? notes.retry : notes.billing)) : undefined;
   const toggleFast = () => {
     if (!seat.fast && refusal && !state.warnedFast.current) {
       state.warnedFast.current = true;
@@ -942,9 +988,9 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
         data-pop-effort={effort} aria-pressed={effort === seat.effort} disabled={saving || !!effortReason} title={effortReason}
         onClick={() => edit(setEffort(working, slot, effort, catalog))}>{effort}</button>)}
     </div>
-    <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
+    {showFast && <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
       disabled={saving || !!fastReason || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: seatName(slot) })} title={fastNote}
-      onClick={toggleFast}>{t('快速')}<i /></button>
+      onClick={toggleFast}>{t('快速')}<i /></button>}
     {showUltracode && <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.ultracode} data-ultracode={slot}
       disabled={saving || !!ultraReason} aria-describedby="seats-ultracode-note"
       onClick={() => edit({ ok: true, map: withSlot(working, slot, { ...seat, ultracode: !seat.ultracode }) })}>Ultracode<i /></button>}
@@ -956,14 +1002,20 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
   </div>;
 }
 
-function TeamModelOptions({ state, selected, pick, unavailable }: DialogPart & { selected?: string; pick: (model: string) => void; unavailable?: string }) {
+function TeamModelOptions({ state, selected, pick, unavailable, lead }: DialogPart & {
+  selected?: string; pick: (model: string) => void; unavailable?: string; lead: boolean;
+}) {
   const { catalog } = state.source, { modelFolds, setModelFolds } = state.popup;
-  return paletteGroups(catalog).filter(group => group.lines.length > 0).map(({ family, lines }) => {
+  const groups = paletteGroups(catalog).filter(({ family, lines }) => {
+    const manifest = adapterOf(family)?.manifest;
+    return lines.length > 0 && (!lead || manifest && canLead(manifest));
+  });
+  return groups.map(({ family, shortLabel, lines }) => {
     const current = lines.flatMap(line => [...line.shown, ...line.older.filter(row => row.model === selected)]);
     const older = lines.flatMap(line => line.older.filter(row => row.model !== selected));
     const open = !!modelFolds[family];
-    return <div key={family} className="seats-picker-family" role="group" aria-label={family === 'claude' ? 'Claude' : 'Codex'}>
-      <span aria-hidden="true">{family === 'claude' ? 'Claude' : 'Codex'}</span>
+    return <div key={family} className="seats-picker-family" role="group" aria-label={shortLabel}>
+      <span aria-hidden="true">{roleBrandIcons[family] && <ProviderMark family={family} />}{shortLabel}</span>
       {modelMenuItems(current, selected, pick, unavailable)}
       {older.length > 0 && <>
         <button type="button" className="seats-menu-item seats-menu-fold" role="menuitem" data-picker-fold={family} aria-expanded={open}
@@ -997,7 +1049,7 @@ function DialogMenu({ state }: DialogPart) {
     {modelReason && <small className="seats-menu-note" role="status">{modelReason}</small>}
     <div className="seats-menu-list seats-model-list" role="menu"
       aria-label={t('{seat}：选择模型', { seat: seatName(menu.slot) })} onKeyDown={menuKeys}>
-    <TeamModelOptions state={state} selected={selected} pick={model => pick(menu.slot, model)} unavailable={modelReason} />
+    <TeamModelOptions state={state} selected={selected} pick={model => pick(menu.slot, model)} unavailable={modelReason} lead={role?.kind === 'lead'} />
     {!custom && <button type="button" role="menuitem" className="seats-menu-item" data-custom disabled={!!modelReason}
       title={modelReason} onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
     </div>

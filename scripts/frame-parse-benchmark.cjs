@@ -2,7 +2,7 @@
 const { performance } = require('node:perf_hooks');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
-const { createRpc, MAX_FRAME } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc, MAX_FRAME } = require('../electron/shared/stdio-rpc.cjs');
 const requested = process.argv.slice(2).find(value => /^\d+$/.test(value));
 const sizes = requested ? [Number(requested)] : [8, 16, 32, 64];
 const kinds = process.argv.includes('--dense') ? ['dense'] : ['plain', 'escaped', 'image', 'mixed'];

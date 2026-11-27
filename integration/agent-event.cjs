@@ -15,6 +15,7 @@ const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'featur
 const { deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const { readEnvelope, WIRE_FIELDS } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const shellAgents = new Set(require(path.join(runtime, 'features/cli-adapters/manifests/worker.cjs')).map(({ id }) => id));
 
 function send(socket, event) {
   return new Promise(resolve => {
@@ -112,7 +113,7 @@ function shellEventFields(words) {
   if (!words[0]?.includes('=')) {
     // Existing terminal wrappers report up to eleven positional fields during the transition.
     const [type, sequence, exitCode, agent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args] = words;
-    return { type, sequence, exitCode, agent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args };
+    return { type, sequence, exitCode, agent: shellAgents.has(agent) ? agent : 'codex', codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args };
   }
   const fields = Object.create(null);
   for (const word of words) {
@@ -133,18 +134,19 @@ function shellEvent(words, projectId, sessionKey) {
 function shellReport(fields, projectId, sessionKey) {
   if (!fields) return null;
   let { type } = fields;
-  const { sequence, exitCode, agent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args: argumentsJson } = fields;
+  const { sequence, exitCode, agent: reportedAgent, codexAvailable, claudeAvailable, codexHome, cwd, command, accountLaunch, args: argumentsJson } = fields;
   // Remove next version. An older shell wrapper may use the updated helper.
   if (type === 'codex-started') type = 'agent-started';
   if (type === 'codex-exited') type = 'agent-exited';
-  if (!Object.hasOwn(WIRE_FIELDS.shell, type) || !/^\d+$/.test(String(sequence))) return null;
+  const agent = reportedAgent || 'codex';
+  if (!shellAgents.has(agent) || !Object.hasOwn(WIRE_FIELDS.shell, type) || !/^\d+$/.test(String(sequence))) return null;
   let args;
-  if (type === 'agent-started' && agent === 'codex' && argumentsJson !== undefined) {
+  if (type === 'agent-started' && argumentsJson !== undefined && (agent === 'codex' || agent === 'agy')) {
     try { args = JSON.parse(argumentsJson); } catch { return null; }
     if (!Array.isArray(args) || args.length > 64 || args.some(value => typeof value !== 'string' || value.includes('\0')) || JSON.stringify(args).length > 32768) return null;
   }
   return {
-    v: 1, projectId, sessionKey, type, sequence: Number(sequence), exitCode: Number.parseInt(exitCode, 10) || 0, agent: agent === 'claude' ? 'claude' : 'codex',
+    v: 1, projectId, sessionKey, type, sequence: Number(sequence), exitCode: Number.parseInt(exitCode, 10) || 0, agent,
     codexAvailable: codexAvailable === 'true', claudeAvailable: claudeAvailable === 'true', codexHome: String(codexHome ?? ''), cwd: String(cwd ?? ''),
     ...(command ? { command: String(command).slice(0, 24) } : {}),
     ...(args ? { args } : {}),

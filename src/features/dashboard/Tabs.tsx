@@ -6,7 +6,7 @@ import { Marker } from './Charts';
 import { CostSpeedChart } from './CostSpeedChart';
 import { DailyBars } from './DailyBars';
 import { FindingsTable } from './FindingsTable';
-import { changeNote, decimal, modelShort, NONE, percent, previousNote, quotaNote, rangeName } from './format';
+import { changeNote, decimal, modelShort, NONE, percent, previousNote, quotaNote, rangeName, windowLength } from './format';
 import { IncidentTable } from './IncidentTable';
 import { KindChart } from './KindChart';
 import { LiveStrip } from './LiveStrip';
@@ -25,6 +25,30 @@ type Decide = Parameters<typeof Suggestions>[0]['decide'];
 
 function Kpi({ label, value, note, hero = false, children }: { label: string; value: string | number; note: string; hero?: boolean; children?: ReactNode }) {
   return <div className={hero ? 'kpi hero' : 'kpi'}><div className="label">{label}</div><div className="value">{value}</div><div className="delta">{note}</div>{children}</div>;
+}
+
+function QuotaMeter({ used }: { used: number }) {
+  return <div className="meter" role="img" aria-label={t('额度已用 {percent}%', { percent: Math.round(used) })}>
+    <b style={{ width: `${Math.min(100, used)}%` }} />
+  </div>;
+}
+
+function QuotaKpi({ quota, quotaGroups }: DashboardSummary['kpis']) {
+  const groups = (quotaGroups ?? []).filter(row => row.id === 'gemini' || row.id === '3p').sort((a, b) => b.id.localeCompare(a.id));
+  const label = t('额度消耗');
+  if (!groups.length) return <Kpi label={label} value={quota ? `${Math.round(quota.percent)}%` : NONE} note={quotaNote(quota)}>
+    {quota && <QuotaMeter used={quota.percent} />}
+  </Kpi>;
+  return <div className="kpi">
+    <div className="label">{label}</div>
+    {quota && !groups.some(group => group.provider === quota.provider) && <>
+      <div className="value">{Math.round(quota.percent)}%</div><div className="delta">{quotaNote(quota)}</div><QuotaMeter used={quota.percent} />
+    </>}
+    {groups.map(group => <div key={group.id}>
+      <div className="delta">{t(group.id === 'gemini' ? 'Gemini 模型' : '第三方模型')} · {windowLength(group.minutes)}</div>
+      <div className="value">{Math.round(group.percent)}%</div><QuotaMeter used={group.percent} />
+    </div>)}
+  </div>;
 }
 
 // The first-pass rate of each model, best first; a model without a measured rate has no bar and a dash.
@@ -55,9 +79,7 @@ export function ModelsTab({ summary, now, onFocus }: { summary: DashboardSummary
         <SparkBars label={t('近 14 天每天子任务')} layers={models.map(row => ({ model: row.model, values: row.trend }))} />
       </Kpi>
       <Kpi label={t('事故')} value={kpis.incidents} note={range}><SparkBars label={t('近 14 天每天事故')} layers={[{ model: null, values: incidentDays }]} /></Kpi>
-      <Kpi label={t('额度消耗')} value={kpis.quota ? `${Math.round(kpis.quota.percent)}%` : NONE} note={quotaNote(kpis.quota)}>
-        {kpis.quota && <div className="meter" role="img" aria-label={t('额度已用 {percent}%', { percent: Math.round(kpis.quota.percent) })}><b style={{ width: `${Math.min(100, kpis.quota.percent)}%` }} /></div>}
-      </Kpi>
+      <QuotaKpi {...kpis} />
     </div>
     <div className="two">
       <Panel title={t('成本与速度')} hint={t('每个点一个模型，面积表示子任务数')}><CostSpeedChart models={models} /></Panel>

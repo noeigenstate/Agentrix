@@ -7,6 +7,7 @@ import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import type { Settings } from '../../shared/types';
 import { isCodexPermissions } from '../../shared/codex-permissions.ts';
+import { AGY_PERMISSIONS, isAgyPermissions, type AgyPermissions } from '../../shared/agy-permissions.ts';
 import { type ClaudePath, type ConnectionTest, type NativeSettings, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { usageChanged, useUsageRevision } from '../native-session/native-store.ts';
 import { clockWords, connectionLines } from '../native-session/native-words';
@@ -23,6 +24,7 @@ const CODEX_PERMISSIONS = (): { value: CodexPermissions; label: string; hint: st
   { value: 'ask', label: t('先询问'), hint: t('只能在工作目录里写文件；执行需要权限的操作前先问你。') },
 ];
 export const codexPermissionOf = (value: unknown): CodexPermissions => isCodexPermissions(value) ? value : 'full';
+const agyPermissionOf = (value: unknown): AgyPermissions => isAgyPermissions(value) ? value : 'full';
 // A mark per tone, so a line reads without its colour.
 const TONE_MARKS = { ok: <CheckCircle size={16} weight="fill" />, warn: <WarningCircle size={16} weight="fill" />, bad: <XCircle size={16} weight="fill" /> };
 const failure = (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) });
@@ -34,7 +36,12 @@ const waitingOf = (usage: NativeUsage) => (typeof usage.switches?.waiting === 'n
 // focusOnOpen: the page was opened to deal with the connection (the launcher's incomplete Claude Code): the test button takes the focus, or the key field when no key is saved.
 // claudeBackgroundTasks / onClaudeBackgroundTasks: likewise, the switch that lets Claude Code sessions started afterwards use background tasks.
 // codexPermissions / onCodexPermissions: the window's own setting (not the native session store's), written through the usual settings update.
-export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPermissions, onCodexPermissions, claudeBackgroundTasks, onClaudeBackgroundTasks }: { projectId?: string; focusOnOpen?: boolean; codexPermissions?: unknown; onCodexPermissions?: (value: CodexPermissions) => void; claudeBackgroundTasks?: boolean; onClaudeBackgroundTasks?: (value: boolean) => void }) {
+export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPermissions, onCodexPermissions, agyPermissions, onAgyPermissions,
+  claudeBackgroundTasks, onClaudeBackgroundTasks }: {
+  projectId?: string; focusOnOpen?: boolean; codexPermissions?: unknown; onCodexPermissions?: (value: CodexPermissions) => void;
+  agyPermissions?: unknown; onAgyPermissions?: (value: AgyPermissions) => void;
+  claudeBackgroundTasks?: boolean; onClaudeBackgroundTasks?: (value: boolean) => void;
+}) {
   const bridge = nativeBridge(), revision = useUsageRevision();
   const [settings, setSettings] = useState<NativeSettings | null>(null), [saved, setSaved] = useState<boolean | null>(null);
   const [key, setKey] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
@@ -121,6 +128,10 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
       <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
     <label className="setting-row"><span><ShieldCheck size={19} /><span><b>{t('Codex 权限')}</b><small>{t('只影响之后新建的原生 Codex 会话；正在运行的用 /permissions 切换；派发的工作者不受影响。')}</small></span></span>
       <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions.map(({ value, label, hint }) => ({ value, label, description: hint }))} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
+    <label className="setting-row"><span><ShieldCheck size={19} /><span><b>{t('Antigravity 权限')}</b><small>{t('下次新建或续接 Antigravity 会话时生效。')}</small></span></span>
+      <Select label={t('Antigravity 权限')} className="runtime-select" value={agyPermissionOf(agyPermissions)} disabled={!onAgyPermissions}
+        options={AGY_PERMISSIONS.map(value => ({ value, label: t(value === 'full' ? '自动允许（默认）' : '先询问') }))}
+        onChange={value => onAgyPermissions?.(agyPermissionOf(value))} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
     <label className="setting-row"><span><TreeStructure size={19} /><span><b>{t('允许 Claude Code 后台任务')}</b><small>{t('关闭时，Claude Code 不能把命令或子代理放到后台；并行工作通过子代理进行。下一次启动的会话生效。')}</small></span></span>

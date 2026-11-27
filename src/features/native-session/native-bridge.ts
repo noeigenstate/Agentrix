@@ -2,17 +2,18 @@
 // and its preload wiring belong to the main side; this file is the consumer-side shape of it, so the rest of the module never reaches
 // into window. Every call returns a Result; a build or a test without the bridge reads as "no native sessions" (null).
 import type { AgentCommand, ConnectionTest, NativeRunOptions, NativeRunOptionsPatch, Result } from '../../shared/types';
-import type { AgentEvent, LimitsPayload as SharedLimits, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
+import type { AgentEvent, AgentProvider, LimitsPayload as SharedLimits, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
 export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHandoffReceipt, NativePendingInput, SwitchState } from '../../shared/agent-events';
 
-export type NativeAgent = 'claude' | 'codex';
+export type NativeAgent = AgentProvider;
+type SessionApi = Window['agentrix']['nativeSession'];
 export type ClaudePath = 'api-then-terminal' | 'api-only' | 'terminal-only';
 export type NativeSettings = { claudePath: ClaudePath; codexAutoReset: boolean };
 
 // One quota window (Codex's 5 hours or week, an API rate limit); a value the provider did not give is null, never 0.
 export type LimitWindow = { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null };
 export type LimitsPayload = {
-  state?: string | null; observedAtMs?: number | null; ordinaryUsageAllowed?: boolean | null;
+  state?: string | null; reason?: string | null; observedAtMs?: number | null; ordinaryUsageAllowed?: boolean | null;
   limitsById?: Record<string, { limitName?: string | null; primary?: LimitWindow | null; secondary?: LimitWindow | null } | null> | null;
   resetCredits?: { availableCount?: number | null } | null;
   // What the provider itself says about the allowance: whether it rejects, and the notice that a limit was reached (with when it recovers, when it says).
@@ -36,6 +37,10 @@ export type NativeUsage = {
 
 export interface NativeBridge {
   start(terminalId: string, options: { agent: NativeAgent; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;
+  resume?: SessionApi['resume'];
+  history?: SessionApi['history'];
+  remoteModels?: SessionApi['remoteModels'];
+  modelOptions?: SessionApi['modelOptions'];
   send(terminalId: string, runtimeSessionId: string, clientMessageId: string, text: string, images?: string[]): Promise<Result<unknown>>;
   interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
   // The commands the session runs without a terminal (contract addendum, native composer); an older main has none, and that reads as an empty list.

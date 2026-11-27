@@ -31,6 +31,10 @@ test('the decision page with nothing to decide is one stage: the guide, a 760px 
   const composer = hookHarness('src/features/home/DecisionHome.tsx', overrides);
   t.after(() => composer.dispose());
   const work = () => elements(composer.render('NewWork', stage.props).result);
+  projects[1].terminals[0].cliActive = false;
+  const assistants = work().find(node => node.type === Select && node.props.label === '助手');
+  assert.deepEqual(assistants.props.options.map(option => option.value), ['claude', 'codex']);
+  projects[1].terminals[0].cliActive = true;
   const picker = work().find(node => node.type === Select && node.props.label === '项目');
   assert.equal(picker.props.value, 'b');
   picker.props.onChange('a');
@@ -75,6 +79,45 @@ test('the send button is a quiet grey square until there is text, then the brand
   const ratio = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
   for (const blue of ['#5686c4', '#4a77b4', '#3f6aa3']) assert.ok(ratio('#ffffff', blue) >= 3, `${blue} carries a white icon`);
   assert.ok(ratio('#5686c4', '#ffffff') >= 3, 'the focused border reads against the white box');
+});
+
+test('New Work offers installed agy and sends the goal through its native session, reusing that session next time', async t => {
+  const Select = () => null, terminal = { id: 't', cliActive: false, sessionId: null };
+  const projects = [{ id: 'p', name: 'Project', kind: 'local', terminals: [terminal] }];
+  const installation = Promise.withResolvers(), completions = [Promise.withResolvers(), Promise.withResolvers()], calls = [];
+  let completed = 0;
+  stubGlobals(t, { window: { agentrix: {
+    getAgents: () => installation.promise,
+    nativeSession: {
+      start: async (...args) => { calls.push(['start', ...args]); return { ok: true, value: { runtimeSessionId: 'agy-1' } }; },
+      send: async (id, session, message, text) => { calls.push(['send', id, session, !!message, text]); return { ok: true, value: { status: 'queued' } }; },
+    },
+  } } });
+  const view = hookHarness('src/features/home/DecisionHome.tsx', {
+    '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './Select': { Select }, './DecisionInbox': {}, './DecisionCard': {}, './SessionLine': {},
+    './inbox-items': { newWorkProjects: () => projects }, './review-history': {}, './send-to-agent': { sendToAgent: assert.fail },
+    './image-thumbnail': {}, './VoiceButton': { VoiceButton: () => null }, './voice-input': { useDictatedBox() {} }, './file-popup': {},
+    './i18n': { t: text => text }, './native-store.ts': { refreshNativeSession: id => calls.push(['refresh', id]) },
+  });
+  t.after(() => view.dispose());
+  const nodes = () => elements(view.render('NewWork', { projects, onError: assert.fail, onDone: () => completions[completed++].resolve() }).result);
+  const picker = () => nodes().find(node => node.type === Select && node.props.label === '助手');
+  assert.deepEqual(picker().props.options.map(option => option.value), ['claude', 'codex']);
+  installation.resolve({ ok: true, value: { agy: { installed: true } } });
+  await installation.promise;
+  assert.deepEqual(picker().props.options.map(option => option.value), ['claude', 'agy', 'codex']);
+  picker().props.onChange('agy');
+  const send = text => {
+    nodes().find(node => node.type === 'textarea').props.onChange({ target: { value: text } });
+    nodes().find(node => node.props['aria-label'] === '开始 (Enter)').props.onClick();
+  };
+  send('First goal');
+  await completions[0].promise;
+  Object.assign(terminal, { cliActive: true, agent: 'agy', nativeRuntimeSessionId: 'agy-1', nativeMode: 'agy-acp' });
+  send('Second goal');
+  await completions[1].promise;
+  assert.deepEqual(calls, [['start', 't', { agent: 'agy' }], ['refresh', 't'], ['send', 't', 'agy-1', true, 'First goal'],
+    ['send', 't', 'agy-1', true, 'Second goal']]);
 });
 
 test('the project list recedes: idle sessions are plain names, only the picked one has its fill, its state line and a bold name', t => {

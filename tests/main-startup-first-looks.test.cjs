@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { createCodexLocator } = require('../electron/features/codex-runtime/locator.cjs');
 const { fakeFiles } = require('./helpers/claude-files.cjs');
 const { createTerminalLifecycle } = require('../electron/app/terminal-lifecycle.cjs');
+const { createInstall } = require('../electron/features/agy-acp/adapter.cjs');
 
 
 function fixture() {
@@ -54,4 +55,18 @@ test("a restored terminal is told the Codex found when its --version check outla
   assert.equal(env.AGENTRIX_CODEX_EXECUTABLE, exe);
   answer(null, 'codex-cli 0.170.0');
   assert.equal((await codexFirst).version, '0.170.0');
+});
+
+test('local terminals receive the agy executable found off PATH, and SSH terminals receive no local executables', async () => {
+  const file = 'fixture/agy/bin/agy.exe', install = createInstall(async () => ({ installed: true, file }));
+  await install.refresh();
+  const lifecycle = createTerminalLifecycle({
+    process: { env: {} }, claudeLocator: { peek: () => null }, codexLocator: { peek: () => null },
+    adapters: () => [{ manifest: { id: 'agy' }, install }],
+  });
+  const local = { PATH: 'fixture-path' }, ssh = {};
+  lifecycle.setTerminalExecutables({ kind: 'local' }, local);
+  lifecycle.setTerminalExecutables({ kind: 'ssh' }, ssh);
+  assert.equal(local.AGENTRIX_AGY_EXECUTABLE, file);
+  assert.deepEqual(ssh, {});
 });

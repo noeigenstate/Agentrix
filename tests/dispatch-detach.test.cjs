@@ -194,6 +194,18 @@ test('an uncertain identity probe cannot declare a live helper dead', async t =>
   assert.match(text, /still running/); assert.doesNotMatch(text, /helper exited/);
 });
 
+test('wait reads the receipt written while checking whether the helper exited', async t => {
+  const store = receipts(t), id = randomUUID(), at = Date.now(), events = [];
+  store.create({ id, helperPid: 123, createdAt: at });
+  const ended = endEvent(id, 'exit', { at });
+  const alive = async () => {
+    await store.update(id, { settled: true, exitCode: 0, endedAt: at, ended });
+    return false;
+  };
+  assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, alive, onEvent: event => events.push(event) }), 0);
+  assert.deepEqual(events, [ended]);
+});
+
 test('receipt pruning removes only old settled receipts and their launcher logs', t => {
   const store = receipts(t), old = randomUUID(), running = randomUUID(), now = Date.now();
   store.create({ id: old, createdAt: now - 8 * 86400000, settled: true });

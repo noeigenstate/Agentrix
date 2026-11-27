@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
-const { createRpc } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc } = require('../electron/features/codex-app-server/codex-rpc.cjs');
 
 function fixture() {
   const child = new EventEmitter(), notices = [], drops = [], disconnected = [];

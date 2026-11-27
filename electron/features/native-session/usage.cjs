@@ -1,11 +1,16 @@
 const { decide, nameOf } = require('../claude-runtime/decide.cjs');
 const { cliFact } = require('../claude-runtime/resolver.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 
 // What a new session takes, in the usage panel's words: only the CLI check given here counts (an SSH project gives none,
 // and this computer's CLI is not its), and a path the settings chose says so (set_terminal, set_api).
 const SAID = { terminal_selected: 'set_terminal', native_cli_required: 'cli_missing', cli_too_old: 'cli_too_old' };
 function nextPath(agent, config, facts = [], cli) {
-  const given = [...(agent === 'codex' ? [] : facts.filter(value => value.name !== 'cli')), cliFact(cli)].filter(Boolean);
+  const policy = adapterOf(agent)?.nativePolicy;
+  const fact = cliFact(cli);
+  if (!policy?.usesClaudeAvailability) return fact ? { path: null, reason: SAID[nameOf(fact.reason)] ?? nameOf(fact.reason) }
+    : { path: policy?.path ?? null, reason: null };
+  const given = [...facts.filter(value => value.name !== 'cli'), fact].filter(Boolean);
   const { path, reason, wire } = decide(given, config, { agent });
   if (path === 'api') return { path, reason: config.claudePath === 'api-only' ? 'set_api' : null };
   return { path, reason: SAID[nameOf(reason)] ?? wire };

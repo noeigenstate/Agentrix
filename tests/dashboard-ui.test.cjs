@@ -116,6 +116,17 @@ const view = (props = {}) => {
 const count = (html, pattern) => (html.match(pattern) ?? []).length;
 const rowOf = (html, text) => html.split('<tr').slice(1).map(part => part.slice(0, part.indexOf('</tr>'))).find(part => part.includes(text));
 
+test('the dashboard shows separate agy quota bars alongside the latest Codex reading', () => {
+  const summary = fixture();
+  summary.kpis.quotaGroups = [
+    { provider: 'agy', id: 'gemini', percent: 25, minutes: 10080 }, { provider: 'agy', id: '3p', percent: 50, minutes: 10080 },
+  ];
+  const html = zh(() => view({ summary }));
+  assert.match(html, /Codex · 7 天额度窗口/);
+  assert.match(html, /Gemini 模型 · 7 天<\/div><div class="value">25%/);
+  assert.match(html, /第三方模型 · 7 天<\/div><div class="value">50%/);
+});
+
 // ---- format ------------------------------------------------------------------------------------------------------------------
 test('numbers the records do not support read as a dash, never as 0', () => zh(() => {
   const f = dashboard('format.ts');
@@ -132,6 +143,7 @@ test('durations, quota windows and the previous-period hint', () => zh(() => {
   assert.equal(f.duration(400), '1 秒'); assert.equal(f.duration(45000), '45 秒'); assert.equal(f.duration(34 * 60000), '34 分'); assert.equal(f.duration(6.4 * 3600000), '6.4 小时');
   assert.equal(f.windowLength(300), '5 小时'); assert.equal(f.windowLength(10080), '7 天'); assert.equal(f.windowLength(30), '30 分钟');
   assert.equal(f.quotaNote({ provider: 'codex', percent: 68, minutes: 10080 }), 'Codex · 7 天额度窗口'); assert.equal(f.quotaNote(null), '没有额度记录');
+  assert.equal(f.quotaNote({ provider: 'claude', percent: 20, minutes: 300 }), 'Claude · 5 小时额度窗口');
   assert.equal(f.previousNote('30d', 38), '上 30 天 38'); assert.equal(f.previousNote('7d', null), '上 7 天 —'); assert.equal(f.previousNote('all', 3), '全部累计');
 }));
 
@@ -141,6 +153,10 @@ test('models, kinds and weights are named the way the owner writes them', () => 
   assert.deepEqual(['claude-sonnet-5-5', 'gpt-6.1-sol', 'x'].map(f.modelLabel), ['Sonnet 5.5', 'Sol · gpt-6.1-sol', 'x']);
   assert.deepEqual(['sonnet', 'Opus', 'haiku'].map(f.modelShort), ['Sonnet', 'Opus', 'Haiku'], 'an alias is written like the full id');
   assert.deepEqual(['sonnet', 'claude-sonnet-5-5'].map(f.modelLabel), ['Sonnet', 'Sonnet 5.5']);
+  const agyModels = ['gemini-3.8-flash', 'agy:claude-opus-5-5'];
+  assert.deepEqual(agyModels.map(f.modelShort), agyModels);
+  assert.deepEqual(agyModels.map(f.modelLabel), agyModels);
+  assert.equal(f.modelLabel('agy:unreported'), `agy · ${f.modelLabel('unreported')}`);
   assert.deepEqual(['core', 'ui-check', 'review', 'odd'].map(f.kindLabel), ['复杂代码', '界面验收', '审查', 'odd']);
   assert.equal(f.weightChange(weight), '测试 1.0 → 0.7 ↓ 降权');
   assert.equal(f.weightChange({ ...weight, to: 1.2 }), '测试 1.0 → 1.2 ↑ 升权');

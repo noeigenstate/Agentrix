@@ -3,7 +3,7 @@ const path = require('node:path');
 const { Buffer } = require('node:buffer');
 const { randomUUID } = require('node:crypto');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
-const { validModel, EFFORT, familyOf } = require('../routing/seat-rules.mjs');
+const { validModel, EFFORT, allowsUltracode } = require('../routing/seat-rules.mjs');
 const { SEAT_BYTES, writeSeatMap } = require('../agents/call-seat.cjs');
 const { readEnvelope, writeKeyValue } = require('../agents/dispatch-events.cjs');
 
@@ -22,7 +22,7 @@ function updateBootstrapLead(file, lead) {
   const seats = JSON.stringify(lead?.seatsMap ?? null);
   const bounded = Buffer.byteLength(seats) <= SEAT_BYTES ? seats : 'null';
   const fast = lead?.fast === true ? '1' : '0';
-  const ultra = lead?.ultracode === true && familyOf(lead.model) === 'claude';
+  const ultra = lead?.ultracode === true && allowsUltracode(lead.model, true);
   const next = lead && writeKeyValue({ format: 'agentrix.lead-seat', version: '1', model: lead.model, effort: lead.effort,
     fast, ultracode: ultra ? '1' : '0', seats: bounded });
   const legacy = lead ? [lead.model, lead.effort, fast, bounded, ...(ultra ? ['ultracode'] : []), ''].join('\n') : '';

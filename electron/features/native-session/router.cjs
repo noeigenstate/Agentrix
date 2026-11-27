@@ -11,7 +11,8 @@ const wirePath = path => path === 'native' ? 'subscription' : path;
 const turnBoundary = event => event.type === 'turn.started' || event.type === 'turn.completed';
 function createRouter({
   settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now,
-  saveSession = () => {}, invalidateSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [],
+  saveSession = () => {}, saveModelOptions = () => {}, invalidateSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null,
+  readCommands = async () => [],
   terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {},
   prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {}, ...providers
 }) {
@@ -24,15 +25,17 @@ function createRouter({
   let closed = false;
   const ended = new Set(['stopped', 'failed', 'disconnected']);
   const eventStream = spec => createEventStream(spec, event => { emit(event); changed(spec.terminalId, event); }, now);
-  function history(id) {
+  function history(id, { agent, list = false } = {}) {
     if (closed) return Promise.reject(new Error('session_closed'));
-    if (historyReads.has(id)) return historyReads.get(id).task;
+    const key = JSON.stringify([id, agent, list]);
+    if (historyReads.has(key)) return historyReads.get(key).task;
     const entry = { abort: new AbortController() };
+    entry.terminalId = id;
     entry.task = Promise.resolve().then(() => {
       if (entry.abort.signal.aborted) throw new Error('session_closed');
-      return readHistory(id, { signal: entry.abort.signal });
-    }).finally(() => { if (historyReads.get(id) === entry) historyReads.delete(id); });
-    historyReads.set(id, entry); return entry.task;
+      return readHistory(id, { signal: entry.abort.signal, agent, list });
+    }).finally(() => { if (historyReads.get(key) === entry) historyReads.delete(key); });
+    historyReads.set(key, entry); return entry.task;
   }
   // A running session's path; a failed switch that kept the API holds it there as if API-only.
   function selection(spec, retained = false) {
@@ -81,7 +84,7 @@ function createRouter({
   function rememberSession(record, providerSessionId) {
     if (!providerSessionId || record.persisted) return;
     record.persisted = true;
-    saveSession(record.spec.terminalId, { agent: record.spec.agent, providerSessionId });
+    saveSession(record.spec.terminalId, { agent: record.spec.agent, providerSessionId, ...(record.nativePolicy.historyList && { cwd: record.spec.cwd }) });
   }
   function forward(record, event) {
     const { spec, nativePolicy } = record, { agent, terminalId: id } = spec;
@@ -89,7 +92,7 @@ function createRouter({
     if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
       record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
     record.epoch = event.connectionEpoch; record.sequence = event.sequence;
-    const deferHistory = remoteNative(spec);
+    const deferHistory = remoteNative(spec) && !nativePolicy.rememberModelOptions;
     // SSH has no local rollout check. A thread/start reply alone does not establish history.
     if (deferHistory && event.type === 'turn.started' && !event.replay) rememberSession(record, event.providerSessionId);
     if (nativePolicy.canContinueInterrupted && !event.replay && turnBoundary(event)) {
@@ -105,7 +108,11 @@ function createRouter({
     if (event.providerSessionId && !record.lock && !record.releasing) {
       record.lock = `${agent}:${event.providerSessionId}`; occupied.add(record.lock);
     }
-    if (!deferHistory) rememberSession(record, event.providerSessionId);
+    if (!deferHistory && (!nativePolicy.rememberModelOptions || !event.replay && event.type === 'routing.updated')) rememberSession(record, event.providerSessionId);
+    if (nativePolicy.rememberModelOptions && !event.replay && event.type === 'routing.updated' && record.persisted) {
+      const { model, effort } = event.payload.effective;
+      saveModelOptions(id, { model, effort });
+    }
     if (event.type === 'limits.updated') {
       const limits = projectLimits.get(spec.projectId) || {};
       limits[agent] = retainLimits(limits[agent], event.payload); projectLimits.set(spec.projectId, limits);
@@ -160,18 +167,25 @@ function createRouter({
     flushFailures(record);
     throw error;
   }
-  async function start(id, { agent, resume = false, launch = null }) {
+  async function start(id, { agent, resume = false, launch = null, sessionId }) {
     if (busy.has(id)) throw new Error('会话正在启动。');
     busy.add(id);
     try {
       const { native, nativePolicy } = nativeAdapterOf(agent);
       const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, nativePolicy.launchOptions ? launch : null);
       const spec = { ...resolved, agent, runtimeSessionId: randomUUID() };
+      if (sessionId && spec.providerSessionId !== sessionId) {
+        const rows = await history(id, { agent, list: true });
+        if (!rows.some(row => row.id === sessionId)) throw new Error(nativePolicy.missingResume);
+        resolveSpec(id, agent, false, true);
+        spec.providerSessionId = sessionId;
+        if (nativePolicy.rememberModelOptions) Object.assign(spec, resolved.launchModelOptions);
+      }
       if (resume && !spec.providerSessionId) {
-        spec.providerSessionId = (await history(id))?.[agent]?.id || null;
+        spec.providerSessionId = (await history(id, { agent }))?.[agent]?.id || null;
         resolveSpec(id, agent, false, true);
         if (!spec.providerSessionId) {
-          if (nativePolicy.missingResume && launch?.resume) throw new Error(nativePolicy.missingResume);
+          if (nativePolicy.missingResume && (launch?.resume || nativePolicy.historyList)) throw new Error(nativePolicy.missingResume);
           resume = false;
         }
       }
@@ -372,6 +386,15 @@ function createRouter({
       if (permissions && result.permissions !== undefined) record.spec.permissions = result.permissions;
       return result;
     },
+    async modelOptions(id, runtimeSessionId, patch) {
+      const record = current(id, runtimeSessionId);
+      requireStarted(record);
+      if (!record.nativePolicy.liveRouting) throw new Error('此会话由模型分工设置模型和强度。');
+      if (!Object.keys(patch).length) return record.runtime.modelOptions();
+      const result = await record.runtime.setModelOptions(patch);
+      current(id, runtimeSessionId);
+      return result;
+    },
     async applyRouting(id, seat) {
       const record = sessions.get(id);
       if (!record?.runtime.applyRouting || ended.has(record.runtime.snapshot().state)) return null;
@@ -414,12 +437,13 @@ function createRouter({
         current(id, runtimeSessionId);
         await activateNative(spec, null, { newConversation: true });
         sessions.set(id, next); switches.forget(id);
-        if (!remoteNative(spec)) {
+        if (!remoteNative(spec) || next.nativePolicy.rememberModelOptions) {
           saveSession(id, { agent: spec.agent, providerSessionId: newConversationIdentity ? spec.providerSessionId : null });
           next.persisted = !!newConversationIdentity;
         }
         next.staged = false;
         for (const event of next.buffered) forward(next, event);
+        next.runtime.bindHost?.();
         next.buffered = [];
         const selected = wirePath(path);
         next.stream.publish('path.changed', { previous: selected, selected, reason: null });
@@ -538,11 +562,14 @@ function createRouter({
     failed: (id, runtimeSessionId) => switches.failed(id, runtimeSessionId),
     switchState: id => switches.state(id),
     async forget(id) {
-      const pending = historyReads.get(id); pending?.abort.abort(); historyReads.delete(id);
+      const reads = [];
+      for (const [key, pending] of historyReads) if (pending.terminalId === id) {
+        pending.abort.abort(); historyReads.delete(key); reads.push(pending.task);
+      }
       switches.forget(id);
       const record = sessions.get(id); sessions.delete(id); terminalStreams.delete(id);
       try { if (record) await closeRecord(record); }
-      finally { if (pending) await pending.task.catch(() => {}); }
+      finally { await Promise.allSettled(reads); }
     },
     async close() {
       closed = true; unsubscribeAvailability?.();

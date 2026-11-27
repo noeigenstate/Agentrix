@@ -49,10 +49,13 @@ function gradeRecord(grade, project, session) {
     ...(grade.outcome === 'sent-back' && grade.note !== undefined ? { note: grade.note.slice(0, 2000) } : {}) };
 }
 
-function quotaWindows(limits) {
+function quotaWindows(limits, groupOf) {
   if (!Array.isArray(limits)) return [];
   return limits.filter(value => value && number(value.percent) !== null).slice(0, 16)
-    .map(value => ({ minutes: number(value.minutes), percent: value.percent, resetsAt: number(value.resetsAt) }))
+    .map(value => {
+      const id = groupOf?.(value.id);
+      return { ...(id ? { id } : {}), minutes: number(value.minutes), percent: value.percent, resetsAt: number(value.resetsAt) };
+    })
     .sort((a, b) => (a.minutes ?? 0) - (b.minutes ?? 0));
 }
 
@@ -62,7 +65,7 @@ function quotaScope(provider, project, session) {
   const usage = adapterOf(provider)?.usage;
   let home = usage?.quotaHome(session, env);
   if (!remote) {
-    home = path.resolve(home || path.join(os.homedir(), usage?.defaultHome || '.claude'));
+    home = path.resolve(home || path.join(os.homedir(), usage?.defaultHome || `.${provider}`));
     if (process.platform === 'win32') home = home.toLowerCase();
   }
   return createHash('sha256').update(JSON.stringify([provider, remote ? 'ssh' : 'local',

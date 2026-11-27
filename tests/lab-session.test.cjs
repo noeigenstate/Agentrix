@@ -161,6 +161,15 @@ test('execute defaults to offline for every call and never retains a preparation
   await assert.rejects(session.execute('fixture', ['bad\0argument'], { cwd: workspaceRoot }), /Invalid/);
 });
 
+test('dispatch arguments accept registered workers and validate wait and stop separately', async t => {
+  const { session, workspaceRoot } = await fixture(t);
+  for (const args of [['codex', '--detach'], ['claude', '--detach'], ['wait', 'run-1'], ['stop', 'run-1']]) {
+    assert.deepEqual(await session.checkArguments(args, workspaceRoot), args);
+  }
+  await assert.rejects(session.checkArguments(['unregistered', '--detach'], workspaceRoot), /Invalid lab dispatch arguments/);
+  await assert.rejects(session.checkArguments(['stop', 'run-1', '--detach'], workspaceRoot), /Unknown or repeated lab dispatch option/);
+});
+
 test('isolation refusal occurs before servers, launch jobs or model workers exist', { timeout: 15000 }, async t => {
   let launches = 0;
   const { LabSession } = loadWithStubs(require.resolve('../electron/features/lab/session.cjs'), (name, requireAt) =>

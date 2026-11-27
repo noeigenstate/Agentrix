@@ -4,7 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const http = require('node:http');
-const { createRpc } = require('../electron/features/codex-app-server/rpc.cjs');
+const { createRpc } = require('../electron/features/codex-app-server/codex-rpc.cjs');
 
 test('real app-server resumes the same thread through a response above 4 MiB', {
   skip: !process.env.AGENTRIX_REAL_CODEX, timeout: 40000,

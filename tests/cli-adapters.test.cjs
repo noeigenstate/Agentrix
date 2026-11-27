@@ -7,8 +7,9 @@ const shared = require('../electron/features/cli-adapters/registry.mjs');
 
 const projectionFile = path.join(__dirname, '../electron/features/cli-adapters/manifests/worker.cjs');
 if (process.argv.includes('--write-worker-manifests')) {
-  const rows = shared.adapters().map(({ manifest: { id, install, models } }) =>
-    `  { id: ${JSON.stringify(id)}, install: { minVersion: ${JSON.stringify(install.minVersion)} }, models: { match: ${models.match} } },`);
+  const rows = shared.adapters().map(({ manifest: { id, label, install, models } }) =>
+    `  { id: ${JSON.stringify(id)}, label: ${JSON.stringify(label)}, install: { minVersion: ${JSON.stringify(install.minVersion)} },`
+    + ` models: { match: ${models.match}, prefix: ${JSON.stringify(models.prefix)} } },`);
   fs.writeFileSync(projectionFile, '// Generated from registry.mjs by node tests/cli-adapters.test.cjs --write-worker-manifests.\n' +
     'module.exports = [\n' + rows.join('\n') + '\n];\n');
 }
@@ -23,8 +24,8 @@ const en = require('../electron/locales/en.json');
 test('carried workers use the shared manifest projection', () => {
   const carried = require(projectionFile);
   const { workerOf } = require('../electron/features/cli-adapters/workers.cjs');
-  assert.deepEqual(carried, shared.adapters().map(({ manifest: { id, install: { minVersion }, models: { match } } }) =>
-    ({ id, install: { minVersion }, models: { match } })));
+  assert.deepEqual(carried, shared.adapters().map(({ manifest: { id, label, install: { minVersion }, models: { match, prefix } } }) =>
+    ({ id, label, install: { minVersion }, models: { match, prefix } })));
   assert.equal(require('../electron/features/claude-runtime/locator.cjs').REQUIRED, shared.adapterOf('claude').manifest.install.minVersion);
   for (const { id } of carried) assert.equal(adapterOf(id).worker, workerOf(id));
   assert.equal(workerOf('codex').command({}), 'native');
@@ -81,7 +82,7 @@ test('a Claude print role with a result server uses a strict tool allowlist', ()
 
 test('both registry entry points expose complete capability manifests', () => {
   assert.deepEqual(shared.adapters().map(({ manifest }) => manifest), adapters().map(({ manifest }) => manifest));
-  assert.deepEqual(adapters().map(({ manifest }) => manifest.id), ['claude', 'codex']);
+  assert.deepEqual(adapters().map(({ manifest }) => manifest.id), ['claude', 'agy', 'codex']);
   for (const adapter of adapters()) {
     const { manifest } = adapter;
     assert.equal(adapterOf(manifest.id), adapter);
@@ -100,12 +101,31 @@ test('both registry entry points expose complete capability manifests', () => {
 });
 
 test('registry adapters expose dedicated install facets and native version floors', () => {
-  for (const [id, floor] of [['claude', '2.1.317'], ['codex', '0.166.0']]) {
+  for (const [id, floor] of [['claude', '2.1.317'], ['agy', '1.5.18'], ['codex', '0.166.0']]) {
     const { manifest, install } = adapterOf(id);
     assert.equal(manifest.install.minVersion, floor);
     assert.equal(typeof install.locate, 'function');
     assert.equal(typeof install.refresh, 'function');
   }
+});
+
+test('manifest model, display and install defaults preserve the existing choices', () => {
+  assert.partialDeepStrictEqual(adapterOf('claude').manifest, {
+    shortLabel: 'Claude',
+    install: { npm: '@anthropic-ai/claude-code', page: 'https://code.claude.com/docs/en/setup' },
+    models: {
+      prefix: '', fallback: 'opus', preferred: null, fastDefault: false, fileEfforts: ['adaptive'],
+      catalogAge: { startup: null, dialog: 86400000, manual: 0 }, aliases: ['opus', 'sonnet', 'haiku'],
+    },
+  });
+  assert.partialDeepStrictEqual(adapterOf('codex').manifest, {
+    shortLabel: 'Codex',
+    install: { npm: '@openai/codex', page: 'https://learn.chatgpt.com/docs/codex/cli' },
+    models: {
+      prefix: '', fallback: 'gpt-6.1-sol', preferred: /^gpt-(\d+)(?:\.(\d+))?-sol$/, fastDefault: true, fileEfforts: ['minimal'],
+      catalogAge: { startup: 21600000, dialog: 3600000, manual: 0 }, aliases: [],
+    },
+  });
 });
 
 test('native adapters use the runtime bound to their host', () => {
@@ -169,9 +189,24 @@ test('the first matching model rule preserves existing seat ownership', () => {
   for (const model of ['gpt-6.2-sol', 'third-party-model', 'Claude-opus', '']) assert.equal(agentOfModel(model), 'codex');
 });
 
+test('agentIds lists the registered providers in model matching order', () => {
+  assert.deepEqual(shared.agentIds(), ['claude', 'agy', 'codex']);
+});
+
+test('localModel removes only the matched CLI prefix', () => {
+  const { localModel } = shared;
+  for (const model of ['opus', 'claude-opus-5-5', 'gpt-6.2-sol', 'vendor:custom-model', '']) assert.equal(localModel(model), model);
+  assert.equal(localModel('agy:claude-opus-5-5'), 'claude-opus-5-5');
+  assert.equal(localModel('agy:gemini-4-neon'), 'gemini-4-neon');
+  assert.equal(localModel('agy:agy:gemini-4-neon'), 'agy:gemini-4-neon');
+  assert.equal(shared.canonicalModelId('agy:agy:gemini-4-neon'), 'agy:agy:gemini-4-neon');
+  assert.equal(localModel('vendor:agy:gemini-4-neon'), 'vendor:agy:gemini-4-neon');
+});
+
 test('model defaults preserve effort order and restrict Ultracode to eligible leads', () => {
   for (const [model, agent, efforts, ultracode] of [
     ['fable', 'claude', ['low', 'medium', 'high', 'xhigh', 'max'], true],
+    ['gemini-4-neon', 'agy', ['low', 'medium', 'high', 'xhigh', 'default'], false],
     ['third-party-model', 'codex', ['low', 'medium', 'high', 'xhigh'], false],
   ]) {
     const adapter = adapterOfModel(model);
@@ -181,6 +216,107 @@ test('model defaults preserve effort order and restrict Ultracode to eligible le
     assert.equal(allowsUltracode(model, true), ultracode);
     assert.equal(allowsUltracode(model, false), false);
   }
+});
+
+test('Antigravity owns Gemini IDs and uses its prefix for models another CLI would own', () => {
+  const { agentOfModel: carriedAgent } = require('../electron/features/cli-adapters/workers.cjs');
+  for (const [model, expected] of [
+    ['agy:claude-opus-5-5', 'agy'], ['claude-opus-5-5', 'claude'],
+    ['agy:gpt-oss-120b-medium', 'agy'], ['gpt-oss-120b-medium', 'codex'],
+    ['gemini-4-neon', 'agy'], ['agy:gemini-4-neon', 'agy'], ['gemini-pro-orchestrator', 'agy'],
+  ]) {
+    assert.equal(agentOfModel(model), expected);
+    assert.equal(carriedAgent(model), expected);
+  }
+  const manifest = shared.adapterOf('agy').manifest;
+  for (const [local, key] of [['gemini-new', 'gemini-new'], ['claude-opus-5-5', 'agy:claude-opus-5-5'],
+    ['gpt-oss-120b-medium', 'agy:gpt-oss-120b-medium'], ['future-model', 'agy:future-model']]) {
+    assert.equal(shared.modelKey(local, manifest), key);
+    assert.equal(shared.canonicalModelId(key), key);
+    assert.equal(shared.canonicalModelId('agy:' + local), key);
+  }
+});
+
+test('Antigravity enables native owner and role capabilities and takes all model choices from ACP', () => {
+  const { manifest, terminal } = adapterOf('agy');
+  assert.partialDeepStrictEqual(manifest, {
+    label: 'Antigravity', shortLabel: 'agy', models: { fallback: null, fastDefault: false, aliases: [] },
+  });
+  assert.equal(manifest.install.npm, undefined);
+  assert.ok(manifest.install.page.startsWith('https://antigravity.google/'));
+  assert.match('1.5.18', manifest.install.versionPattern);
+  assert.equal(terminal.redirect, 'native');
+  for (const key of ['native', 'resume', 'liveModel', 'liveEffort', 'transcript', 'roleTools', 'startupNote', 'messageNote', 'approvals', 'readOnlyRole', 'writableRole']) {
+    assert.deepEqual(support(manifest, key), { ok: true, via: 'api' });
+  }
+  assert.deepEqual(support(manifest, 'ssh.native'), { ok: true, via: 'api' });
+  for (const key of ['terminal', 'ssh.terminal', 'fast', 'ultracode', 'permissionChoice']) {
+    assert.deepEqual(support(manifest, key), { ok: false, reason: UNSUPPORTED[key] });
+  }
+});
+
+test('Antigravity gets its policy, model probe and install state from the ACP adapter', async () => {
+  const runtime = require('../electron/features/agy-acp/adapter.cjs');
+  const { native, nativePolicy, modelProbe, settingsInstall } = adapterOf('agy');
+  assert.equal(native, runtime.native);
+  assert.equal(nativePolicy, runtime.nativePolicy);
+  assert.equal(modelProbe, runtime.modelProbe);
+  assert.equal(typeof modelProbe, 'function');
+  let snapshot = null;
+  const settings = settingsInstall({
+    agy: () => snapshot,
+    refreshAgy: async () => { snapshot = { installed: true, version: '1.5.18', file: '/tools/agy' }; },
+  });
+  assert.equal(settings.peek(), null);
+  await settings.refresh();
+  assert.deepEqual(settings.peek(), { ...snapshot, fileShown: snapshot.file });
+});
+
+test('Antigravity roles use the main-process broker and describe their file scope', () => {
+  const { workerOf, brokerMethods } = require('../electron/features/cli-adapters/workers.cjs');
+  const worker = workerOf('agy');
+  assert.equal(adapterOf('agy').worker, worker);
+  assert.equal(worker.command({}), 'broker');
+  assert.equal(worker.brokerMethod, 'agy-acp.run');
+  assert.ok(brokerMethods.has(worker.brokerMethod));
+  assert.throws(() => worker.resultServer({ command: 'node' }), /require an Agentrix broker connection/);
+  assert.throws(() => worker.cliEnvironment({}), /require an Agentrix broker connection/);
+  assert.deepEqual(worker.roleArgs(true), ['--read-only']);
+  assert.deepEqual(worker.roleArgs(false), []);
+  assert.match(worker.rules({ readOnly: true }), /do not change, create, or delete project files/);
+  assert.match(worker.rules({ allow: ['src/**'] }), /Change only the paths under "Files you may change"/);
+  for (const model of ['gemini-4-neon', 'agy:gemini-4-neon', 'agy:claude-opus-5-5', 'agy:gpt-oss-120b-medium']) {
+    assert.doesNotThrow(() => worker.validate({ model, images: [] }));
+  }
+  for (const model of ['claude-opus-5-5', 'gpt-oss-120b-medium']) {
+    assert.throws(() => worker.validate({ model, images: [] }), /Expected an Antigravity model/);
+  }
+});
+
+test('Antigravity compares the observed model and reports usage without a price', () => {
+  const { worker } = adapterOf('agy');
+  const declared = { model: 'gemini-3.8-flash', effort: 'low', fast: false };
+  assert.equal(worker.routingVerdict({ model: null, effort: 'high' }, declared), 'unverified');
+  assert.equal(worker.routingVerdict({ model: 'gemini-3.8-flash', effort: 'low' }, declared), 'ok');
+  assert.equal(worker.routingVerdict({ model: 'gemini-3.8-flash', effort: 'low' }, { ...declared, model: 'agy:gemini-3.8-flash' }), 'ok');
+  assert.equal(worker.routingVerdict({ model: 'gemini-3.8-flash', effort: 'high' }, declared), 'mismatch');
+  assert.equal(worker.routingVerdict({ model: 'gemini-4-neon' }, declared), 'mismatch');
+  assert.equal(worker.routingVerdict({ model: 'claude-opus-5-5' }, { ...declared, model: 'agy:claude-opus-5-5' }), 'mismatch');
+  assert.deepEqual(worker.nativeUsage({ input: 4274, cachedInput: 15976, cacheWrite: 0, output: 66 }),
+    { usage: { inputTokens: 4274, cachedTokens: 15976, outputTokens: 66 }, cost: null });
+  assert.deepEqual(worker.nativeUsage({ input: null, cachedInput: null, cacheWrite: 0, output: null }),
+    { usage: { inputTokens: null, cachedTokens: null, outputTokens: null }, cost: null });
+});
+
+test('Antigravity sends role tools and notes in ACP shapes', () => {
+  const { roleTools, notes } = adapterOf('agy');
+  const server = { command: 'node', args: ['dispatch.cjs', 'mcp-role'], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  assert.deepEqual(roleTools.config(server), {
+    mcpServers: [{ name: 'agentrix_role', command: server.command, args: server.args, env: [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }] }],
+  });
+  assert.deepEqual(notes.startup('Stay within scope.'), { config: { _meta: { antigravity: { systemPrompt: { append: 'Stay within scope.' } } } } });
+  assert.deepEqual(notes.startup(''), { config: {} });
+  assert.deepEqual(notes.message('Please continue.'), { send: 'Please continue.' });
 });
 
 test('support reports the implementation channel or an explicit unsupported reason', () => {

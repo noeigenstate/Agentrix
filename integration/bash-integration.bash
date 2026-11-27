@@ -1,6 +1,6 @@
 # Agentrix shell integration for Bash, a local terminal on Linux and macOS.
 # Bash starts with --rcfile naming this file. Linux keeps ~/.bashrc; macOS reads the login files here because
-# --login would ignore --rcfile. Then add prompt reports and the codex and claude wrappers. No user file is modified.
+# --login would ignore --rcfile. Then add prompt reports and the agent wrappers. No user file is modified.
 
 # Keep shell integration private; the bootstrap path is inherited by dispatch helpers.
 __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_key=$AGENTRIX_SESSION_KEY
@@ -61,10 +61,10 @@ __pg_json() {
   REPLY="\"$value\""
 }
 
-# An alias for codex or claude from the user's start-up files (alias claude=~/.claude/local/claude, or
+# An agent alias from the user's start-up files (alias claude=~/.claude/local/claude, or
 # alias claude='claude --model opus') would bypass the wrappers below. Each wrapper runs the alias's words instead.
-__pg_alias_codex= __pg_alias_claude=
-for __pg_name in codex claude; do
+__pg_alias_codex= __pg_alias_claude= __pg_alias_agy=
+for __pg_name in codex claude agy; do
   if __pg_alias=$(builtin alias "$__pg_name" 2>/dev/null); then
     eval "__pg_alias_$__pg_name=${__pg_alias#*=}"
     builtin unalias "$__pg_name"
@@ -72,9 +72,7 @@ for __pg_name in codex claude; do
 done
 unset __pg_name __pg_alias
 
-# The words that run codex or claude ($1), in __pg_words; fails when neither the alias nor PATH has a program. Without
-# an alias, each is the file Agentrix chose for this terminal (AGENTRIX_CODEX_EXECUTABLE, AGENTRIX_CLAUDE_EXECUTABLE)
-# while it is there.
+# The words that run an agent ($1), in __pg_words. Without an alias, prefer the file Agentrix chose while it exists.
 __pg_program() {
   local PATH=$PATH
   if [[ -n $__pg_shims ]]; then
@@ -82,8 +80,13 @@ __pg_program() {
     while [[ $PATH == *":$__pg_shims:"* ]]; do PATH=${PATH/":$__pg_shims:"/:}; done
     PATH=${PATH#:}; PATH=${PATH%:}
   fi
-  local alias_name=__pg_alias_$1 chosen=AGENTRIX_CODEX_EXECUTABLE file
-  [[ $1 == claude ]] && chosen=AGENTRIX_CLAUDE_EXECUTABLE
+  local alias_name=__pg_alias_$1 chosen file
+  case $1 in
+    codex) chosen=AGENTRIX_CODEX_EXECUTABLE;;
+    claude) chosen=AGENTRIX_CLAUDE_EXECUTABLE;;
+    agy) chosen=AGENTRIX_AGY_EXECUTABLE;;
+    *) return 1;;
+  esac
   __pg_words=()
   __pg_alias_env=()
   if [[ -n ${!alias_name} ]] && eval "__pg_words=(${!alias_name})" 2>/dev/null; then
@@ -134,7 +137,9 @@ __pg_redirect_agent() {
   done
   payload+=']'
   __pg_send agent-started 0 "$agent" '' '' "$payload"
-  printf '%s\n' '已请求在原生模式打开 Codex。'
+  local label=$agent
+  [[ $agent == codex ]] && label=Codex
+  printf '已请求在原生模式打开 %s。\n' "$label"
   return 0
 }
 
@@ -194,6 +199,10 @@ agentrix_agent() {
   local -a __pg_words program __pg_alias_env
   local found=1 mode=conductor route fields
   if __pg_program "$agent"; then program=("${__pg_words[@]}"); else found=0; fi
+  if [[ $agent == agy && $found == 0 ]]; then
+    __pg_launch_error 127 '在 PATH 中找不到 agy' '请安装后重开终端'
+    return 127
+  fi
   [[ -n ${AGENTRIX_BOOTSTRAP-} && "$(__pg_session_mode)" == native ]] && mode=native
   if [[ $agent == claude && $mode == conductor && $__pg_shims_failed == 1 ]]; then
     __pg_launch_error 1 '无法加载角色工具' '请重开终端，若仍失败请重新安装 Agentrix'
@@ -201,11 +210,15 @@ agentrix_agent() {
   fi
   # Without a runnable helper the CLI starts with the user's words alone.
   if [[ ! -x $__pg_node ]]; then
+    if [[ $agent == agy && $# == 0 && ${#program[@]} == 1 ]]; then
+      __pg_launch_error 1 '无法打开 agy 原生会话' '请重开终端后重试'
+      return 1
+    fi
     [[ $found == 1 ]] || { __pg_launch_error 127 "在 PATH 中找不到 $agent" '请安装后重开终端'; return 127; }
     command env ${__pg_alias_env[@]+"${__pg_alias_env[@]}"} "${program[@]}" "$@"; return
   fi
   local code=0
-  fields=$(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_ALIAS="${program[1]-}" ELECTRON_RUN_AS_NODE=1 \
+  fields=$(AGENTRIX_LAUNCH_WIRE=1 AGENTRIX_LAUNCH_ALIAS="${program[1]-}" AGENTRIX_LAUNCH_HAS_ALIAS_ARGUMENT="${program[1]+1}" ELECTRON_RUN_AS_NODE=1 \
     "$__pg_node" "$__pg_intercept" --launch "$agent" classify "$mode" "$@" 2>/dev/null) || code=$?
   if [[ $code != 0 ]]; then
     __pg_launch_error "$code" '无法判断启动方式' '请重开终端后重试'
@@ -283,6 +296,7 @@ __pg_hook_agent() {
 
 codex() { agentrix_agent codex "$@"; }
 claude() { agentrix_agent claude "$@"; }
+agy() { agentrix_agent agy "$@"; }
 
 # Runs first at every prompt and hands the command's exit status on to the user's own prompt commands.
 __pg_precmd() { local code=$?; __pg_send shell-prompt; return $code; }

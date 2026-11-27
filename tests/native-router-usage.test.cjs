@@ -18,6 +18,7 @@ const { createEventStream } = require('../electron/features/native-session/event
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
 const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
+const { agyAccountLimits } = require('../electron/features/agy-acp/usage.cjs');
 
 for (const [agent, config, status, cli, expected] of [
   ['claude', {}, 'no_key', 'ok', ['terminal', 'no_key']],
@@ -200,6 +201,55 @@ test('API records distinguish an empty ledger from zero spend and survive reload
   usage.record('fixture-session', { uuid: 'result', total_cost_usd: 0 });
   assert.equal(usage.summary().apiRecords, true); assert.equal(usage.summary().todayUsdMicros, 0);
   assert.equal(createUsage({ file }).summary().apiRecords, true);
+});
+
+test('focused native usage returns agy quota and records only readable agy windows in the same account scope', async () => {
+  const project = { id: 'p', kind: 'local' }, remote = { id: 'ssh', kind: 'ssh' }, env = { HOME: 'fixture' };
+  const at = Date.now(), resetsAt = at + 3600000;
+  const claude = { at, limits: [{ minutes: 300, percent: 12, resetsAt }] };
+  const codex = { at, limits: [{ minutes: 10080, percent: 34, resetsAt }], resets: { left: 2 } };
+  const readable = { at, limits: [
+    { id: '3p', minutes: 300, percent: 75, resetsAt }, { id: 'gemini', minutes: 300, percent: 0, resetsAt },
+    { id: '3p', minutes: 10080, percent: 60, resetsAt }, { id: 'gemini', minutes: 10080, percent: 45, resetsAt },
+  ], connection: { kind: 'subscription', observedAt: at } };
+  const unavailable = { at: at + 1, limits: [], connection: { kind: 'unknown', observedAt: at + 1 } };
+  let agy = readable, focused;
+  const records = [];
+  const deps = { shellPathReady: Promise.resolve(), store: { projects: [project, remote] },
+    checkClaude: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex', nativeEnvironment: () => env,
+    projectAccounts: {
+      snapshot: id => id === project.id ? { claude, codex } : null,
+      focusedLimits: id => id === focused ? { agy: agyAccountLimits(agy) } : {},
+      read: async (entry, options) => {
+        assert.equal(entry, project);
+        assert.equal(options.env, env);
+        focused = entry.id;
+        return { claude, codex, agy };
+      },
+    },
+    codexAccounts: { interval: 30000 }, localClaudeMeters: () => [], dispatchReading: () => null,
+    dashboard: { quota: (...args) => records.push(args) },
+    quotaScope: (provider, entry, session) => {
+      assert.equal(provider, 'agy'); assert.equal(entry, project); assert.equal(session.usageEnv, env);
+      return 'focused-scope';
+    },
+  };
+  const { readNativeSubscriptionLimits, readNativeUsageInputs } = createHostInputs(deps);
+  deps.readNativeSubscriptionLimits = readNativeSubscriptionLimits;
+  assert.equal(readNativeSubscriptionLimits(project.id).agy, null);
+  const { limits } = await readNativeUsageInputs(project.id);
+  assert.deepEqual(limits.claude, subscriptionLimits(claude, 'claude-account', 120000));
+  assert.deepEqual(limits.codex, subscriptionLimits(codex, 'codex-account', 60000));
+  assert.deepEqual(limits.agy, agyAccountLimits(readable));
+  assert.equal(limits.agy.accountConnection, readable.connection);
+  assert.deepEqual(records, [['agy', readable.limits, 'focused-scope']]);
+  assert.equal((await readNativeUsageInputs(remote.id)).limits.agy, null);
+
+  agy = unavailable;
+  const refreshed = (await readNativeUsageInputs(project.id)).limits.agy;
+  assert.equal(refreshed.state, 'unavailable');
+  assert.deepEqual(refreshed.limitsById, {});
+  assert.equal(records.length, 1);
 });
 
 // The checks before the account read can take long (a cold CLI, a slow PATH); the order is driven by the check's own promise.

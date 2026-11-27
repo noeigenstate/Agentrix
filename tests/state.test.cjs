@@ -82,6 +82,22 @@ test('extra terminals keep independent recovery identities and closing one prese
   assert.equal(new WorkspaceStore(file).projects[0].primaryTerminalClosed, false);
 });
 
+test('agy quota eligibility stays with the project after its agy terminal is closed', t => {
+  const { directory, file, store, project } = fixture(t);
+  const otherFolder = path.join(directory, 'other');
+  fs.mkdirSync(otherFolder);
+  const other = store.add(otherFolder).project;
+  const terminal = store.addTerminal(project.id);
+  store.setRestore(terminal, { terminal: true, agent: 'agy' });
+  assert.equal(project.quotaAgents, undefined);
+  store.setRestore(terminal, { threadId: '00000000-0000-4000-8000-000000000004' });
+  store.removeTerminal(terminal);
+  const reopened = new WorkspaceStore(file);
+  assert.equal(reopened.findTerminal(terminal), null);
+  assert.deepEqual(reopened.projects.find(item => item.id === project.id).quotaAgents, ['agy']);
+  assert.equal(reopened.projects.find(item => item.id === other.id).quotaAgents, undefined);
+});
+
 test('turn completion is unread, deduplicated, and survives restarting the app', t => {
   const { store, project, file } = fixture(t);
   store.expectCompletion(project.id);
@@ -367,7 +383,7 @@ test('settings reject invalid layout and font values', () => {
     focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null,
     terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', rolePermissionsNoticeSeen: false, shell: 'powershell', notifications: true, sound: false,
     closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true,
-    voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full', claudeBackgroundTasks: false,
+    voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full', agyPermissions: 'full', claudeBackgroundTasks: false,
   });
   // The spoken notice is gone: its old settings are dropped.
   const old = cleanSettings({ announce: true, announcePhrase: '{项目}', summary: { mode: 'local' } });
@@ -494,6 +510,8 @@ test('each terminal remembers whether Claude Code or Codex ran, and an unfinishe
   let reopened = new WorkspaceStore(file);
   assert.deepEqual(reopened.findTerminal(split).record.restore, { terminal: true, codex: true, cwd: project.path, threadId: thread, agent: 'claude', interrupted: true });
   assert.equal(reopened.findTerminal(project.id).record.restore.agent, undefined, 'the other terminal still restores Codex');
+  reopened.setRestore(split, { agent: 'unregistered' });
+  assert.equal(reopened.findTerminal(split).record.restore.agent, 'claude', 'an unknown patch preserves a recorded agent');
   reopened.setRestore(split, { interrupted: false });
   assert.equal(new WorkspaceStore(file).findTerminal(split).record.restore.interrupted, undefined, 'a finished turn is not continued');
   reopened.setRestore(split, { agent: 'codex', threadId: null, interrupted: false });
@@ -501,6 +519,8 @@ test('each terminal remembers whether Claude Code or Codex ran, and an unfinishe
   assert.deepEqual(reopened.findTerminal(split).record.restore, { terminal: true, codex: true, cwd: project.path });
   reopened.setRestore(split, { agent: 'other', interrupted: 'yes' });
   assert.equal(new WorkspaceStore(file).findTerminal(split).record.restore.agent, undefined, 'unknown agents are ignored');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(Object.hasOwn(saved.projects[0].terminals[0].restore, 'agent'), false, 'Codex keeps the legacy on-disk encoding');
 });
 
 test('glass transparency is optional, validated and preserved across material changes and restart', t => {

@@ -1,5 +1,9 @@
+const os = require('node:os');
+const path = require('node:path');
 const { readClaudeAccount } = require('../agents/claude-account-usage.cjs');
 const { readCodexAccount } = require('../agents/codex-account-usage.cjs');
+const { readAgyAccount, agyAccountLimits, isUsageGroup, QUOTA_INTERVAL } = require('../agy-acp/usage.cjs');
+const { localModel } = require('./registry.mjs');
 
 const claude = {
   accountReader: readClaudeAccount,
@@ -23,6 +27,7 @@ const codex = {
   terminal: {
     bind: (session, project, event, { bindCodexAccount }) => bindCodexAccount(project, session, event),
     bindLocal: ({ codexHome }, { loadCodexProviders }) => loadCodexProviders(codexHome),
+    refreshAtRollover: session => session.usageAccount?.refresh(),
     refreshOnRecord(session, record) {
       if (record?.type === 'session_meta') session.bindUsageAccount?.();
       if (session.usageHistory || record?.type !== 'event_msg') return;
@@ -35,4 +40,17 @@ const codex = {
   defaultHome: '.codex',
 };
 
-module.exports = { claude, codex };
+const agy = {
+  accountReader: readAgyAccount,
+  focusedLimits: agyAccountLimits,
+  focusedInterval: QUOTA_INTERVAL,
+  quotaGroupId: id => isUsageGroup(id) ? id : null,
+  quotaGroupOfModel(model) {
+    const id = localModel(model);
+    return id === 'unreported' ? null : id.startsWith('gemini-') ? 'gemini' : '3p';
+  },
+  dashboardSession: session => session.reportedThreadId,
+  quotaHome: (_session, env) => path.resolve(env.USERPROFILE || env.HOME || os.homedir(), '.gemini'),
+};
+
+module.exports = { claude, codex, agy };

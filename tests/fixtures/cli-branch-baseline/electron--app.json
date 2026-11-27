@@ -2,5 +2,5 @@
   "electron/app/process-lifecycle.cjs": 1,
   "electron/app/session-presentation.cjs": 1,
   "electron/app/terminal-lifecycle.cjs": 4,
-  "electron/features/agents/usage-host.cjs": 5
+  "electron/features/agents/usage-host.cjs": 4
 }

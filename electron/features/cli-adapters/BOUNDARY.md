@@ -4,6 +4,13 @@ Owns the CLI registry and capability manifests shared by main and the renderer.
 Generic modules get CLI differences through the registry and `support()`.
 Regenerate the Node 20.3 worker manifest projection with `node tests/cli-adapters.test.cjs --write-worker-manifests` when its source fields change.
 The first matching model rule wins and the final rule matches every model.
+`localModel(model)` strips one leading `models.prefix` using the same manifest match as `agentOfModel(model)`.
+`modelKey(model, manifest)` prefixes a CLI model ID if it needs the prefix to preserve its provider.
+`canonicalModelId(model)` reads an Agentrix model ID and returns its spelling for saved seats and catalog rows.
+Manifest `fileEfforts` extends `efforts` for role files.
+Manifest `catalogAge` gives cache ages in milliseconds for `startup`, `dialog` and `manual`. A null age skips that refresh.
+Manifest `fallback` is null when the provider's model list comes entirely from its runtime.
+Manifest `install.commands` gives display-only official commands when installation is done outside Agentrix.
 Installer version floors describe the native runtime. Each capability's `via` describes its primary path. Claude's live controls describe the terminal path.
 After the migration, adding a CLI requires only its manifest, adapter and screen files, with the entries wired into their registries.
 Keep CLI names out of generic control flow, including regex tests, string tricks and lookup tables that evade the branch guard.
@@ -17,16 +24,16 @@ Git approval checks recognize explicit subcommands. The final snapshot can detec
 - `electron/features/cli-adapters/**`
 
 ## Interface
-- `adapters` (`electron/features/cli-adapters/registry.cjs`) - main registry for install and runtime facets. `settingsInstall` binds locator snapshots and refreshes.
-- `terminalAdapters` (`electron/features/cli-adapters/terminal.cjs`) — launch argv, resume lines, note delivery and role server config. Also exports `claudeWire` for the SSH worker's Python 3.6 path.
-- `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared declarations for both processes. `agentOfModel(model)` uses the first matching manifest in either entry point.
-- `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version older than the capability's verified range is refused; a newer one is tried and flagged `unverified`.
+- `adapters` (`electron/features/cli-adapters/registry.cjs`) — install, runtime and model catalog facets. `settingsInstall` binds locator snapshots and refreshes, including `agy` and `refreshAgy` for Antigravity.
+- `terminalAdapters` (`electron/features/cli-adapters/terminal.cjs`) — launch argv, resume lines, note delivery and role server config. Antigravity supplies ACP `mcpServers`, `_meta` and `send` text.
+- `adapters` (`electron/features/cli-adapters/registry.mjs`) — shared manifests and model matching. `agentIds()` returns provider IDs in registry order. `localModel(model)` returns the CLI's model ID.
+- `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key. Older versions are refused; newer ones are tried and flagged `unverified`. `canLead` checks local session capability.
 - `events` (`electron/features/cli-adapters/registry.cjs`) - optional settings builder and hook signal decoder.
 - `transcript` (`electron/features/cli-adapters/registry.cjs`) - resolves, validates and interprets local session records.
-- `usage` (`electron/features/cli-adapters/usage.cjs`) — reads account limits, selects usage record handling and supplies dashboard identity and quota scope.
+- `usage` (`electron/features/cli-adapters/usage.cjs`) — reads account limits, selects usage record handling and supplies dashboard identity and quota scope. `focusedLimits` projects a focused account read into the native usage payload.
 - `bindNativeAdapters` (`electron/features/cli-adapters/registry.cjs`) — binds each host's runtime as `native.create(spec, emit)`. The registered facet loads the factory with `native.load()`.
 
-- `workerOf` (`electron/features/cli-adapters/workers.cjs`) — the CJS worker registry for dispatch, including CLI argv, normalized output, permission and standing rules.
+- `workerOf` (`electron/features/cli-adapters/workers.cjs`) — the CJS worker registry for CLI argv, output and standing rules. Antigravity uses `agy-acp.run` and its routing verdict requires the observed model.
 - `workerRefusal` (`electron/features/cli-adapters/workers.cjs`) — shared command and file scope decisions for worker approvals. The Claude worker policy also exposes it with the role's access level bound.
 - `isolatedRoot` (`electron/features/cli-adapters/worker-git.cjs`) — resolves the linked Git worktree root for dispatch scope restoration.
 - `worker-manifests` (`electron/features/cli-adapters/manifests/worker.cjs`) — the carried install floors and ordered model matches projected from the shared manifests.
@@ -36,8 +43,8 @@ Git approval checks recognize explicit subcommands. The final snapshot can detec
 - `electron/features/agents/dispatch-events.cjs` (structured launch field table)
 - `electron/features/claude-runtime/adapter.cjs` (Claude Code install, hooks and transcript)
 - `electron/features/codex-runtime/adapter.cjs` (Codex install and transcript)
-- `electron/features/claude-sdk/adapter.cjs` (Claude native runtime and policy)
-- `electron/features/codex-app-server/adapter.cjs` (Codex native runtime and policy)
+- `electron/features/claude-sdk/adapter.cjs`, `electron/features/codex-app-server/adapter.cjs` (native runtime and policy)
+- `electron/features/agy-acp/adapter.cjs`, `electron/features/agy-acp/usage.cjs` (Antigravity runtime, installation, models and quota)
 - `electron/features/agents/call-seat.cjs` (Claude lead seat fallback from the bootstrap sidecar)
 - `electron/features/agents/claude-account-usage.cjs` (read-only account reader)
 - `electron/features/agents/codex-account-usage.cjs` (read-only account reader)

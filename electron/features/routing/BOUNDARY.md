@@ -22,7 +22,7 @@ validates and renders the shipped guide in `resources/routing/model-routing.md`.
 
 ## May import
 - `electron/features/agents/call-seat.cjs` (the Agent tab's seat description and live seat map)
-- `electron/features/cli-adapters/registry.mjs` (shared model ownership)
+- `electron/features/cli-adapters/registry.mjs` and `electron/features/cli-adapters/capabilities.mjs` (model ownership and lead eligibility)
 - `electron/atomic-write.cjs` (model catalog persistence)
 - `electron/shared/front-matter.cjs` (guide metadata)
 - `electron/codex-activity.cjs` (project routing file monitoring)

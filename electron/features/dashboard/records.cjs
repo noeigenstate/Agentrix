@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 const { runRecord, gradeRecord, quotaWindows, quotaScope } = require('./records-values.cjs');
 const { readJsonl, FILE_LIMIT, LINE_LIMIT, READ_LIMIT } = require('./jsonl.cjs');
 
@@ -48,8 +49,9 @@ class DashboardRecords {
   notify(kind) { for (const listener of this.listeners) { try { listener(kind); } catch {} } }
   grade(grade, project, session) { void this.append('grades', gradeRecord(grade, project, session)); }
   quota(provider, limits, scope = quotaScope(provider, { kind: 'local' }, {})) {
-    if (this.quitAttempted || !['claude', 'codex'].includes(provider)) return;
-    const windows = quotaWindows(limits);
+    const adapter = adapterOf(provider);
+    if (this.quitAttempted || !adapter) return;
+    const windows = quotaWindows(limits, adapter.usage?.quotaGroupId);
     if (!windows.length) return;
     const key = `${provider}:${scope}`, signature = JSON.stringify(windows);
     const previous = this.quotas.get(key) || { provider, scope };

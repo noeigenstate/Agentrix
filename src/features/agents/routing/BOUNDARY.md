@@ -19,14 +19,17 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 
 ## May import
 
+- `electron/features/cli-adapters/registry.mjs` and `electron/features/cli-adapters/capabilities.mjs` (registered providers, model ownership and capabilities)
+- `src/shared/agent-events.ts` (provider ID type)
+- `src/shared/agent-label.ts` (provider short names)
 - `src/features/cli-screens/index.ts`
 - `src/features/terminal/terminal-screen.ts`
+- `src/features/native-session/native-bridge.ts` (remote model catalog)
 - `electron/features/routing/seat-rules.mjs` (shared seat validation and model rules)
 - `electron/features/routing/role-rules.mjs` (shared role validation, locks and ID generation)
-- `src/features/agents/subagent-splits.ts` (the `CallRow` type)
+- `src/features/agents/AgentBrandIcon.ts` (provider marks) and `src/features/agents/subagent-splits.ts` (the `CallRow` type)
 - `src/shared/i18n.ts`
-- `src/shared/lead-routing-notices.ts` (formats the same fast-mode refusal as automatic lead switching)
-- `src/shared/routing-command.ts`
+- `src/shared/*routing*.ts` (routing commands and automatic lead-switch notices)
 - `src/shared/types.ts`
 
 ## Invariants

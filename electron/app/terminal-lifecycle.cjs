@@ -497,6 +497,12 @@ function setTerminalExecutables(deps, project, env) {
   // npm's environment for the CLI's own runs).
   const codexPath = project.kind !== 'ssh' && deps.codexLocator.peek()?.path;
   if (codexPath) env.AGENTRIX_CODEX_EXECUTABLE = codexPath;
+  const parentEnv = (deps.process ?? process).env;
+  if (project.kind === 'ssh' || (parentEnv.AGENTRIX_DATA_DIR && parentEnv.AGENTRIX_TEST_AGENTS !== '1')) return;
+  for (const { manifest: { id: agent }, install } of deps.adapters?.() ?? []) {
+    const executable = install.terminalExecutable?.(env);
+    if (executable) env[`AGENTRIX_${agent.toUpperCase()}_EXECUTABLE`] = executable;
+  }
 }
 
 function createTerminalLifecycle(deps) {

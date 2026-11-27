@@ -5,7 +5,8 @@ const { isDeepStrictEqual } = require('node:util');
 const { monitorActivity } = require('../../codex-activity.cjs');
 const { guideMetadata } = require('./guide-format.cjs');
 const modelSeats = require('./model-seats.cjs');
-const { agentOfModel, allowsUltracode } = require('./seat-rules.mjs');
+const { adapterOf, agentIds, localModel } = require('../cli-adapters/registry.mjs');
+const { adapterOfModel, agentOfModel, allowsUltracode } = require('./seat-rules.mjs');
 const { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 const { readRouting, writeRouting, routingState, reviewFile, routingWatch } = require('./project-routing.cjs');
 const { renderRoutingGuide, modelWords } = require('./guide-render.cjs');
@@ -32,6 +33,13 @@ function launchSeatMap(map, catalog) {
     ...choice, agentModel: choice.model === 'fable' ? 'fable'
       : choice.model.includes('[') ? null : modelSeats.agentAlias(choice.model, catalog || []),
   }]));
+}
+
+function leadForHost({ effective, installed, catalog, lead, leads }, agent, remote) {
+  const terminal = remote && adapterOf(agent)?.manifest.supports['ssh.terminal'];
+  // The SSH terminal resolves its executable on the remote host.
+  if (terminal && !terminal.unsupported) return modelSeats.leadOptions(effective, agent, { ...installed, [agent]: true }, catalog, lead);
+  return leads[agent];
 }
 
 const routingFailure = (code, error = {}) => ({
@@ -73,7 +81,7 @@ function migrateOptions(file, report) {
     const old = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'skills.json'), 'utf8'))?.['builtin:model-routing'];
     if (!old || typeof old !== 'object' || Array.isArray(old)) return {};
     const options = {};
-    for (const key of ['routing', 'seatDefaultModels', 'seatMigrationNotice', 'team', 'seats']) {
+    for (const key of ['routing', 'seatDefaultModels', 'team']) {
       if (Object.hasOwn(old, key)) options[key] = old[key];
     }
     stripLegacyOperations(options.routing);
@@ -122,10 +130,8 @@ class RoutingStore {
 
   migrateTeams() {
     const entry = this.entry;
-    let options = this.options;
-    if (!entry?.seats?.length || options.routing) return;
-    if (options.team?.version !== 2 && (options.seats || options.seatDefaultModels)) options = this.migrateLegacySeats(entry, options);
-    const { team, ...rest } = options;
+    if (!entry?.seats?.length || this.options.routing) return;
+    const { team, ...rest } = this.options;
     if (!team) return;
     const roles = modelSeats.cleanStoredSeats(team?.global, entry.seats);
     const template = { roles };
@@ -136,21 +142,6 @@ class RoutingStore {
       return [[id, { roles: { ...roles, ...projectRoles } }]];
     }));
     this.options = { ...rest, routing: { template, local, trust: {} } };
-  }
-
-  migrateLegacySeats(entry, options) {
-    const legacy = options.seats || {}, global = modelSeats.migrateSeats(legacy.global);
-    const notices = global.notice ? [global.notice] : [];
-    const projects = Object.fromEntries(Object.entries(legacy.projects || {}).flatMap(([id, map]) => {
-      const project = this.getProjects().find(project => project.id === id);
-      if (!project) return [];
-      const migrated = modelSeats.migrateSeats(map);
-      if (migrated.notice) notices.push(project.name + ': ' + migrated.notice);
-      return [[id, migrated.map]];
-    }));
-    return { ...options, team: { version: 2, global: global.map, projects },
-      seatDefaultModels: modelSeats.migrateDefaultModels(options.seatDefaultModels, entry.seats),
-      ...(notices.length ? { seatMigrationNotice: notices.join('\n') } : {}) };
   }
 
   pruneProjects() {
@@ -211,29 +202,29 @@ class RoutingStore {
   }
 
   async refreshSeats(projectId = null, terminalId = null, reason = 'manual') {
-    await this.modelCatalog.refresh(reason);
+    await this.modelCatalog.refresh(reason, { waitForBackground: false });
     const info = this.seatsInfo(projectId, terminalId, true);
     if (!info) return null;
-    const options = this.options, { seatMigrationNotice: migrated, seatDefaultModels: prior = {} } = options;
+    const options = this.options, { seatDefaultModels: prior = {} } = options;
     const next = {}, moved = [];
     for (const [id, seat] of Object.entries(info.defaults)) {
       next[id] = seat.model;
-      const oldSolDefault = options.seatDefaultModels === undefined && /^gpt-\d+(?:\.\d+)?-sol$/.test(seat.model);
-      const from = prior[id] || (oldSolDefault ? 'gpt-6.1-sol' : seat.model);
+      const { fallback, preferred } = adapterOfModel(seat.model).manifest.models;
+      const firstRefresh = options.seatDefaultModels === undefined && preferred?.test(localModel(seat.model));
+      const from = prior[id] || (firstRefresh ? fallback : seat.model);
       if (from !== seat.model) moved.push({ seat: id, from, to: seat.model });
     }
-    if (migrated || JSON.stringify(prior) !== JSON.stringify(next)) {
+    if (JSON.stringify(prior) !== JSON.stringify(next)) {
       this.options = { ...options, seatDefaultModels: next };
-      delete this.options.seatMigrationNotice;
       this.persistOptions();
     }
-    return { ...info, ...(moved.length ? { defaultsMoved: moved } : {}), ...(migrated ? { migrated } : {}) };
+    return { ...info, ...(moved.length ? { defaultsMoved: moved } : {}) };
   }
 
   routingContext() {
     const entry = this.entry;
     if (!entry?.seats?.length) return null;
-    const agents = this.getAgents(), installed = { claude: !!agents.claude?.installed, codex: !!agents.codex?.installed };
+    const agents = this.getAgents(), installed = Object.fromEntries(agentIds().map(id => [id, !!agents[id]?.installed]));
     const catalog = modelSeats.catalog(installed, [...(this.modelCatalog?.rows() || []), ...this.getModels()]);
     const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
     const stored = this.options.routing || {};
@@ -288,15 +279,14 @@ class RoutingStore {
     const leadConfig = modelSeats.leadConfiguration(effective, lead, installed, catalog);
     const runningLead = snapshot?.seatsMap?.[lead];
     const agent = runningLead && agentOfModel(runningLead.model), remote = project?.kind === 'ssh';
-    const restartLead = agent && (remote && agent === 'claude'
-      ? modelSeats.leadOptions(effective, agent, { ...installed, claude: true }, catalog, lead) : leadConfig.leads[agent]);
+    const restartLead = agent && leadForHost({ effective, installed, catalog, lead, leads: leadConfig.leads }, agent, remote);
     const applied = snapshot && binding.appliedRouting;
     const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: restartLead || runningLead } : null;
     return { seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
       ...leadConfig, defaults, template, config, routing: source, conductor: !!(config ?? template).conductor,
       effective, current, currentRoles: current ? applied?.roles ?? roles : null,
       catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
-      catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
+      catalogAt: this.modelCatalog.timestamps(), catalogErrors: this.modelCatalog.errors() };
   }
 
   sessionRoles(projectId, sessionId) {
@@ -443,8 +433,7 @@ class RoutingStore {
 
   launchSnapshot(remote, seats, agent, weights) {
     const leadAgent = agent || seats?.leadAgent;
-    const lead = seats && remote && leadAgent === 'claude'
-      ? modelSeats.leadOptions(seats.effective, leadAgent, { ...seats.installed, claude: true }, seats.catalog, seats.lead) : seats?.leads[leadAgent];
+    const lead = seats && leadForHost(seats, leadAgent, remote);
     const seatsMap = seats ? { ...seats.effective, ...(lead && { [seats.lead]: lead }) } : null;
     const agentSeats = launchSeatMap(seatsMap, seats?.catalog);
     const roles = seats?.roles.slice().sort((a, b) => Number(b.enabled) - Number(a.enabled)) ?? null;

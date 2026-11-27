@@ -259,6 +259,18 @@ function claudeRoutingVerdict(actual, declared) {
   return strictRoutingVerdict(actual, follows ? { ...declared, model: actual.model } : declared);
 }
 
+function agyUsage({ input, cachedInput, cacheWrite, output }) {
+  // ACP counts cached reads separately from uncached input. Cache writes belong to input.
+  const uncached = count(input);
+  return { usage: stdoutUsage(uncached === null ? null : count(uncached + (count(cacheWrite) ?? 0)), cachedInput, output), cost: null };
+}
+
+function agyBrokerRequired() {
+  throw new Error('Antigravity roles require an Agentrix broker connection.');
+}
+
+const readOnlyArgs = readOnly => readOnly ? ['--read-only'] : [];
+
 function workerRules(rules) {
   return options => {
     const { allow = [], files = [], inline, small } = options;
@@ -295,7 +307,7 @@ const claudeWorker = Object.freeze({
   resultServer: roleResultConfig,
   roleArgs: readOnly => ['--permission', claudePermission(readOnly)],
   nativeUsage: claudeUsage, multilineOutput: true, pinEffort: true, cliEnvironment: workerToolEnvironment,
-  brokerMethod: 'claude-sdk.run', terminalAnswers: true, routingVerdict: claudeRoutingVerdict,
+  brokerMethod: 'claude-sdk.run', leadMode: structured => structured ? 'native' : 'terminal', terminalAnswers: true, routingVerdict: claudeRoutingVerdict,
   acceptsRateRecord: (meter, record) => (!record.isSidechain || meter.sidechain) && !!(record.uuid || record.message || meter.pending.size),
   applyRateRecord: (meter, record) => meter.claude(record),
   parseSettings: claudeSettings,
@@ -306,9 +318,9 @@ const claudeWorker = Object.freeze({
   }),
 });
 const codexWorker = Object.freeze({
-  command: () => 'native',
+  command: () => 'native', leadMode: () => 'codex',
   validate: options => { if (options.permission) throw new Error('--permission is only for Claude'); },
-  ...workerOutput(codexRecord), roleArgs: readOnly => readOnly ? ['--read-only'] : [],
+  ...workerOutput(codexRecord), roleArgs: readOnlyArgs,
   nativeUsage: value => ({ usage: codexUsage(value.input, value.cachedInput, value.output), cost: null }),
   routingVerdict: strictRoutingVerdict,
   applyRateRecord: (meter, record) => meter.codex(record),
@@ -316,10 +328,51 @@ const codexWorker = Object.freeze({
   rules: workerRules({ readOnlyScope: 'This task is read-only: change, create and delete no file.' }),
 });
 
-const workers = new Map([['claude', claudeWorker], ['codex', codexWorker]]);
-const workerOf = id => workers.get(id);
-const brokerMethods = new Set([...workers.values()].map(worker => worker.brokerMethod).filter(Boolean));
-const agentOfModel = model => manifests.find(({ models }) => models.match.test(model)).id;
+const agyWorker = Object.freeze({
+  command: () => 'broker', leadMode: structured => structured ? 'native-independent' : null, brokerMethod: 'agy-acp.run', observedRouting: true, recoversDeniedTurn: true,
+  sshRuntime: true,
+  resultServer: agyBrokerRequired, cliEnvironment: agyBrokerRequired,
+  validate: options => {
+    if (agentOfModel(options.model) !== 'agy') throw new Error('Expected an Antigravity model for --model.');
+    if (options.permission || options.fast || options.images.length) throw new Error('Antigravity roles do not support --permission, --fast or --image.');
+  },
+  roleArgs: readOnlyArgs, nativeUsage: agyUsage,
+  routingVerdict: (actual, declared) => {
+    if (!word(actual.model)) return 'unverified';
+    const model = declared && sameWorkerModel(actual.model, declared.model) ? declared.model : actual.model;
+    return strictRoutingVerdict({ model, effort: actual.effort, fast: actual.fast }, declared);
+  },
+  rules: workerRules({
+    readOnlyScope: 'This task is read-only: do not change, create, or delete project files.',
+    commands: 'Agentrix approves tool requests. For a read-only task, run only commands that leave files unchanged.',
+  }),
+});
 
-module.exports = { workerOf, brokerMethods, claudeSettings, codexSettings, claudeFastModeEcho, agentOfModel, defaultWorkerRules: codexWorker.rules, isReadOnly, word, count,
+const workers = new Map([['claude', claudeWorker], ['agy', agyWorker], ['codex', codexWorker]]);
+const workerOf = id => workers.get(id);
+const workerIds = () => [...workers.keys()];
+const brokerMethods = new Set([...workers.values()].map(worker => worker.brokerMethod).filter(Boolean));
+const manifestOfModel = model => manifests.find(({ models }) => models.match.test(model));
+const agentOfModel = model => manifestOfModel(model).id;
+const workerManifest = id => manifests.find(manifest => manifest.id === id);
+const workerLocalModel = model => {
+  const { prefix } = manifestOfModel(model).models;
+  return prefix && model.startsWith(prefix) ? model.slice(prefix.length) : model;
+};
+const workerModelKey = (model, id) => {
+  const { prefix } = workerManifest(id).models;
+  return prefix && (model.startsWith(prefix) || agentOfModel(model) !== id) ? prefix + model : model;
+};
+
+function sameWorkerModel(left, right) {
+  if (left === right) return true;
+  const manifest = manifestOfModel(left), { prefix } = manifest.models;
+  if (!prefix || manifest !== manifestOfModel(right)) return false;
+  const local = model => model.startsWith(prefix) ? model.slice(prefix.length) : model;
+  return local(left) === local(right);
+}
+
+module.exports = { workerOf, workerIds, brokerMethods, claudeSettings, codexSettings, claudeFastModeEcho, agentOfModel, manifestOfModel,
+  workerManifest, workerLocalModel, workerModelKey,
+  defaultWorkerRules: codexWorker.rules, isReadOnly, word, count,
   READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED, workerToolArgs, workerToolEnvironment, forbiddenGit, workerRefusal };

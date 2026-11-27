@@ -8,6 +8,7 @@ const { WorkspaceStore } = require('../electron/state.cjs');
 const { retryFileOperation } = require('../electron/file-retry.cjs');
 const { writeFileAtomic } = require('../electron/atomic-write.cjs');
 const { registerAgentLaunch } = require('../electron/app/application-ipc.cjs');
+const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
 const { createPublicState } = require('../electron/app/public-state.cjs');
 const { registerQuit, cleanStaleRuntimeFolders, startNativeWithWarnings } = require('../electron/app/process-lifecycle.cjs');
 const { createCloseGuards, createTerminalLifecycle, launchAfterPrompt } = require('../electron/app/terminal-lifecycle.cjs');
@@ -45,7 +46,7 @@ test('A2 an already running terminal cannot keep a plan to launch after its next
   const handlers = new Map(), launchPlans = new Map();
   const session = { terminalId: 'fixture', status: 'shell', ready: true, claudeAvailable: true, gate: { afterPrompt: assert.fail } };
   const project = { kind: 'local' };
-  registerAgentLaunch({ findProject: () => project, adapterOf: () => ({}), launchPlans, sessions: new Map([['fixture', session]]),
+  registerAgentLaunch({ findProject: () => project, adapterOf, launchPlans, sessions: new Map([['fixture', session]]),
     launchCommand: () => 'claude', startTerminal: () => assert.fail('The terminal already exists.'), broadcast() {} },
   (name, handler) => handlers.set(name, handler));
   assert.equal(await handlers.get('agent:launch')('fixture', 'claude', 'new'), false);

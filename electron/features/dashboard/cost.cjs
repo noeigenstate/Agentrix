@@ -3,7 +3,8 @@
 
 // A model id as a run reports it: "claude-opus-5-5[1m]", "claude-sonnet-5-5-20260101" and "gpt-6.1-sol" all name a
 // price row without their context-window or date suffix.
-const modelKey = model => String(model ?? '').trim().toLowerCase().replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '');
+const { canonicalModelId } = require('../cli-adapters/registry.mjs');
+const modelKey = model => canonicalModelId(String(model ?? '').trim().toLowerCase().replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, ''));
 
 const count = value => Number.isFinite(value) && value >= 0;
 
