@@ -39,9 +39,11 @@ const RUNS = [
   ['p-site', 3, 'agy', GEMINI, 'docs', 'pass'], ['p-site', 5, 'agy', GEMINI, 'docs', 'pass'],
   ['p-agentrix', 6, 'claude', LONG_MODEL, 'small', 'untested'],
 ];
-// Task counts per model name as the overview writes them, per range and for site alone over 30 days.
-const EXPECTED = { '7 天': { 'Opus 5.5': 3, 'GPT-6.1-Sol': 3, [GEMINI]: 2, [LONG_MODEL]: 1 }, '30 天': { 'Opus 5.5': 6, 'GPT-6.1-Sol': 6, [GEMINI]: 2, [LONG_MODEL]: 1 },
-  全部: { 'Opus 5.5': 6, 'GPT-6.1-Sol': 7, [GEMINI]: 2, [LONG_MODEL]: 1 }, site30: { 'GPT-6.1-Sol': 1, [GEMINI]: 2 } };
+// Task counts per model name as the overview writes them, in its row order, per range and for site alone over 30 days. Over 7 days every
+// model is a small sample, so pass rate alone ranks them: Opus 3/3, Gemini 2/2, Sol 2/3, the long id 0/1. On site, Gemini's 2/2 ties Sol's
+// 1/1 and the larger sample goes first.
+const EXPECTED = { '7 天': { 'Opus 5.5': 3, [GEMINI]: 2, 'GPT-6.1-Sol': 3, [LONG_MODEL]: 1 }, '30 天': { 'Opus 5.5': 6, 'GPT-6.1-Sol': 6, [GEMINI]: 2, [LONG_MODEL]: 1 },
+  全部: { 'Opus 5.5': 6, 'GPT-6.1-Sol': 7, [GEMINI]: 2, [LONG_MODEL]: 1 }, site30: { [GEMINI]: 2, 'GPT-6.1-Sol': 1 } };
 
 const end = outcome => outcome === 'unfinished' ? { reason: 'error', exitCode: 1 }
   : { reason: 'exit', exitCode: 0, ...(outcome === 'untested' ? {} : { checks: { passed: outcome === 'pass' ? 2 : 1, failed: outcome === 'fail' ? 1 : 0, skipped: 0 } }) };
@@ -202,7 +204,12 @@ async function checkTheme(theme, output, results) {
 
     const range = name => dash.getByRole('button', { name, exact: true }).click();
     const counts = async () => Object.fromEntries((await dash.evaluate(readRows)).map(row => [row.title, row.tasks]));
-    const reads = (expected, label) => waitFor(async () => JSON.stringify(await counts()) === JSON.stringify(expected), `${label} reads ${JSON.stringify(expected)}`);
+    // On a timeout the error names what the overview showed last, so a CI log tells a wrong expectation from a page that never changed.
+    const reads = async (expected, label) => {
+      let shown;
+      await waitFor(async () => (shown = JSON.stringify(await counts())) === JSON.stringify(expected), `${label} reads ${JSON.stringify(expected)}`)
+        .catch(error => { throw new Error(`${error.message}; the overview shows ${shown}`); });
+    };
     const bounds = size => app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('dashboard.html')).setContentSize(width, height), size);
     const resize = async (width, height) => {
       await bounds([width, height]);
