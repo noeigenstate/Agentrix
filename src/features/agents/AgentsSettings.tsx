@@ -6,6 +6,7 @@ import { isWindows } from '../../shared/platform';
 import { installerCommand, viaWords } from '../native-session/native-words';
 import { nativeBridge } from '../native-session/native-bridge.ts';
 import { CODEX_VIA_WORDS } from './codex-via-words.ts';
+import { brandIconOf } from './AgentBrandIcon.ts';
 import { codexWords } from '../../shared/reason-words/codex.ts';
 import { adapters } from '../../../electron/features/cli-adapters/registry.mjs';
 import { belowMinimum } from '../../../electron/features/cli-adapters/capabilities.mjs';
@@ -70,6 +71,7 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
   return <>
     <p className="agents-intro">{t('安装与 Agentrix 搭配使用的命令行工具。')}</p>
     {settingsAdapters.map(({ manifest: { id: agent, install: { label, npm, diagnostics, page, commands, minVersion } } }) => {
+      const Brand = brandIconOf(agent);
       const installation = installations?.[agent];
       const manual = !npm && commands?.[isWindows ? 'windows' : 'unix'];
       const showInstructions = manual && agents && !installation?.installed;
@@ -92,7 +94,7 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
         : manual ? [t('已安装'), version ? t('版本 {version}', { version }) : t('版本未知')].join(' · ') : t('已安装');
       const command = split?.incomplete ? installerCommand(isWindows) : npm ? `npm install -g ${npm}` : showInstructions && manual;
       return <div className="agent-setting" key={agent}>
-      <div className="setting-row"><span className="agent-info"><b>{label}</b>
+      <div className="setting-row"><span className="agent-info"><b className="agent-setting-label"><Brand />{label}</b>
         <small role="status" className="agent-status" title={installation?.fileShown}>
           {!agents ? t('正在检测…') : npm && agents.installing === agent ? t('正在安装…') : words?.text ?? (installation?.installed
             ? installedWords : scanning ? t('正在搜索所有本地磁盘…') : t('未安装'))}

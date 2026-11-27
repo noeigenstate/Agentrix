@@ -116,8 +116,9 @@ test('the API usage card only reads the main process, and the parent relay can n
     './terminal-screen.ts': { useScreen: () => null, cliStateFor: () => ({ working: false }) }, './ApiUsage': { ApiUsage }, './RoutingKeyCard': { RoutingKeyCard: () => null }, './SeatsHost': {},
   });
   const terminal = { id: 'terminal', cliActive: true, agent: 'codex' };
-  const nodes = elements(view.render('ActivityPane', { terminal, projectId: 'project' }).result);
-  assert.deepEqual(nodes.find(node => node.type === ApiUsage).props, { terminal, projectId: 'project' });
+  const installations = { agy: { installed: false } };
+  const nodes = elements(view.render('ActivityPane', { terminal, projectId: 'project', installations }).result);
+  assert.deepEqual(nodes.find(node => node.type === ApiUsage).props, { terminal, projectId: 'project', installations });
 });
 
 // The left bar's Agent tab shows the called models without the files module knowing the agents module: the node and the running count come from the agents module and the app only passes them.

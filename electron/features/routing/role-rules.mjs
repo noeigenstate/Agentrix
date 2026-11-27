@@ -20,6 +20,29 @@ export function roleKind(id, authors) {
   return authors.includes(id) ? 'author' : 'member';
 }
 
+/**
+ * The team in its saved order: the lead first, then the roles the order lists, then the rest in their given order.
+ * @template T @param {readonly T[]} items @param {readonly string[] | undefined} order
+ * @param {(item: T) => { id: string, kind: string }} roleOf
+ */
+export function orderRoles(items, order, roleOf) {
+  const rank = new Map((order ?? []).map((id, index) => [id, index]));
+  const place = item => { const role = roleOf(item); return role.kind === 'lead' ? -1 : rank.get(role.id) ?? rank.size; };
+  return [...items].sort((left, right) => place(left) - place(right));
+}
+
+/**
+ * What a routing file keeps of an order: the enabled roles after the lead in their resolved order, or nothing when that
+ * is the shipped order. `roles` are in shipped order.
+ * @param {readonly { id: string, kind: string, enabled: boolean }[]} roles @param {readonly string[] | undefined} order
+ */
+export function compactOrder(roles, order) {
+  if (!order?.length) return undefined;
+  const team = roles.filter(role => role.enabled && role.kind !== 'lead');
+  const ids = orderRoles(team, order, role => role).map(role => role.id);
+  return ids.some((id, index) => id !== team[index].id) ? ids : undefined;
+}
+
 /** @typedef {'enabled' | 'fresh' | 'text' | 'copy'} RoleLock */
 
 /** @param {ReturnType<typeof roleKind>} kind @param {'builtin' | 'library' | 'custom'} source @returns {RoleLock[]} */

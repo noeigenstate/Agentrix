@@ -1,15 +1,14 @@
 # Boundary: Dashboard window page
 
-The page of the model dashboard window (`dashboard.html`, loaded by `electron/features/dashboard` as `agentrix://app/dashboard.html`): the model evaluation
-and collaboration report pages, their tables and charts, and the suggestion buttons. It talks only to `window.agentrixDashboard`, whose shapes are the
-contract in `src/shared/dashboard-types.ts`; every number there may be null and the page shows that as a dash, never as 0.
+The page of the model dashboard window (`dashboard.html`, loaded by `electron/features/dashboard` as `agentrix://app/dashboard.html`): one page, no tabs,
+with the reliability overview, the reliability trend and the model × task kind table, filtered by project and time range. It talks only to
+`window.agentrixDashboard`, whose shapes are the contract in `src/shared/dashboard-types.ts`.
 
-Model cells are native buttons. They open one filtered task list beneath the comparison table; closing the list returns
-focus to its model button. Task titles and project names wrap, while the labelled scroll region keeps the title column in
-view; no table pins a last column, which would cover cells while it overflows.
+Outcomes take the semantic tokens only (passed `--success`, failed `--danger`, untested and unfinished neutral grey), and each also has its own
+swatch shape and its words. A pass is the role's own check, and the page says so under the overview.
 
 One named exception to "the interface uses only theme tokens": the six model colours (`--m-0..5` in `dashboard.css`, a pair of sets for dark and light). They are
-content, not interface; a model is also told apart by its shape and its name in the key, so colour is never the only cue.
+content, not interface; a model is also told apart by its shape and its name, so colour is never the only cue.
 
 ## Owns
 - `src/features/dashboard/**`
@@ -18,8 +17,8 @@ content, not interface; a model is also told apart by its shape and its name in 
 ## Interface
 - `Dashboard` (`src/features/dashboard/Dashboard.tsx`) — the page for a bridge; the file also exports DashboardView, the same page from a summary
 - `createDashboardStore` (`src/features/dashboard/dashboard-store.ts`) — the query, summary and appearance the page holds, read through a bridge
-- `modelLabel` (`src/features/dashboard/format.ts`) — how numbers, models, task kinds and weights are written; the file also exports percent and duration
-- `modelLooks` (`src/features/dashboard/chart-math.ts`) — the one colour and shape each model has on the whole page, and the arithmetic of the plots
+- `modelTitle` (`src/features/dashboard/format.ts`) — how models, task kinds, ranges and rates are written; models through the shared naming
+- `modelLooks` (`src/features/dashboard/chart-math.ts`) — the one colour and shape each model has on the whole page, and the arithmetic of the bars, trend and kind rows
 - `AppMenu` (`src/features/titlebar/AppMenu.tsx`) — the main window's app menu, including the entries that call openDashboard and openLab
 
 ## May import
@@ -27,16 +26,16 @@ content, not interface; a model is also told apart by its shape and its name in 
 - `src/features/shortcuts/shortcuts.ts`
 
 ## Invariants
-- A number the records do not support reads as a dash, never as 0, and an unpriced run is counted as unpriced rather than free — a made-up zero would pass for a measured one — test: `tests/dashboard-ui.test.cjs` › "numbers the records do not support read as a dash, never as 0"
+- The page is one page of three charts with only the project and time-range filters — the dashboard answers one question — test: `tests/dashboard-ui.test.cjs` › "one page with three charts top to bottom and only the project and time-range filters"
+- A small sample sits last under its caption and reads weaker — two tasks at 100% must not read as the most reliable model — test: `tests/dashboard-ui.test.cjs` › "a small sample comes last under a caption, reads weaker and is never ranked above enough tasks"
+- Without tasks every chart says so in one sentence and draws no axes or tables — test: `tests/dashboard-ui.test.cjs` › "without tasks every chart says so in one sentence and draws no axes or tables"
 - The newest answer wins: a slow answer to an earlier query never replaces a later one — the numbers on screen must match the filters shown — test: `tests/dashboard-ui.test.cjs` › "a slow answer to an earlier query never replaces the answer to a later one"
-- Adopting, dismissing or reopening a suggestion goes through decide with its id, the state and the current query, and the page shows the summary returned — nothing changes on the page before the main process has recorded it — test: `tests/dashboard-ui.test.cjs` › "采纳 / 不采纳 / 撤销 call decide with the suggestion id and the state they mean, and the status line answers"
 - The page reads only the dashboard bridge and imports only `src/shared` — the dashboard window has no main preload and the page must not depend on it — test: `tests/dashboard-ui.test.cjs` › "the page reads only the dashboard bridge and never the main window’s"
-- Every model keeps one colour and one shape across the whole page, whichever models a filter leaves, and no two models share both — a model must be the same one in every chart and table — test: `tests/dashboard-ui.test.cjs` › "every model keeps one colour and one shape for the whole page, whichever models are shown"
-- Every scrolling table sits in a labelled region the keyboard can focus — a wide table must stay reachable without a pointer — test: `tests/dashboard-ui.test.cjs` › "every scrolling table sits in a labelled, keyboard-focusable region"
-- The stylesheet keeps the product scale (spacing 2/4/8/12/16/24/32, sizes 48/16/14/13/12, weights 400/600, three radii) and takes every colour from the theme tokens apart from the chart series — the page must read as one product with the app — test: `tests/dashboard-ui.test.cjs` › "the dashboard stylesheet keeps the product scale: spacing, type, radii, controls, and tokens for every colour but the chart series"
-- `dashboard.html` permits only its own scripts, styles, images and fonts, inline styles and the development socket; media and embedded pages are blocked and the build lists both pages — the dashboard has no external image or preview access — test: `tests/dashboard-ui.test.cjs` › "the dashboard CSP allows its own assets and dev socket without external images or embedded pages"
+- Every model keeps one colour and one shape across the whole page, whichever models a filter leaves, and no two models share both — test: `tests/dashboard-ui.test.cjs` › "every model keeps one colour and one shape for the whole page, whichever models are shown"
+- The stylesheet keeps the product scale and takes every colour from the theme tokens apart from the model series — the page must read as one product with the app — test: `tests/dashboard-ui.test.cjs` › "the dashboard stylesheet keeps the product scale and takes every colour from the theme tokens but the model series"
+- `dashboard.html` permits only its own scripts, styles, images and fonts, inline styles and the development socket — test: `tests/dashboard-ui.test.cjs` › "the dashboard CSP allows its own assets and dev socket without external images or embedded pages"
 
 ## Not ours
-- The window, its IPC, the summary, suggestions and decisions — Dashboard records (`electron/features/dashboard`)
+- The window, its IPC and the summary — Dashboard records (`electron/features/dashboard`)
 - The contract between the page and the main process — `src/shared/dashboard-types.ts` (changed only through the lead)
 - The theme tokens, the shared buttons, title bar and Select — `src/shared`

@@ -8,7 +8,6 @@ const os = require('node:os');
 const { createDashboardWindow } = require('../electron/features/dashboard/window.cjs');
 const { createDashboard } = require('../electron/features/dashboard/index.cjs');
 const { DashboardRecords } = require('../electron/features/dashboard/records.cjs');
-const { routingNote } = require('../electron/features/dashboard/decisions.cjs');
 
 class Contents extends EventEmitter {
   constructor(url = 'agentrix://app/index.html') { super(); this.mainFrame = { url }; this.zoom = 1; this.messages = []; }
@@ -59,13 +58,12 @@ async function lab(t, extra = {}) {
   const created = [], main = new FakeWindow(), ipcMain = new FakeIpc();
   const settings = { theme: 'dark', language: 'zh', uiZoom: 100 };
   const records = new DashboardRecords(directory, { now: () => 9000 });
-  const journals = { starts: 0, stops: 0, history: [], start() { this.starts++; }, stop() { this.stops++; }, sync() {}, async read() { return this.history; } };
   const dashboard = createDashboard({ userData: directory, getProjects: () => [{ id: 'p', name: 'Project', kind: 'local', path: directory }],
     getSettings: () => settings, getMainWindow: () => main, BrowserWindow: class extends FakeWindow {
       constructor(options) { super(options); created.push(this); }
-    }, ipcMain, records, journals, platform: 'win32', now: () => 10000, ...extra });
+    }, ipcMain, records, platform: 'win32', now: () => 10000, ...extra });
   t.after(async () => { dashboard.dispose(); await records.flush(); await fs.rm(directory, { recursive: true, force: true }); });
-  return { directory, created, main, ipcMain, settings, records, journals, dashboard };
+  return { directory, created, main, ipcMain, settings, records, dashboard };
 }
 
 test('dashboard window is a single sandboxed instance with its own preload and main-window zoom', async () => {
@@ -186,7 +184,7 @@ test('open accepts only the main main-frame and every other dashboard IPC accept
   assert.equal((await ipcMain.invoke('dashboard:open', sender(main))).ok, true);
   const own = created[0];
   assert.equal((await ipcMain.invoke('dashboard:open', sender(own))).ok, false);
-  for (const [channel, args] of [['dashboard:summary', [query]], ['dashboard:appearance', []], ['dashboard:decide', ['0'.repeat(32), 'adopted', query]]]) {
+  for (const [channel, args] of [['dashboard:summary', [query]], ['dashboard:appearance', []]]) {
     assert.equal((await ipcMain.invoke(channel, sender(main), ...args)).ok, false, channel);
     assert.equal((await ipcMain.invoke(channel, sender(foreign), ...args)).ok, false, channel);
     assert.equal((await ipcMain.invoke(channel, { ...sender(own), senderFrame: { url: own.url } }, ...args)).ok, false, channel);
@@ -224,7 +222,7 @@ test('window button events are sender checked and maximize toggles without addin
 
 test('all dashboard handlers and buttons reject subframes, navigated pages and destroyed windows', async t => {
   const { ipcMain, main, created, dashboard } = await lab(t); await dashboard.open(); const own = created[0];
-  const requests = [['dashboard:summary', [query]], ['dashboard:appearance', []], ['dashboard:decide', ['0'.repeat(32), 'adopted', query]]];
+  const requests = [['dashboard:summary', [query]], ['dashboard:appearance', []]];
   for (const url of ['agentrix://app/index.html', 'agentrix://other/dashboard.html', 'https://app/dashboard.html']) {
     own.webContents.mainFrame.url = url;
     for (const [channel, args] of requests) assert.equal((await ipcMain.invoke(channel, sender(own), ...args)).ok, false);
@@ -241,81 +239,27 @@ test('all dashboard handlers and buttons reject subframes, navigated pages and d
   assert.equal((await ipcMain.invoke('dashboard:open', sender(main))).ok, false);
 });
 
-test('decide resolves server-generated evidence, persists adoption and returns the same query with current weights', async t => {
-  const { dashboard, journals, ipcMain, created, directory } = await lab(t);
-  journals.history = [{ projectId: 'p', entries: [{ type: 'incident', time: 5000, meeting: 'r', model: 'gpt-6.1-sol', kind: 'core',
-    cause: 'failed verification', fix: 'added coverage', lead: 'missed', weight: { kind: 'core', from: 1, to: 0.8 } }] }];
+test('summary validates its query and reads the run records through the dashboard frame only', async t => {
+  const { dashboard, ipcMain, created, records } = await lab(t);
+  await records.append('runs', { id: 'r1', projectId: 'p', project: 'Project', agent: 'codex', source: 'dispatch', model: 'gpt-6.1-sol',
+    kind: 'core', reason: 'exit', exitCode: 0, outOfScope: 0, checks: { passed: 2, failed: 0, skipped: 0 } });
   await dashboard.open(); const own = created[0];
   const result = await ipcMain.invoke('dashboard:summary', sender(own), query);
-  assert.equal(result.ok, true); assert.equal(result.value.suggestions.length, 1);
-  const id = result.value.suggestions[0].id;
-  const adopted = await ipcMain.invoke('dashboard:decide', sender(own), id, 'adopted', query, { to: 1.5 });
-  assert.equal(adopted.ok, true); assert.deepEqual(adopted.value.query, query);
-  assert.deepEqual(adopted.value.weights, [{ model: 'gpt-6.1-sol', kind: 'core', from: 1, to: 0.8 }]);
-  assert.equal(adopted.value.suggestions[0].state, 'adopted'); assert.match(routingNote(directory), /core: 0\.8/);
-  assert.equal('routingNote' in dashboard, false);
-  journals.history = [];
-  assert.equal((await dashboard.summary({ projectId: 'other', range: '7d' })).suggestions[0].id, id);
-  const reopened = await ipcMain.invoke('dashboard:decide', sender(own), id, 'open', query);
-  assert.equal(reopened.value.weights.length, 0);
-  assert.equal((await ipcMain.invoke('dashboard:decide', sender(own), '0'.repeat(32), 'adopted', query)).ok, false);
-  assert.equal((await ipcMain.invoke('dashboard:decide', sender(own), id, 'forged', query)).ok, false);
+  assert.equal(result.ok, true); assert.deepEqual(result.value.query, query);
+  assert.deepEqual(result.value.models.map(row => [row.model, row.tasks, row.passed]), [['gpt-6.1-sol', 1, 1]]);
+  assert.equal(ipcMain.handlers.has('dashboard:decide'), false);
   for (const bad of [null, {}, { projectId: null, range: 'year' }, { ...query, path: 'not accepted' }, { ...query, projectId: '' }]) {
     assert.equal((await ipcMain.invoke('dashboard:summary', sender(own), bad)).ok, false);
   }
 });
 
-test('dashboard broadcasts resync journals only when project ids, kinds or paths change', async t => {
-  let projects = [{ id: 'p', name: 'Project', kind: 'local', path: 'first' }], syncs = 0;
-  const { dashboard, journals, settings } = await lab(t, { getProjects: () => projects });
-  journals.sync = async () => { syncs++; };
-  await dashboard.open();
-  for (let i = 0; i < 10; i++) { projects = projects.map(project => ({ ...project })); dashboard.sync(); }
-  settings.theme = 'light'; dashboard.sync(); assert.equal(syncs, 0);
-  projects = [...projects, { id: 'second', path: 'second' }]; dashboard.sync(); assert.equal(syncs, 1);
-  projects.reverse(); dashboard.sync(); assert.equal(syncs, 1);
-  projects[0].path = 'changed'; dashboard.sync(); assert.equal(syncs, 2);
-  projects[0].id = 'new-id'; dashboard.sync(); assert.equal(syncs, 3);
-  projects[0].kind = 'ssh'; dashboard.sync(); assert.equal(syncs, 4);
-  projects = []; dashboard.sync(); assert.equal(syncs, 5);
-});
-
-test('every explicit dashboard open restarts journal discovery without doing so on broadcasts', async t => {
-  const { dashboard, journals, created, ipcMain, main } = await lab(t);
-  await dashboard.open(); assert.equal(journals.starts, 1);
-  for (let i = 0; i < 10; i++) dashboard.sync();
-  assert.equal(journals.starts, 1);
-  await dashboard.open(); assert.equal(journals.starts, 2); assert.equal(created.length, 1);
-  created[0].close();
-  assert.equal((await ipcMain.invoke('dashboard:open', sender(main))).ok, true);
-  assert.equal(journals.starts, 3); assert.equal(created.length, 2);
-});
-
-test('a failed decision write returns failure and leaves adoption unapplied', async t => {
-  const decisions = { async read() { return []; }, async decide() { return false; } };
-  const { dashboard, journals } = await lab(t, { decisions });
-  journals.history = [{ projectId: 'p', entries: [{ type: 'incident', time: 5000, model: 'gpt-6.1-sol', kind: 'core',
-    weight: { kind: 'core', from: 1, to: 0.8 } }] }];
-  const before = await dashboard.summary(query);
-  await assert.rejects(dashboard.decide(before.suggestions[0].id, 'adopted', query), /无法保存/);
-  assert.deepEqual((await dashboard.summary(query)).weights, []);
-});
-
-test('a slow journal lookup does not delay creation and display of the dashboard window', async t => {
-  let finish;
-  const journals = { start: () => new Promise(resolve => { finish = resolve; }), stop() {}, sync() {}, async read() { return []; } };
-  const { dashboard, created } = await lab(t, { journals });
-  const opening = dashboard.open();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(created.length, 1); assert.ok(created[0].shown > 0);
-  finish(); await opening;
-});
-
-test('persisted run grade and quota changes debounce to one refresh and never refocus the dashboard', async t => {
+test('only persisted runs refresh the dashboard, coalesced without refocusing the window', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { dashboard, records, created } = await lab(t); await dashboard.open(); const own = created[0], focus = own.focused;
   own.webContents.messages = [];
-  await records.append('runs', {}); await records.append('grades', {}); await records.append('quota', {});
+  await records.append('grades', {}); await records.append('quota', {});
+  t.mock.timers.tick(1000); assert.deepEqual(own.webContents.messages, []);
+  await records.append('runs', {}); await records.append('runs', {});
   t.mock.timers.tick(999); assert.deepEqual(own.webContents.messages, []);
   t.mock.timers.tick(1); assert.deepEqual(own.webContents.messages, [['dashboard:changed']]); assert.equal(own.focused, focus);
   own.close(); await records.append('runs', {}); t.mock.timers.tick(2000);
@@ -330,10 +274,10 @@ test('dashboard preload exposes exactly DashboardBridge and subscriptions remove
     exposeInMainWorld(key, value) { name = key; bridge = value; },
   } });
   assert.equal(name, 'agentrixDashboard');
-  assert.deepEqual(Object.keys(bridge).sort(), ['appearance', 'close', 'decide', 'maximize', 'minimize', 'onAppearance', 'onChanged', 'summary']);
-  await bridge.summary(query); await bridge.decide('id', 'open', query); await bridge.appearance();
+  assert.deepEqual(Object.keys(bridge).sort(), ['appearance', 'close', 'maximize', 'minimize', 'onAppearance', 'onChanged', 'summary']);
+  await bridge.summary(query); await bridge.appearance();
   bridge.close(); bridge.minimize(); bridge.maximize();
-  assert.deepEqual(calls, [['dashboard:summary', query], ['dashboard:decide', 'id', 'open', query], ['dashboard:appearance'],
+  assert.deepEqual(calls, [['dashboard:summary', query], ['dashboard:appearance'],
     ['dashboard:close'], ['dashboard:minimize'], ['dashboard:maximize']]);
   let appearance, changed = 0;
   const stopAppearance = bridge.onAppearance(value => { appearance = value; });

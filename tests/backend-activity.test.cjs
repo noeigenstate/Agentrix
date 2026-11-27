@@ -158,7 +158,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return require('../electron/features/agents/agent-command.cjs'); },
     ActionLog: require('../electron/agent-actions.cjs').ActionLog,
     createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
-    clearTimeout, syncDashboardLive() {}, routing: { endSession() {}, launch: () => ({ agentSeats }) },
+    clearTimeout, routing: { endSession() {}, launch: () => ({ agentSeats }) },
     cleanupTerminalFiles() {}, report: error => errors.push(error),
     runtimeDir: project.path, fs: syncFs, process: { platform: process.platform, env: {} },
     createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',

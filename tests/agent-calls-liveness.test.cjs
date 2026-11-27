@@ -5,6 +5,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const path = require('node:path');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const activeCount = calls => calls.snapshot().reduce((count, group) => count + group.preparing + group.running + (group.starting || 0), 0);
 const start = helperPid => ({ type: 'dispatch-start', id: '11111111-1111-4111-8111-111111111111', helperPid, agent: 'codex', model: 'gpt-test', effort: 'high', fast: true,
   role: '执行', title: 'Synthetic worker', sessionId: 'synthetic-thread', cwd: '/synthetic', startedAt: 100 });
 function tracker(t, options = {}) {
@@ -15,18 +16,18 @@ function tracker(t, options = {}) {
 test('N6: a forcibly terminated helper without dispatch-end becomes interrupted once, and late end packets cannot resurrect it', async t => {
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
   const closed = once(child, 'close'); t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await closed; });
-  const f = tracker(t); f.calls.dispatch(start(child.pid)); await f.poll(); assert.equal(f.calls.running().length, 1);
+  const f = tracker(t); f.calls.dispatch(start(child.pid)); await f.poll(); assert.equal(activeCount(f.calls), 1);
   child.kill('SIGKILL'); await closed; await f.poll();
-  assert.equal(f.calls.running().length, 1, 'allow the final pipe packet to arrive before inferring a missing end');
+  assert.equal(activeCount(f.calls), 1, 'allow the final pipe packet to arrive before inferring a missing end');
   await new Promise(resolve => setTimeout(resolve, 1050)); await f.poll();
-  assert.equal(f.calls.running().length, 0); assert.equal(f.calls.snapshot()[0].items[0].failure.reason, 'killed'); assert.equal(f.ended.length, 1);
+  assert.equal(activeCount(f.calls), 0); assert.equal(f.calls.snapshot()[0].items[0].failure.reason, 'killed'); assert.equal(f.ended.length, 1);
   await f.poll(); assert.equal(f.ended.length, 1);
   assert.equal(f.calls.dispatch({ type: 'dispatch-end', id: start().id, reason: 'exit', exitCode: 0, model: 'gpt-test', endedAt: Date.now() }), false);
 });
 test('N6: a silent or temporarily disconnected helper that is still alive remains running; unknown evidence never means dead', async t => {
   const f = tracker(t); f.calls.dispatch(start(process.pid)); await f.poll(); await f.poll();
-  assert.equal(f.calls.running().length, 1); assert.equal(f.ended.length, 0);
-  const unknown = tracker(t, { dispatchAlive: async () => null }); unknown.calls.dispatch(start()); await unknown.poll(); assert.equal(unknown.calls.running().length, 1);
+  assert.equal(activeCount(f.calls), 1); assert.equal(f.ended.length, 0);
+  const unknown = tracker(t, { dispatchAlive: async () => null }); unknown.calls.dispatch(start()); await unknown.poll(); assert.equal(activeCount(unknown.calls), 1);
 });
 test('N6: main caches a verified team-board PID, so later board cleanup does not hide a dead helper', async t => {
   let alive = true, reads = 0;
@@ -41,13 +42,13 @@ test('N6: main caches a verified team-board PID, so later board cleanup does not
   calls.dispatch(start()); calls.refresh(start().id); await calls.work;
   alive = false; calls.refresh(start().id); await calls.work;
   await new Promise(resolve => setTimeout(resolve, 1050)); calls.refresh(start().id); await calls.work;
-  assert.equal(reads, 1); assert.equal(calls.running().length, 0); assert.equal(calls.snapshot()[0].items[0].failure.reason, 'killed');
+  assert.equal(reads, 1); assert.equal(activeCount(calls), 0); assert.equal(calls.snapshot()[0].items[0].failure.reason, 'killed');
 });
 
 test('F20 a normal end arriving after the first dead-PID observation wins over inferred interruption', async t => {
   let now = 100;
   const f = tracker(t, { dispatchAlive: () => false, now: () => now }); f.calls.dispatch(start(123)); await f.poll();
-  assert.equal(f.calls.running().length, 1);
+  assert.equal(activeCount(f.calls), 1);
   f.calls.dispatch({ type: 'dispatch-end', id: start().id, reason: 'exit', exitCode: 0, model: 'gpt-test', endedAt: now, outputTokens: null, activeMs: null });
   now += 2000; await f.poll();
   assert.equal(f.calls.snapshot()[0].items[0].failure, null); assert.equal(f.ended.length, 1);

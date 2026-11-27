@@ -137,7 +137,8 @@ function readAtRoot(root, entry, catalog, defaults) {
 }
 
 function serializeRouting(config) {
-  return JSON.stringify({ format: FORMAT, version: 1, ...(config.conductor && { conductor: true }), roles: config.roles }, null, 2) + '\n';
+  const { conductor, order, roles } = config;
+  return JSON.stringify({ format: FORMAT, version: 1, ...(conductor && { conductor: true }), ...(order && { order }), roles }, null, 2) + '\n';
 }
 
 function removeStaleTemps(target) {

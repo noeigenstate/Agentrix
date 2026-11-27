@@ -64,6 +64,7 @@ test('launcher shows official agent marks, giving way to the busy spinner only w
       npm: true, codex: { installed: state.missing !== 'codex' }, claude: { installed: state.missing !== 'claude' }, installing: state.installing ?? null,
     }];
     const { AgentLauncher } = loadUI('terminal/AgentLauncher.tsx', { react: {
+      useRef: current => ({ current }), useCallback: callback => callback,
       useState: () => [slots[index++], () => {}], useEffect() {},
     }, '@phosphor-icons/react': { CircleNotch, Terminal } });
     const html = renderToStaticMarkup(AgentLauncher({ terminalId: 't', projectId: 'p', onAction() {}, onOpenTerminal() {} }));
@@ -244,6 +245,7 @@ test('launcher reserves a dedicated Codex terminal slot without starting, writin
       agentLaunch: async (...args) => { calls.push(['launch', ...args]); return { ok: true, value: true }; },
     } };
     const { AgentLauncher } = loadUI('terminal/AgentLauncher.tsx', { react: {
+      useRef: current => ({ current }), useCallback: callback => callback,
       useState: initial => [[null, 'new', null, { codex: { installed: true }, claude: { installed: true } }][stateIndex++] ?? initial, () => {}], useEffect() {},
     } });
     const tree = AgentLauncher({ terminalId: 'busy-shell', projectId: 'p', onAction: async promise => { const result = await promise; assert.equal(result.ok, true); return result.value; }, onOpenTerminal() {} });
@@ -265,6 +267,7 @@ test('an expanded later-terminal launcher targets its own terminal despite an ea
   const terminals = [terminal('first', { status: 'exited' }), terminal('chosen', { sessionId: null, status: 'stopped' })];
   let stateIndex = 0;
   const { AgentLauncher } = loadUI('terminal/AgentLauncher.tsx', { react: {
+    useRef: current => ({ current }), useCallback: callback => callback,
     useState: initial => [[null, 'new', null, { codex: { installed: true }, claude: { installed: true } }][stateIndex++] ?? initial, () => {}], useEffect() {},
   } });
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', {

@@ -240,7 +240,8 @@ export type SeatModel = {
 };
 // A saved seat main ran differently: the slot, why, and what it ran instead.
 export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsupported' | 'fast-unsupported'; substitute: string };
-export type RoutingConfig = { roles: Record<SeatId, RoleConfig>; conductor?: boolean };
+// order: the team cards after the lead as the owner arranged them; roles it does not list follow in shipped order.
+export type RoutingConfig = { roles: Record<SeatId, RoleConfig>; conductor?: boolean; order?: SeatId[] };
 export type RoutingAction = 'apply' | 'keep' | 'overwrite';
 export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'lead-locked';
 export type RoutingFlag = {
@@ -276,7 +277,9 @@ export type SeatsInfo = {
   conductor: boolean;
   claudeFastRefusal?: string;
   seats: SeatId[];
+  // roles follow the active order; shippedOrder lists the built-in and library roles in their shipped order.
   roles: TeamRole[];
+  shippedOrder?: SeatId[];
   lead: SeatId;
   leadAgent: AgentProvider | null;
   leads: Partial<Record<AgentProvider, Seat | null>>;

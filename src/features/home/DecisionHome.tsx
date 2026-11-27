@@ -18,6 +18,7 @@ import { Select } from '../../shared/Select';
 import { nativeBridge } from '../native-session/native-bridge.ts';
 import { refreshNativeSession } from '../native-session/native-store.ts';
 import { reasonWords } from '../native-session/native-words.ts';
+import { brandIconOf } from '../agents/AgentBrandIcon.ts';
 import { adapterOf, adapters } from '../../../electron/features/cli-adapters/registry.mjs';
 import { canLead, support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import './home.css';
@@ -144,6 +145,7 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
   const agents = useInstalledAgents(project?.kind === 'local');
   const options = AGENT_OPTIONS.filter(option => !option.native || agents?.[option.value]?.installed && !!nativeBridge());
   const pickedAgent = options.some(option => option.value === agent) ? agent : options[0].value;
+  const Brand = brandIconOf(pickedAgent);
   const pickProject = (id: string) => selectedProjectId === undefined ? setDockProject(id) : onPickProject?.(id);
   const sshUnavailable = project?.kind === 'ssh' && !terminal?.cliActive;
   // Dictation (its microphone or the voice shortcut) puts the words where the cursor is; Enter only puts them in, since
@@ -215,7 +217,7 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
         {(sshUnavailable || !empty) && <span className="new-work-note">{sshUnavailable ? t('SSH 项目请先启动终端，再在终端里运行助手。') : terminal?.cliActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
         <span className="new-work-tools">
           {terminal && !terminal.cliActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={pickedAgent}
-            onChange={value => setAgent(value as AgentProvider)} options={options} />}
+            onChange={value => setAgent(value as AgentProvider)} options={options} icon={<Brand />} />}
           <button type="button" className="icon-button new-work-attach" title={t('添加图片')} aria-label={t('添加图片')} onClick={() => picker.current?.click()}><Paperclip size={16} /></button>
           <input ref={picker} type="file" accept="image/*" multiple hidden onChange={event => { addImages([...(event.target.files ?? [])]); event.target.value = ''; }} />
           <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />

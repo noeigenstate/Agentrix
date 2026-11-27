@@ -1,5 +1,5 @@
 const modelSeats = require('./model-seats.cjs');
-const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules } = require('./role-rules.mjs');
+const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules, orderRoles, compactOrder } = require('./role-rules.mjs');
 const { adapterOfModel, agentOfModel } = require('./seat-rules.mjs');
 const { agentIds } = require('../cli-adapters/registry.mjs');
 const { outsideFences, region } = require('./guide-format.cjs');
@@ -12,6 +12,8 @@ const emptyConfig = () => ({ roles: {} });
 const fail = (code, role, message = code) => { throw Object.assign(new Error(message), { code, role }); };
 const unknownKey = (value, keys) => Object.keys(value).some(key => !keys.includes(key));
 const unsafeFileModel = value => typeof value === 'string' && (value.endsWith(':') || value.includes('://'));
+// A saved card order: distinct role ids. Ids that name no role are kept until the next save compacts them away.
+const badOrder = order => order !== undefined && (!Array.isArray(order) || order.length > 64 || !order.every(validRoleId) || new Set(order).size !== order.length);
 const fileEffort = value => {
   if (value?.effort === undefined || typeof value.model !== 'string') return true;
   const { efforts, fileEfforts } = adapterOfModel(value.model).manifest.models;
@@ -60,15 +62,15 @@ function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
 
 function cleanConfig(raw, entry, catalog, stored = false, file = false) {
   if (!object(raw) || !object(raw.roles)) fail('bad-format');
-  if (unknownKey(raw, ['roles', 'conductor'])) fail('unknown-key');
-  if (raw.conductor !== undefined && typeof raw.conductor !== 'boolean') fail('bad-format');
+  if (unknownKey(raw, ['roles', 'conductor', 'order'])) fail('unknown-key');
+  if (raw.conductor !== undefined && typeof raw.conductor !== 'boolean' || badOrder(raw.order)) fail('bad-format');
   const ignored = [];
   const roles = Object.fromEntries(Object.entries(raw.roles).flatMap(([id, value]) => {
     if (file && unsafeFileModel(value?.model)) fail('bad-format', id);
     const fields = roleConfig(id, value, entry, catalog, stored, ignored, file);
     return fields ? [[id, fields]] : [];
   }));
-  return { config: { roles, ...(raw.conductor && { conductor: true }) }, ignored: ignored.slice(0, 16) };
+  return { config: { roles, ...(raw.order?.length && { order: [...raw.order] }), ...(raw.conductor && { conductor: true }) }, ignored: ignored.slice(0, 16) };
 }
 
 function baseRows(entry) {
@@ -111,7 +113,7 @@ function resolveTeam(entry, config, defaults) {
     return resolved;
   };
   const copies = Object.keys(overrides).sort().filter(id => overrides[id].from).map(id => [id, overrides[id]]);
-  const team = builtIn.flatMap(base => {
+  const shipped = builtIn.flatMap(base => {
     const resolved = chosen(base.id);
     const custom = copies.filter(([, value]) => value.from === base.id).map(([id, value]) => ({
       inherited: resolved.seat, seat: seatFrom(value) ?? resolved.seat,
@@ -121,8 +123,10 @@ function resolveTeam(entry, config, defaults) {
     }));
     return [resolved, ...custom];
   });
+  const team = orderRoles(shipped, config.order, item => item.row);
   const roles = team.map(item => item.row), enabled = roles.filter(row => row.enabled);
-  return { team, roles: [...enabled, ...roles.filter(row => !row.enabled)], seats: enabled.map(row => row.id),
+  return { team, order: compactOrder(shipped.map(item => item.row), config.order), shippedOrder: builtIn.map(row => row.id),
+    roles: [...enabled, ...roles.filter(row => !row.enabled)], seats: enabled.map(row => row.id),
     authors: enabled.filter(row => row.kind === 'author').map(row => row.id),
     reviewers: enabled.filter(row => row.kind === 'reviewer').map(row => row.id),
     fresh: enabled.filter(row => row.fresh).map(row => row.id),
@@ -162,7 +166,7 @@ function compactConfig(entry, config) {
     if (override.model !== undefined && !sameSeat(seat, inherited)) Object.assign(fields, seatFrom(override));
     return Object.keys(fields).length ? [[row.id, fields]] : [];
   }));
-  return { roles, ...(config.conductor && { conductor: true }) };
+  return { roles, ...(team.order && { order: team.order }), ...(config.conductor && { conductor: true }) };
 }
 
 module.exports = { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam };

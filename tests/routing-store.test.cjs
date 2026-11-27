@@ -72,6 +72,29 @@ test('Ultracode saves and reloads as an opt-in, and appears in both lead seat ta
   assert.doesNotMatch(store.seatTable(project.id), /ultracode/);
 });
 
+test('a saved card order reaches routing.json, the role list, the seat table and the guide, and compacts on save', t => {
+  const { store, projects: [project] } = fixture(t);
+  const team = info => info.roles.filter(role => role.enabled && role.kind !== 'lead').map(role => role.id);
+  const shipped = team(store.seatsInfo(project.id)), [first, second, third, ...rest] = shipped;
+  // An id that names no role and a disabled library role are dropped; unlisted roles follow in shipped order.
+  assert.deepEqual(store.setRouting('project', project.id, { conductor: true, roles: {}, order: [third, first, 'nope', 'frontend'] }, null), { ok: true });
+  const order = [third, first, second, ...rest];
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')).order, order);
+  const info = store.seatsInfo(project.id);
+  assert.deepEqual([info.roles[0].id, ...team(info)], ['orchestrator', ...order]);
+  assert.deepEqual(info.config.order, order);
+  assert.deepEqual(info.shippedOrder.filter(id => id === 'orchestrator' || shipped.includes(id)), ['orchestrator', ...shipped]);
+  assert.deepEqual([...store.seatTable(project.id).matchAll(/\(([a-z-]+)\):/g)].map(match => match[1]), ['orchestrator', ...order]);
+  const guide = store.launch(project, false, 'order', { agent: 'claude' }).guide.text;
+  const rows = [...guide.matchAll(/^\| ([a-z][a-z0-9-]*) \|/gm)].map(match => match[1]).filter(id => id === 'orchestrator' || order.includes(id));
+  assert.deepEqual(rows, ['orchestrator', ...order]);
+  // The shipped order is the default and leaves no field; a malformed order is refused.
+  assert.deepEqual(store.setRouting('project', project.id, { conductor: true, roles: {}, order: shipped }, info.routing.digest), { ok: true });
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')), 'order'), false);
+  const digest = store.seatsInfo(project.id).routing.digest;
+  for (const bad of ['qa', [first, first], ['Bad Id']]) assert.equal(store.setRouting('project', project.id, { roles: {}, order: bad }, digest).ok, false);
+});
+
 test('a project without a routing file gets the template on first scan, trusted at once', t => {
   const { store, projects } = fixture(t), [project] = projects;
   projects.splice(1);

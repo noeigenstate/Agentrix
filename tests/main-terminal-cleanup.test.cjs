@@ -20,7 +20,7 @@ function fixture(t, extraDeps = {}) {
   const sessions = new Map([[id, s]]), calls = [];
   let onExit;
   s.terminal = { kill() { calls.push('kill'); assert.ok(fs.existsSync(s.bootstrapFile)); }, onData() {}, onExit(fn) { onExit = fn; } };
-  const lifecycle = createTerminalLifecycle({ fs, path, sessions, nativeSessions: null, nativeSpecs: new Map(), readingHistory: { close() {} }, AgentCalls, disposeDispatchInbox: terminal => calls.push(['inbox', terminal]), endSkillSession() {}, stopUsageAccount() {}, syncDashboardLive() {},
+  const lifecycle = createTerminalLifecycle({ fs, path, sessions, nativeSessions: null, nativeSpecs: new Map(), readingHistory: { close() {} }, AgentCalls, disposeDispatchInbox: terminal => calls.push(['inbox', terminal]), endSkillSession() {}, stopUsageAccount() {},
     routing: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
     restorePlans: new Map(), startupErrors: new Map(), quitting: false, bindDispatchInbox() {}, captureBranch() {},
     report(error) { throw error; }, t: () => '', ...extraDeps });

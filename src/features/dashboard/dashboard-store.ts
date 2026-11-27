@@ -1,6 +1,6 @@
 // What the dashboard window knows: its query, the summary the main process last returned and the main window's look.
 // A plain store (no React) so the reading rules are testable with a stubbed bridge.
-import type { DashboardAppearance, DashboardBridge, DashboardQuery, DashboardSuggestion, DashboardSummary } from '../../shared/dashboard-types';
+import type { DashboardAppearance, DashboardBridge, DashboardQuery, DashboardSummary } from '../../shared/dashboard-types';
 import type { Result } from '../../shared/types';
 
 // loading: a read is in flight, so the page can say it is refreshing while it keeps showing the numbers it has.
@@ -15,14 +15,13 @@ export function createDashboardStore(bridge: DashboardBridge) {
   const set = (patch: Partial<DashboardState>) => { state = { ...state, ...patch }; listeners.forEach(listener => listener()); };
 
   // The newest request wins: a slow answer to an earlier query never replaces a later one.
-  async function apply(call: Promise<Result<DashboardSummary>>) {
+  async function load() {
     const mine = ++generation;
     set({ loading: true });
-    const result = await call.catch((error: unknown): Result<DashboardSummary> => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+    const result = await bridge.summary(state.query)
+      .catch((error: unknown): Result<DashboardSummary> => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
     if (mine === generation) set(result.ok ? { summary: result.value, error: null, loading: false } : { error: result.error, loading: false });
-    return result;
   }
-  const load = () => apply(bridge.summary(state.query));
 
   return {
     getState: () => state,
@@ -35,13 +34,6 @@ export function createDashboardStore(bridge: DashboardBridge) {
     },
     stop() { stops.forEach(stop => stop()); stops = []; generation++; },
     setQuery(patch: Partial<DashboardQuery>) { set({ query: { ...state.query, ...patch } }); void load(); },
-    // The refresh button: read the current query again now.
-    refresh() { void load(); },
-    // Adopt, dismiss or reopen a suggestion; the page then shows the summary the main process returns. Resolves to the error, if any.
-    async decide(id: string, next: DashboardSuggestion['state']) {
-      const result = await apply(bridge.decide(id, next, state.query));
-      return result.ok ? null : result.error;
-    },
   };
 }
 

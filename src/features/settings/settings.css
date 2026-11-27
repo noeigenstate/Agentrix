@@ -33,6 +33,7 @@ dialog { color: var(--text-1); }
 .settings-section h3 { margin: 20px 0 8px; font-size: 14px; font-weight: 600; }
 .agent-setting .setting-row { align-items: flex-start; padding: 12px 0 8px; border-bottom: 0; }
 .agent-setting .agent-info { display: block; flex: 1; min-width: 0; }
+.agent-setting-label { display: flex; align-items: center; gap: 8px; }
 .agent-setting .agent-info small { overflow-wrap: anywhere; }
 .agent-setting .agent-status { color: var(--text-1); }
 .agent-setting .agent-path + .agent-path { margin-top: 0; }

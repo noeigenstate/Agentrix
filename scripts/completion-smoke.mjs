@@ -82,13 +82,11 @@ async function checkPaneFit(pane) {
     const fixture = live.cloneNode(true);
     const titleHeight = document.querySelector('.titlebar')?.getBoundingClientRect().height ?? 0;
     Object.assign(fixture.style, { position: 'fixed', width: '340px', top: `${titleHeight}px`, bottom: 'auto', visibility: 'hidden' });
-    const [, codex] = fixture.querySelectorAll('.api-agent');
+    const codex = fixture.querySelector('.api-agent[aria-label="Codex"]');
     const codexMetrics = document.createElement('div');
     codexMetrics.className = 'activity-metrics';
     for (const meter of fixture.querySelectorAll('.activity-limit')) codexMetrics.append(meter.cloneNode(true));
     codex.append(codexMetrics);
-    const source = fixture.querySelector('[data-usage-detail]');
-    if (source) codex.append(source.cloneNode(true));
     const routingRows = fixture.querySelector('.activity-routing-rows');
     // The clone has no resize observer. Measure its single-column layout at each height independently.
     routingRows.removeAttribute('data-compact');

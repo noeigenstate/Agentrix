@@ -17,7 +17,7 @@ function runtimeInstall(createInstall, callbacks) {
     install,
     settingsInstall: options => {
       const { peek, refresh } = callbacks(options);
-      return { peek: () => { const snapshot = peek?.(); return snapshot ? install.stateOf(snapshot) : null; }, refresh };
+      return { peek: () => { const snapshot = peek?.(); return snapshot ? install.stateOf(snapshot) : null; }, refresh, detect: install.detect };
     },
   };
 }

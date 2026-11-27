@@ -8,7 +8,7 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
-const { CodexLogo, ClaudeLogo } = require('../src/features/agents/AgentBrandIcon.ts');
+const { AntigravityLogo, CodexLogo, ClaudeLogo, brandIconOf } = require('../src/features/agents/AgentBrandIcon.ts');
 const marks = require('../assets/brands/official-marks.json');
 const codexViewBox = '180.499 180.499 354.675 354.675';
 
@@ -86,6 +86,22 @@ test('Codex follows the selected theme while keeping its official geometry', t =
   }
   delete document.documentElement;
   assert.match(renderToStaticMarkup(React.createElement(CodexLogo)), /color="#ffffff"/);
+});
+
+test('Antigravity uses the same official monochrome path in both themes', t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  t.after(() => { if (descriptor) Object.defineProperty(globalThis, 'document', descriptor); else delete globalThis.document; });
+  globalThis.document = { documentElement: { dataset: {} } };
+  assert.equal(brandIconOf('agy'), AntigravityLogo);
+  for (const [theme, ink] of [['light', '#202124'], ['mono', '#ffffff']]) {
+    document.documentElement.dataset.theme = theme;
+    const html = renderToStaticMarkup(React.createElement(AntigravityLogo));
+    const mark = geometry(html);
+    assert.equal(mark.viewBox, '0 0 180 180');
+    assert.equal(crypto.createHash('sha256').update(mark.path).digest('hex'), 'cbc9e89e57b6ec9d4a155a53e84b722edc8f4ffcf9e33f6765bbd04cbca77422');
+    assert.match(html, new RegExp(`fill="${ink}"`));
+    assert.doesNotMatch(html, /<(?:image|script|foreignObject)|(?:href|src)=/);
+  }
 });
 
 test('ClaudeSpark retains its export and size API as a direct official-logo alias', () => {

@@ -13,8 +13,11 @@ class AgentsManager {
   getState() {
     // Existing isolated desktop checks should not depend on tools installed on the test host.
     const isolated = !!this.env.AGENTRIX_DATA_DIR && this.env.AGENTRIX_TEST_AGENTS !== '1';
-    const states = adapters().map(({ manifest: { id, command } }) => [id, isolated ? { installed: true }
-      : this.installers.get(id).peek() ?? { installed: this.detect(command, this.env) }]);
+    const states = adapters().map(({ manifest: { id, command } }) => {
+      const installer = this.installers.get(id);
+      return [id, isolated ? { installed: true } : installer.peek()
+        ?? { installed: installer.detect?.(this.env) ?? this.detect(command, this.env) }];
+    });
     return { ...Object.fromEntries(states), npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
   }
   changed() { const state = this.getState(); this.onChange(state); return state; }

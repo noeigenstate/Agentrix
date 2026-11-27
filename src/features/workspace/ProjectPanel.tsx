@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Play, Plus, DotsThree, GitBranch, X, FolderOpen, ArrowCounterClockwise, Info, Globe, ImageSquare, Microphone } from '@phosphor-icons/react';
-import type { Project, Result, RolePermissionsNotice } from '../../shared/types';
+import type { AgentsState, Project, Result, RolePermissionsNotice } from '../../shared/types';
 import { nativeTells, useNativeEntries } from '../native-session/native-store.ts';
 import { ProjectTerminals } from '../terminal/ProjectTerminals';
 import { terminalInUse, visibleTerminals } from '../terminal/terminal-visibility.ts';
@@ -8,6 +8,7 @@ import { setActiveTerminal, useActiveTerminal } from '../terminal/active-termina
 import { ActivityPane } from '../agents/ActivityPane';
 import { SubagentChip } from '../agents/SubagentChip';
 import { BackgroundBadge } from '../agents/BackgroundBadge';
+import { brandIconOf } from '../agents/AgentBrandIcon.ts';
 import { toggleDictation, useVoice } from '../voice/voice-input';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
@@ -38,7 +39,7 @@ function isRoundComplete(project: Project) {
   return project.cliActive && project.codexActivity === 'complete' && !project.unread && !project.error;
 }
 
-export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, onFocus, onAction, onError,
+export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, installations, onFocus, onAction, onError,
   onOpenLink, onRevealProject, dragging, dropTarget, roleNotice }: {
   project: Project; index: number; hidden: boolean; focused: boolean; fontSize: number; now: number;
   roleNotice?: RolePermissionsNotice & { dismiss: () => void; onShown?: () => void };
@@ -49,7 +50,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   onAction: <T>(promise: Promise<Result<T>>) => Promise<T | undefined>; onError: (message: string) => void;
   onOpenLink: (id: string, target: string) => void;
   onRevealProject: (id: string) => void;
-  dragging?: boolean; dropTarget?: boolean;
+  dragging?: boolean; dropTarget?: boolean; installations?: AgentsState | null;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
@@ -64,7 +65,10 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const showHeaderActions = !focused || activityOpen;
   const hasTerminal = !!first?.sessionId;
   const stopped = first?.status === 'stopped' || first?.status === 'exited';
-  const addTerminal = async () => { const id = await onAction(api.addTerminal(project.id)); if (id) { setActiveTerminal(project.id, id); if (!focused) onFocus(project.id); } };
+  const addTerminal = async (start: boolean) => {
+    const id = await onAction(api.addTerminal(project.id, start));
+    if (id) { setActiveTerminal(project.id, id); if (!focused) onFocus(project.id); }
+  };
   const completionAge = project.lastCompletedAt === null ? Infinity : Date.now() - project.lastCompletedAt;
   const working = project.cliActive && project.codexActivity === 'working';
   const freshCompletion = !!project.unread && !working && completionAge >= 0 && completionAge < 9000;
@@ -74,7 +78,8 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const badgeClass = `status-badge ${working ? 'is-working' : roundComplete ? 'is-complete' : project.unread ? 'is-review' : project.error ? 'is-error' : ''}`;
   const meta = working ? '' : project.lastCompletedAt ? t('{time}完成', { time: relativeTime(project.lastCompletedAt, now) }) : '';
   const status = statusText(project);
-  const badge = <><span key={signalKey} className="status-dot" aria-hidden="true" /><span>{status}</span></>;
+  const Brand = project.cliActive && project.agent ? brandIconOf(project.agent) : null;
+  const badge = <><span key={signalKey} className="status-dot" aria-hidden="true" />{Brand && <Brand size={14} />}<span>{status}</span></>;
   useEffect(() => {
     if (!menuOpen) return;
     if (!showHeaderActions) { setMenuOpen(false); return; }
@@ -118,7 +123,8 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
           {!focused && <button role="menuitem" onClick={() => action(() => onFocus(project.id))}><ArrowRight size={16} />{t('进入会话')}</button>}
           {/* While it records, the microphone over the card shows it; choosing this again inserts what was said. */}
           {currentTerminal && <button role="menuitem" onClick={() => action(() => void toggleDictation(currentTerminal.id, currentTerminal.sessionId, onError, project.name))}><Microphone size={16} />{recording ? t('结束录音并插入') : t('语音输入')}<span className="menu-shortcut" aria-hidden="true">{shortcut('voice')}</span></button>}
-          <button role="menuitem" onClick={() => action(() => void addTerminal())}><Plus size={16} />{t('新建终端并分屏')}<span className="menu-shortcut" aria-hidden="true">{shortcut('newTerminal')}</span></button>
+          {project.kind === 'local' && <button role="menuitem" onClick={() => action(() => void addTerminal(false))}><Plus size={16} />{t('选择助手，开始开发')}</button>}
+          <button role="menuitem" onClick={() => action(() => void addTerminal(true))}><Plus size={16} />{t('新建终端并分屏')}<span className="menu-shortcut" aria-hidden="true">{shortcut('newTerminal')}</span></button>
           <button role="menuitem" onClick={() => action(() => onRevealProject(project.id))}><FolderOpen size={16} />{t('打开项目目录')}</button>
           <button role="menuitem" onClick={() => action(() => setImageOpen(true))}><ImageSquare size={16} />{t('项目图片…')}</button>
           {currentTerminal && currentTerminal.nativeMode !== 'agy-acp' && <button role="menuitem" onClick={() => action(() => { onAction(api.restartTerminal(currentTerminal.id)); })}><ArrowCounterClockwise size={16} />{project.kind === 'ssh' ? t('重新连接 SSH') : t('重启当前终端')}</button>}
@@ -131,7 +137,8 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
     <ProjectTerminals project={project} visible={!hidden} focused={focused} fontSize={fontSize} activeId={activeTerminalId}
       setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction}
       onError={onError} onOpenLink={onOpenLink} roleNotice={roleNotice} />
-    {showActivity && <ActivityPane terminal={currentTerminal} terminals={project.terminals} projectId={project.id} />}
+    {showActivity && <ActivityPane terminal={currentTerminal} terminals={project.terminals} projectId={project.id}
+      installations={project.kind === 'ssh' ? undefined : installations} />}
     {project.error && !project.terminals.some(terminal => nativeTells(natives.get(terminal.id), project.error!)) && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
   </article>;
 }

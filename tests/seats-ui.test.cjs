@@ -6,6 +6,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
+const { AntigravityLogo } = require('../src/features/agents/AgentBrandIcon.ts');
 const seatsLib = require('../src/features/agents/routing-seats.ts');
 const { paletteGroups, lineOf, shortLabel, menuPlacement, withInstalled, canonicalModel, sameModel, assignModel, assignCustom,
   rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, baselineFor,
@@ -107,7 +108,9 @@ function compile(file, hooks, stubs = {}) {
   const icon = new Proxy({}, { get: () => () => null });
   mod.require = name => {
     if (name === 'react') return { ...React, ...hooks };
-    if (name === 'react-dom') return { createPortal: node => node };
+    if (name === 'react-dom') return { createPortal: node => node, flushSync: fn => fn() };
+    if (name === '../workspace/useProjectReorder') return compile('../workspace/useProjectReorder.ts', hooks, stubs);
+    if (name === '../../shared/motion') return { motionReduced: () => true, observeMotion: () => () => {} };
     if (name === '@phosphor-icons/react') return icon;
     if (name === '../../shared/i18n') return {
       currentLanguage: () => stubs.language ?? 'en',
@@ -156,7 +159,7 @@ const inlineComponents = new Set([
   'RoutingTabs', 'MenuHeader',
   'DialogHeader', 'DialogToolbar', 'RoutingStatus', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu',
   'TeamCard', 'SeatPicker', 'PickerSettings', 'TeamModelOptions', 'RoleLibrary', 'RoleActions', 'RoutingReview', 'RoleTextFields', 'RoleModel',
-  'ProviderMark', 'AntigravityPlaceholder', 'PathText',
+  'ProviderMark', 'PathText',
 ]);
 const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
 const walk = (node, visit) => {
@@ -199,7 +202,8 @@ function dialogHarness(t, info, props = {}) {
       language: props.language, '../terminal/terminal-screen.ts': { useScreen: () => props.frame?.() ?? null },
     });
   const outsideMouseDown = target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target }));
-  return Object.assign(h, { calls, closed, refreshes, deliver: next => { current = next; changed?.(); }, outsideMouseDown });
+  const fire = (type, event) => listeners.filter(entry => entry[0] === type).forEach(entry => entry[1](event));
+  return Object.assign(h, { calls, closed, refreshes, deliver: next => { current = next; changed?.(); }, outsideMouseDown, fire });
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
 
@@ -442,6 +446,80 @@ const assignable = menu => findAll(menu, node => node.props.role === 'menuitemra
 const liveMenu = h => find(h.render(), node => node.props.role === 'menu' || node.props['data-model-picker-menu']);
 const typeCustom = (h, text) => byAttr(liveMenu(h), 'data-custom-input').props.onChange({ target: { value: text } });
 const applyCustom = h => byAttr(liveMenu(h), 'data-custom-apply').props.onClick();
+
+// A team grid for the shared reorder hook: cards in a 4-column grid of 100 px cells 10 px apart, inside a scrolling chart.
+function teamGrid(h) {
+  const ids = () => findAll(h.render(), node => node.props['data-role-slot']).map(node => node.props['data-role-slot']);
+  const rect = (left, top, width = 100, height = 100) => ({ left, top, width, height, right: left + width, bottom: top + height });
+  const animate = () => ({ finished: Promise.resolve(), cancel() {}, finish() {}, playState: 'finished' });
+  const slot = id => ({ dataset: { roleSlot: id }, offsetWidth: 100, offsetHeight: 100,
+    get offsetLeft() { return ids().indexOf(id) % 4 * 110; }, get offsetTop() { return Math.floor(ids().indexOf(id) / 4) * 110; },
+    getBoundingClientRect() { return rect(this.offsetLeft, this.offsetTop); }, getClientRects() { return [this.getBoundingClientRect()]; }, animate });
+  const card = id => ({ dataset: { seat: id }, style: { setProperty() {} }, getBoundingClientRect: () => slot(id).getBoundingClientRect(), animate });
+  const area = { scrollTop: 0, getBoundingClientRect: () => rect(0, 0, 1000, 1000) };
+  const grid = { scrollLeft: 0, scrollTop: 0, closest: () => area, querySelectorAll: () => ids().map(slot), getBoundingClientRect: () => rect(0, 0, 1000, 1000),
+    setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {}, addEventListener() {}, removeEventListener() {} };
+  const press = (id, { x = 50, y = 50, control = null } = {}) => find(h.render(), node => node.props.className?.startsWith('seats-team-grid'))
+    .props.onPointerDown({ button: 0, isPrimary: true, pointerId: 1, clientX: x, clientY: y, currentTarget: grid,
+      target: { closest: selector => selector.includes('button') ? control : card(id) } });
+  const pointer = (type, x, y) => h.fire(type, { pointerId: 1, clientX: x, clientY: y, preventDefault() {}, stopPropagation() {} });
+  return { ids, press, pointer };
+}
+
+test('team cards reorder by drag and by the role menu, and the order is saved', async t => {
+  const info = { ...seatsInfo(), template: { roles: {}, conductor: true }, config: { roles: {}, conductor: true } };
+  const h = dialogHarness(t, info);
+  const frames = [];
+  Object.assign(globalThis.window, { setTimeout: () => 0, clearTimeout() {}, getSelection: () => ({ removeAllRanges() {} }) });
+  const restore = { raf: globalThis.requestAnimationFrame, caf: globalThis.cancelAnimationFrame, style: globalThis.getComputedStyle };
+  Object.assign(globalThis, { requestAnimationFrame: fn => frames.push(fn), cancelAnimationFrame() {}, getComputedStyle: () => ({ transform: 'none' }) });
+  t.after(() => Object.assign(globalThis, { requestAnimationFrame: restore.raf, cancelAnimationFrame: restore.caf, getComputedStyle: restore.style }));
+  const grid = teamGrid(h);
+  const shipped = ['product', 'architect', 'designer', 'developer', 'reviewer', 'qa', 'researcher', 'devops', 'security'];
+  assert.deepEqual(grid.ids(), shipped, 'the lead is not a slot; the rest start in shipped order');
+  // The role menu: 前移 is off for the first card, 后移 moves it one place and says where it went.
+  byAttr(h.render(), 'data-role-more', 'product').props.onClick(pickButton('product'));
+  assert.equal(byAttr(liveMenu(h), 'data-move-role', '-1').props.disabled, true);
+  byAttr(liveMenu(h), 'data-move-role', '1').props.onClick();
+  assert.deepEqual(grid.ids().slice(0, 3), ['architect', 'product', 'designer']);
+  assert.match(textOf(byAttr(h.render(), 'className', 'seats-notice')), /Product moved to position 2/);
+  byAttr(h.render(), 'data-role-more', 'security').props.onClick(pickButton('security'));
+  assert.equal(byAttr(liveMenu(h), 'data-move-role', '1').props.disabled, true, '后移 is off for the last card');
+  byAttr(liveMenu(h), 'data-move-role', '-1').props.onClick();
+  assert.deepEqual(grid.ids().slice(-2), ['security', 'devops']);
+  // A press on a card's button never lifts the card; a press that travels under 6 px and Escape mid-drag leave it in place.
+  const before = grid.ids();
+  grid.press('architect', { control: {} });
+  grid.pointer('pointermove', 300, 50);
+  grid.pointer('pointerup', 300, 50);
+  grid.press('architect');
+  grid.pointer('pointerup', 53, 52);
+  grid.press('architect');
+  grid.pointer('pointermove', 300, 50);
+  h.fire('keydown', { key: 'Escape', preventDefault() {}, stopPropagation() {} });
+  while (frames.length) frames.shift()(0);
+  await settle();
+  assert.deepEqual(grid.ids(), before, 'nothing moved');
+  // A drag past 6 px lands where the pointer is released, also when no move reached that cell first.
+  grid.press('architect');
+  grid.pointer('pointermove', 60, 50);
+  grid.pointer('pointerup', 350, 50);
+  while (frames.length) frames.shift()(0);
+  await settle();
+  assert.deepEqual(grid.ids().slice(0, 4), ['product', 'designer', 'developer', 'architect']);
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  const order = ['product', 'designer', 'developer', 'architect', 'reviewer', 'qa', 'researcher', 'security', 'devops'];
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, order, conductor: true }, 'at-open']]);
+  // The saved order comes back from main in the role list and the config, and a drag back to the shipped order drops it.
+  h.deliver({ ...info, config: { roles: {}, conductor: true, order }, roles: order.map(id => info.roles.find(role => role.id === id)).concat(info.roles[0]),
+    shippedOrder: info.roles.map(role => role.id) });
+  await settle();
+  assert.deepEqual(grid.ids(), order);
+  assert.match(textOf(byAttr(h.render(), 'data-routing-status')), /Saved/);
+  assert.equal(byAttr(h.render(), 'data-reset').props.disabled, false, 'a saved order can be reset');
+  assert.deepEqual(seatsLib.cleanDraft(info, { roles: {}, order: shipped }), { roles: {} }, 'the shipped order is not written');
+});
 
 test('the dialog gives an unlisted model the shared fallback rank', () => {
   assert.equal(rowFor(catalog(), 'gpt-6.2-sol-mini').rank, 1, 'an id the catalog does not list ranks by the same rule');
@@ -796,7 +874,7 @@ test('agy is grouped with an icon and its models can be assigned to the orchestr
   assert.match(textOf(group), /agy · 2/);
   assert.equal(textOf(byAttr(group, 'data-chip', model)), model);
   assert.equal(textOf(byAttr(group, 'data-chip', collision)), 'claude-opus-5-5');
-  assert.ok(find(group, node => node.type === 'svg' && node.props.className?.includes('agent-brand-agy')));
+  assert.ok(find(group, node => node.type === AntigravityLogo));
   const lead = openMenu(h, 'orchestrator');
   assert.ok(byAttr(lead, 'aria-label', 'agy'));
   byAttr(lead, 'data-assign', model).props.onClick();

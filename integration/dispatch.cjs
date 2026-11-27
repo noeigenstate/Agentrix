@@ -1828,6 +1828,7 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
       const resultSource = roleResult?.source ?? (legacyDecision ? 'legacy-heading' : 'final-text');
       if (needsDecision) detached?.needsDecision?.();
       const findings = resultSource === 'finish-role' ? roleResult.findings : undefined;
+      const checks = roleResult ? artifacts.roleChecks(roleResult) : null;
       const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
       const bookkeeping = await recordTeam({ answer, findings, header, reason });
       await inputTail.catch(() => {});
@@ -1842,7 +1843,8 @@ async function runWorker(argv, { env = process.env, source = 'dispatch', launch 
         ...(stopFailure && { treeStopFailure: stopFailure }),
         verdict: routeVerdict(),
         ...(outOfScope && !options.readOnly ? { outOfScopeCount: outOfScope.length } : {}),
-        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), endedAt: Date.now() },
+        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), ...(checks && { checks }),
+        endedAt: Date.now() },
       filesChanged));
       endSent = true;
       ended({ exitCode, reason, rate, scope, bookkeeping, restore: scopeRestoreReport, needsDecision, resultSource,

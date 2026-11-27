@@ -397,7 +397,7 @@ export function App() {
               {orderedProjects.map((project, index) => {
                 const hidden = focusedId ? focusedId !== project.id : !visibleIds.has(project.id);
                 return <div key={project.id} className={`project-slot ${reorder.drag?.id === project.id ? 'drag-placeholder' : ''}`} data-project-slot={project.id} style={{ display: hidden ? 'none' : undefined }}><ProjectPanel project={project} index={index}
-                  hidden={hidden} focused={focusedId === project.id && !previewFile}
+                  hidden={hidden} focused={focusedId === project.id && !previewFile} installations={agents}
                   roleNotice={roleNotice && roleNotice.projectId === project.id ? {
                     ...roleNotice, onShown: displayedRoleNotice ? undefined : acknowledgeRoleNotice,
                     dismiss: () => { if (!displayedRoleNotice) acknowledgeRoleNotice(); setDisplayedRoleNotice(false); },

@@ -26,7 +26,7 @@ async function applyWindowBackdrop(host) {
 function openMainWindow(host, shellIcon) {
   const { store, desktopGlassBackend, applyNativeTheme, registerMacTitlebar, t, send, broadcast, process = globalThis.process,
     appUserModelId, relaunchDisplayName, app, root, registerWindowZoom, screen, createDashboard, BrowserWindow, ipcMain, devUrl,
-    dashboard, windowBackgroundColor, syncDashboardLive, createLab, integrationDir, registerWindowContents, Menu,
+    dashboard, windowBackgroundColor, createLab, integrationDir, registerWindowContents, Menu,
     clipboard, previewResources, pictureFrom, registerWindowLifecycle, requestQuit, report, updateIndicators } = host;
   host.desktopGlassWindow = store.settings.surface === 'glass' && store.settings.glassBackground === 'desktop' && !!desktopGlassBackend;
   applyNativeTheme();
@@ -44,7 +44,6 @@ function openMainWindow(host, shellIcon) {
     host.dashboardWindow = createDashboard({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard,
       getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
       getUiZoom: () => host.windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });
-    syncDashboardLive();
     host.labWindow = createLab({ app, root, BrowserWindow, ipcMain, devUrl, t, records: dashboard, helper: path.join(integrationDir, 'dispatch.cjs'),
       getProjects: () => store.projects, getSettings: () => store.settings, getMainWindow: () => window,
       getUiZoom: () => host.windowZoom?.percent ?? 100, backgroundColor: windowBackgroundColor });

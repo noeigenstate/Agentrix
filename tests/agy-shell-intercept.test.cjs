@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { realpathSync } = require('node:fs');
 const fs = require('node:fs/promises');
+const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { execFile } = require('node:child_process');
@@ -26,7 +28,7 @@ const commandTimeout = (windows ? 60000 : 24000) * timeoutScale;
 const shellTimeout = (windows ? 90000 : 30000) * timeoutScale;
 
 async function shellFixture(t) {
-  const folder = await fs.mkdtemp(path.join(__dirname, '.agy-shell-'));
+  const folder = await fs.mkdtemp(path.join(tmpdir(), 'agy-shell-'));
   const events = [], server = await createEventServer(event => events.push(event));
   t.after(async () => {
     await server.close();
@@ -50,7 +52,7 @@ async function verifyLaunch({ folder, events, record }, expected = shellCommands
   assert.equal(requests.length, 1, JSON.stringify(events));
   const [event] = requests;
   assert.deepEqual([event.agent, event.args, event.projectId, event.sessionKey], ['agy', [], 'project', 'key']);
-  assert.equal(await fs.realpath(event.cwd), await fs.realpath(folder));
+  assert.equal(realpathSync.native(event.cwd), realpathSync.native(folder));
   assert.equal(events.some(event => event.type === 'agent-exited'), false);
   const rows = (await fs.readFile(record, 'utf8')).trim().split('\n').map(line => JSON.parse(line).args);
   assert.deepEqual(rows, expected);

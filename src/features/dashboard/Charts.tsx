@@ -3,7 +3,7 @@
 import { type PointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
 import type { Shape } from './chart-math';
-import { modelShort } from './format';
+import { modelTitle } from './format';
 import { useModels } from './model-look';
 
 export function MarkShape({ shape, cx, cy, r }: { shape: Shape; cx: number; cy: number; r: number }) {
@@ -25,8 +25,7 @@ export function Marker({ model, size = 12 }: { model: string; size?: number }) {
 }
 
 export function Legend({ models }: { models: string[] }) {
-  const { of } = useModels();
-  return <div className="legend">{models.map(model => <span key={model} className={of(model).dim}><Marker model={model} />{modelShort(model)}</span>)}</div>;
+  return <div className="legend">{models.map(model => <span key={model}><Marker model={model} />{modelTitle(model)}</span>)}</div>;
 }
 
 // A tip that follows the pointer over a chart. It sits on the other side of the pointer near the window's right edge.

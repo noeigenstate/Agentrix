@@ -148,17 +148,13 @@ function createDispatchIntake(deps) {
       confirmed: !call.unconfirmed, done: !!call.done, title: call.title, route: call.dispatch ? 'dispatch' : 'parent', projectPath: project.path,
       ...(call.dispatch ? { local: project.kind !== 'ssh', runId: callId.slice('dispatch:'.length), cwd: call.cwd } : {}) };
   }
-  // The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
-  function syncDashboardLive() {
-    deps.dashboardWindow?.live([...deps.sessions.values()].flatMap(s => (s.calls?.running() ?? []).map(call => ({ ...call, project: s.projectId ?? null }))));
-  }
   function dispatchedOnly(s) {
     const calls = s?.calls?.snapshot(null) || [];
     return calls.length ? { provider: null, context: null, round: null, total: null, limits: [], calls } : null;
   }
 
   return { acceptDispatchEvent, dispatchReading, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox,
-    callsOf, dispatchedOnly, resolveIntervention, syncDashboardLive };
+    callsOf, dispatchedOnly, resolveIntervention };
 
 }
 

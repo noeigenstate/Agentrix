@@ -748,6 +748,14 @@
     "id": "src/features/agents/SeatsDialog.tsx:ad680e826eec287412b1315c"
   },
   {
+    "text": "run(() => move(role, -1))",
+    "id": "src/features/agents/SeatsDialog.tsx:f3822026d519135ae1debf40"
+  },
+  {
+    "text": "run(() => move(role, 1))",
+    "id": "src/features/agents/SeatsDialog.tsx:38cf1443d323bfe07f26b100"
+  },
+  {
     "text": "run(window.agentrix.interveneAgent(terminalId, callId, value), sent => {\n      received(sent);\n      if (sent.status === 'rejected') return;\n      setText(current => current.trim() === value ? '' : current); onSent(sent);\n    })",
     "id": "src/features/agents/SubagentInput.tsx:debaaa685309da5d25f81619"
   },
@@ -778,14 +786,6 @@
   {
     "text": "lookup(agent)?.input(rows, screen.inputHint)",
     "id": "src/features/cli-screens/index.ts:0e23b19e0078ac2883114d7e"
-  },
-  {
-    "text": "run(item, item.state === 'open' ? 'adopted' : 'open')",
-    "id": "src/features/dashboard/Suggestions.tsx:14a3f1ce4f8c3a98d22fb02d"
-  },
-  {
-    "text": "run(item, 'dismissed')",
-    "id": "src/features/dashboard/Suggestions.tsx:882e29626aaf230efd62c28f"
   },
   {
     "text": "run(async () => { const result = await unwrap(window.agentrix.copyEntries(project.id, paths)); if (!result.superseded) setMessage(t('已复制 {count} 项，可粘贴到其他位置', { count: result.count })); })",

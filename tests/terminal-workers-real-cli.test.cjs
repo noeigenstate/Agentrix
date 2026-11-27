@@ -68,7 +68,7 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   const bootstrapFile = path.join(runtimeDir, 'bootstrap.json');
   fs.writeFileSync(bootstrapFile, JSON.stringify({ shims: path.join(integration, 'shims') }));
   let terminals;
-  const startedAt = performance.now(), waits = [], timeline = [];
+  const startedAt = performance.now(), timeline = [];
   const trace = (event, tool) => timeline.push([Math.round(performance.now() - startedAt), event, tool]);
   const { eventServer, hookServer } = await workerHookEndpoints(f, () => terminals, trace);
   let workerPty, exited = false, screen = '';
@@ -79,7 +79,7 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
     return workerPty;
   }, claudeFile: () => process.env.AGENTRIX_REAL_CLAUDE,
     parent: () => ({ env, sessionKey: 'offline-owner', bootstrapFile }), runtimeDir: () => runtimeDir,
-    calls: () => ({ setAwaiting(_runId, value) { if (value) { waits.push(value); trace('waiting for ' + value); } } }),
+    calls: () => null,
     claudeHome: () => env.CLAUDE_CONFIG_DIR,
     hooks: ({ terminalId, sessionKey, env: workerEnv, cwd }) => terminalHooks({ port: hookServer.port, terminalId, sessionKey, eventServer, env: workerEnv, cwd,
       workerPermission: true,
@@ -88,7 +88,10 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   const spec = { agent: 'claude', projectId: 'terminal', terminalId: 'offline-run', runtimeSessionId: 'offline-run', runId: 'offline-run', cwd: f.cwd,
     model: 'claude-sonnet-4-5', readOnly, permission: readOnly ? 'dontAsk' : 'acceptEdits' };
   const events = [];
-  const runtime = terminals.create(run, spec, createEventStream(spec, event => events.push(event)));
+  const runtime = terminals.create(run, spec, createEventStream(spec, event => {
+    events.push(event);
+    if (event.type === 'worker.awaiting-owner' && event.payload.detail !== null) trace('waiting for owner', event.payload.detail);
+  }));
   await runtime.start();
   await runtime.send({ clientMessageId: 'brief', text: 'Answer with the stub reply.' });
   for (let n = 0; n < 600 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 100));
@@ -100,7 +103,11 @@ for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'w
   assert.ok(f.stats.keys.every(key => key === env.ANTHROPIC_API_KEY), 'the worker used the throwaway profile\'s key only');
   if (process.env.AGENTRIX_HOOK_TRACE) t.diagnostic(JSON.stringify(timeline));
   const waitDetails = events.filter(event => event.type === 'worker.awaiting-owner' && event.payload.detail).map(event => event.payload.detail);
-  assert.deepEqual(waits, [], `running the probes never waits for the owner\n${JSON.stringify(waitDetails)}\n${JSON.stringify(timeline)}\n${JSON.stringify(screen)}`);
+  const lastSubmit = timeline.findLastIndex(([, event]) => event === 'UserPromptSubmit');
+  // Slow CLI startup can show the startup-dialog notice until the prompt submission arrives.
+  const unexpectedWaits = timeline.filter(([, event, detail], index) => event === 'waiting for owner'
+    && (detail !== 'respond to the Claude Code startup dialog' || index >= lastSubmit));
+  assert.deepEqual(unexpectedWaits, [], `running the probes never waits for the owner\n${JSON.stringify(waitDetails)}\n${JSON.stringify(timeline)}\n${JSON.stringify(screen)}`);
   const [ran, git, write] = results.values();
   assert.ok(ran);
   assert.notEqual(ran.is_error, true, JSON.stringify(ran.content));

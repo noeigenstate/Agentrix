@@ -76,7 +76,14 @@ body:has(.seats-overlay) .error-toast { z-index: 401; }
 .seats-team-grid.is-unavailable { opacity: 0.45; pointer-events: none; }
 .seats-mode-note { margin: 0; color: var(--text-2); }
 .seats-btn.seats-conductor.is-on { border-color: var(--accent); color: var(--accent); }
-.seats-team-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 150px; gap: var(--seat-gap); }
+.seats-team-grid { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 150px; gap: var(--seat-gap); }
+/* Reordering by drag, as the project cards: each card keeps a slot in the grid; the lifted card follows the pointer with an edge in the primary text colour, its slot a dashed outline. */
+.seats-team-slot { position: relative; display: flex; min-width: 0; }
+.seats-team-slot > .seats-team-card { flex: 1; cursor: grab; }
+.seats-team-grid.is-reordering .seats-team-card.drag-source { position: fixed; left: var(--drag-left); top: var(--drag-top); width: var(--drag-width); height: var(--drag-height);
+  transform: translate3d(var(--drag-x), var(--drag-y), 0); z-index: 100; cursor: grabbing; outline: 2px solid var(--text-1); will-change: transform; }
+.seats-team-card.drag-source, .seats-team-card.drag-source * { pointer-events: none !important; }
+.seats-team-slot.drag-placeholder::before { content: ''; position: absolute; inset: 0; border: 1px dashed var(--border-hover); border-radius: 12px; pointer-events: none; }
 .seats-team-card { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0;
   padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
 .seats-team-card.is-lead { flex-direction: row; align-items: center; gap: 12px; min-height: 76px; padding: 8px 16px; }

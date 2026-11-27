@@ -467,7 +467,7 @@
       "reason": "The packaged runtime root is electron. The carried manifest defines the supported shell event providers."
     },
     "integration/dispatch.cjs": {
-      "digest": "233d29fe209236a8f9bb7e2097310935e7077072c9e588e25ef965925d4c71f7",
+      "digest": "677b39cb0136faebc53a759d9b33ac34c07a95d9c4f62faf217520dbed1e5760",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",

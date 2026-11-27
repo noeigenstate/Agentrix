@@ -9,7 +9,7 @@ import { adapterOf, adapterOfModel, adapters, agentOfModel, canonicalModelId, lo
 import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import { allowsUltracode, rankByName, unsupportedEffort, validModel } from '../../../electron/features/routing/seat-rules.mjs';
 
-import { roleLocks } from '../../../electron/features/routing/role-rules.mjs';
+import { compactOrder, orderRoles, roleLocks } from '../../../electron/features/routing/role-rules.mjs';
 
 export { agentOfModel, allowsUltracode };
 
@@ -90,8 +90,13 @@ export const configFor = (info: SeatsInfo, scope: Scope): RoutingConfig =>
   scope === 'template' ? info.template : info.config ?? info.template;
 export const startScope = (_info: SeatsInfo, projectId?: string): Scope => projectId ? 'project' : 'template';
 
-export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
-  const shipped = info.roles.filter(role => role.source !== 'custom');
+// The draft's roles in shipped order: main sends its roles in the active order, and shippedOrder puts them back.
+function shippedDraft(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
+  const byId = new Map(info.roles.map(role => [role.id, role]));
+  const shipped = (info.shippedOrder ?? info.roles.map(role => role.id)).flatMap(id => {
+    const role = byId.get(id);
+    return role && role.source !== 'custom' ? [role] : [];
+  });
   const overrides = Object.keys(config.roles).sort().map(id => [id, config.roles[id]] as const);
   return shipped.flatMap(role => {
     const values = config.roles[role.id];
@@ -106,6 +111,17 @@ export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
     }));
     return [base, ...copies];
   });
+}
+
+export const draftRoles = (info: SeatsInfo, config: RoutingConfig): TeamRole[] => orderRoles(shippedDraft(info, config), config.order, role => role);
+
+// The team ids after a card moves one place (step -1 or 1), or null at either end.
+export function moveRole(ids: readonly SeatId[], id: SeatId, step: -1 | 1): SeatId[] | null {
+  const from = ids.indexOf(id), to = from + step;
+  if (from < 0 || to < 0 || to >= ids.length) return null;
+  const next = [...ids];
+  [next[from], next[to]] = [next[to], next[from]];
+  return next;
 }
 
 function seatOf(value: RoleConfig | undefined, isLead: boolean): Seat | undefined {
@@ -145,7 +161,7 @@ export function updateDraftSeats(config: RoutingConfig, previous: SeatMap, next:
 }
 
 export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfig {
-  const roles = draftRoles(info, config), resolved = resolveDraftSeats(info.defaults, roles, config);
+  const roles = shippedDraft(info, config), resolved = resolveDraftSeats(info.defaults, roles, config);
   const entries = roles.flatMap(role => {
     const entry = config.roles[role.id];
     if (!entry) return [];
@@ -157,7 +173,8 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
     const value = { ...rest, ...(seat && !sameSeat(seat, inherited) ? seat : {}) };
     return Object.keys(value).length ? [[role.id, value] as const] : [];
   });
-  return { roles: Object.fromEntries(entries), ...(config.conductor && { conductor: true }) };
+  const order = compactOrder(roles, config.order);
+  return { roles: Object.fromEntries(entries), ...(order && { order }), ...(config.conductor && { conductor: true }) };
 }
 
 function fitSeat(seat: Seat, row: SeatModel, ultracode = seat.ultracode): Seat {

@@ -357,12 +357,6 @@ class AgentCalls {
     const entries = this.background.snapshot();
     return value || entries.length ? attach(value || { provider: null, context: null, round: null, total: null, limits: [], calls: [] }, entries) : null;
   }
-  running() {
-    return [...this.calls.values()].filter(call => !call.done && !call.reviewed && !call.held).map(call => ({
-      id: call.id, agent: call.agent, ...shownModel(call), title: call.title, role: call.role,
-      startedAt: time(call.startedAt), rate: call.rate ? { ...call.rate } : null,
-    }));
-  }
   // The owner's 「最近完成」 bounds: this terminal's last ten finished calls, none older than thirty minutes, read at
   // each snapshot (nothing is polled; an older call drops out at the next publish, as the renderer also filters by age).
   recent() {

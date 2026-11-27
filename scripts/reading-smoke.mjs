@@ -108,8 +108,8 @@ try {
   const observed = (await state()).agentUsage;
   assert.equal(observed?.limitsFrom, 'Claude Code');
   assert.equal(observed?.limitsAt, newerUsage.cachedUsageUtilization.fetchedAtMs);
-  // Compact panes hide this note. The focused account read can present the same cached windows as “Claude”.
-  assert.match(await claudeQuota.locator('[data-usage-detail]').textContent(), /^额度来自 Claude(?: Code)，.+ 更新$/);
+  // The owner asked for no line saying where the limits came from.
+  assert.equal(await claudeQuota.locator('[data-usage-detail]').count(), 0);
   await fs.writeFile(usageFile, JSON.stringify(cachedUsage));
   await new Promise(resolve => setTimeout(resolve, 2300));
   assert.deepEqual(await limitValues(), ['34%', '23%'], 'an older Claude cache cannot roll the pane back');

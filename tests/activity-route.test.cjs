@@ -207,10 +207,11 @@ test('grouped call rows lead with a labelled status icon and show only actionabl
 function usageMarkup(language = 'zh', terminal = {}, options = {}) {
   const { AgentSections } = loadAgentsFile('ApiUsage.tsx', language);
   const connection = kind => ({ kind, source: null, observedAt: null });
-  const state = agent => ({ path: null, reason: null, next: { path: null, reason: null }, limits: options.limits?.[agent] ?? null, connection: connection(options[agent] ?? 'subscription') });
+  const state = agent => ({ path: null, reason: null, next: { path: agent === 'agy' ? 'native' : null, reason: null },
+    limits: options.limits?.[agent] ?? null, connection: connection(options[agent] ?? 'subscription') });
   const agents = { claude: state('claude'), codex: state('codex'), ...(options.agy && { agy: state('agy') }) };
   const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, agents, ...options.usage };
-  return renderToStaticMarkup(React.createElement(AgentSections, { usage, terminal: {
+  return renderToStaticMarkup(React.createElement(AgentSections, { usage, installations: options.installations, terminal: {
     id: 'placeholder', agent: 'claude', cliActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false }, agentUsage: { provider: 'Anthropic', limits: [] }, ...terminal } }));
 }
 const agentSection = (html, name) => new RegExp('<section class="api-agent" aria-label="' + name + '">[\\s\\S]*?</section>').exec(html)[0];
@@ -482,7 +483,7 @@ test('called models show four ordered role and title rows with state icons and w
   }
 });
 
-test("Claude's usage keeps plan limits, tokens and their source without reset controls or text", () => {
+test("Claude's usage keeps plan limits and tokens without a source line, reset controls or text", () => {
   const now = Date.now();
   for (const language of ['zh', 'en']) {
     for (const [source, percent] of [['Claude Code', 6], ['CodePulse', 100], ['Claude', 12]]) {
@@ -491,11 +492,10 @@ test("Claude's usage keeps plan limits, tokens and their source without reset co
         limitsAt: now, limitsFrom: source,
         round: { input: 1200, cached: 600, output: 30 }, total: { input: 2400, cached: 1200, output: 60 },
       } }), 'Claude');
-      const note = source === 'CodePulse' ? language === 'en' ? 'Limits from a CodePulse status record, written' : '额度来自 CodePulse 状态记录，'
-        : language === 'en' ? `Limits from ${source}, updated` : `额度来自 ${source}，`;
-      const labels = language === 'en' ? ['5-hour limit', 'Weekly limit', 'This round', 'This conversation', note]
-        : ['5 小时额度', '每周额度', '本轮', '本次对话', note];
+      const labels = language === 'en' ? ['5-hour limit', 'Weekly limit', 'This round', 'This conversation']
+        : ['5 小时额度', '每周额度', '本轮', '本次对话'];
       for (const label of labels) assert.ok(html.includes(label), label);
+      assert.doesNotMatch(html, /额度来自|Limits from|data-usage-detail/, 'no line says where the limits came from');
       assert.ok(html.includes(`aria-valuenow="${percent}"`)); assert.match(html, /aria-valuenow="84"/);
       assert.equal((html.match(/class="activity-metric activity-tokens" title=/g) || []).length, 2);
       assert.equal((html.match(/is-warn/g) || []).length, percent >= 90 ? 1 : 0, 'only a window from 90% takes the warning colour');
@@ -547,7 +547,7 @@ test('the app clock never replaces an observed percentage with a guessed reset',
   assert.equal(terminal.agentUsage.limits[0].percent, 81.34);
 });
 
-test('unknown round and conversation totals explain earlier history when context is known', () => {
+test('an unknown round explains earlier history when context is known; an unknown conversation total says nothing', () => {
   const tokens = { input: 1200, cached: 600, output: 30 };
   for (const language of ['zh', 'en']) {
     const first = language === 'en' ? 'Shows after the first reply.' : '第一次回复后显示。';
@@ -556,7 +556,7 @@ test('unknown round and conversation totals explain earlier history when context
     for (const [round, total] of [[null, null], [null, tokens], [tokens, null]]) {
       const html = agentSection(usageMarkup(language, { agentUsage: { limits: [], context: { used: 120, window: 200000 }, round, total } }), 'Claude');
       assert.equal(html.includes(roundNote), round === null);
-      assert.equal(html.includes(totalNote), total === null);
+      assert.ok(!html.includes(totalNote));
       assert.ok(!html.includes(first));
       assert.equal((html.match(/class="activity-metric activity-tokens" title=/g) || []).length, Number(!!round) + Number(!!total));
     }
@@ -988,9 +988,9 @@ test('a dispatched worker that has not reported its model shows the requested on
 
 test('an agent’s sections follow the connection: a session that reports plan windows is on a plan even when the connection is unknown; otherwise unknown and not connected say 额度 未知 and measure nothing', () => {
   const future = Date.now() + 3600000, own = { limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Codex' };
-  // Unknown connection, but the session's own windows: the bars and their source show, and no 额度 未知 row.
+  // Unknown connection, but the session's own windows: the bars show without a source line, and no 额度 未知 row.
   const plan = agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: own }, { codex: 'unknown' }), 'Codex');
-  assert.match(plan, /5 小时额度/); assert.match(plan, /额度来自 Codex，/); assert.doesNotMatch(plan, /<dt>额度<\/dt>/);
+  assert.match(plan, /5 小时额度/); assert.doesNotMatch(plan, /额度来自/); assert.doesNotMatch(plan, /<dt>额度<\/dt>/);
   // Without any window, from main or from the session: 额度 未知, and the context and the round (the session's own) are all there is.
   for (const kind of ['unknown', 'none']) {
     const none = agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: { limits: [], context: { used: 100, window: 1000 }, round: { input: 10, cached: 0, output: 1 } } }, { codex: kind }), 'Codex');
@@ -1021,6 +1021,13 @@ test('the session’s own windows win when the screen read them after main did; 
   assert.doesNotMatch(agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: screen(at) }, { claude: 'subscription', limits: { claude: main(at - 60000) } }), 'Claude'), /20%/, 'the other agent never borrows the session’s windows');
 });
 
+test('the activity pane leaves room for routing when agy is absent or has no usage to show', () => {
+  for (const options of [{ agy: 'none' }, { agy: 'unknown', installations: { agy: { installed: false } }, limits: { agy: { state: 'unavailable' } } }]) {
+    const html = usageMarkup('en', {}, options);
+    assert.deepEqual([...html.matchAll(/<section class="api-agent" aria-label="([^"]+)"/g)].map(([, name]) => name), ['Claude', 'Codex']);
+  }
+});
+
 test('agy shows separate five-hour and weekly quota windows for Gemini and third-party models', () => {
   const window = (windowDurationMins, usedPercent) => ({ windowDurationMins, usedPercent, resetsAtMs: null });
   const agy = { state: 'ready', limitsById: {
@@ -1029,6 +1036,8 @@ test('agy shows separate five-hour and weekly quota windows for Gemini and third
   } };
   for (const [language, gemini, thirdParty] of [['zh', 'Gemini 模型', '第三方模型'], ['en', 'Gemini models', 'Third-party models']]) {
     const html = agentSection(usageMarkup(language, {}, { agy: 'subscription', limits: { agy } }), 'Antigravity');
+    const target = html.match(/popovertarget="([^"]+)"/i)?.[1];
+    assert.ok(target && html.includes(`id="${target}" popover="auto"`));
     const headings = [...html.matchAll(/<h5 class="api-quota-group-title">([^<]+)<\/h5>/g)];
     assert.deepEqual(headings.map(([, label]) => label), [gemini, thirdParty]);
     const values = group => [...group.matchAll(/aria-valuenow="(\d+)"/g)].map(([, percent]) => Number(percent));

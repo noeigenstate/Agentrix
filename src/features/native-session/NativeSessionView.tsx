@@ -227,7 +227,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
       {errorLine && (stopped || unknown ? <p className="reading-status" role="status">{errorLine}</p> : <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>)}
       {noticeLine && <p className="reading-status" role="status">{noticeLine}</p>}
       {checkNotice && <BillingLink projectId={projectId} />}
-      {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}
+      {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} mark={<AgentMark agent={kind} />} />)}
       <SwitchQuestion terminalId={terminalId} sessionId={sessionId} state={change} />
     </div>}
   </>;

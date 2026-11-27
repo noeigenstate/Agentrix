@@ -14,7 +14,7 @@ const remoteMessages = {
 function createInstall(inspect = inspectAgy) {
   let last = null;
   async function locate(env) { return last = await inspect(env); }
-  return { locate, refresh: locate, peek: () => last, terminalExecutable: env => last?.file ?? locateAgy(env),
+  return { locate, refresh: locate, peek: () => last, detect: env => !!locateAgy(env), terminalExecutable: env => last?.file ?? locateAgy(env),
     stateOf: result => ({ ...result, ...(result.file && { fileShown: result.file }) }) };
 }
 

@@ -22,8 +22,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `electron/features/cli-adapters/registry.mjs` and `electron/features/cli-adapters/capabilities.mjs` (registered providers, model ownership and capabilities)
 - `src/shared/agent-events.ts` (provider ID type)
 - `src/shared/agent-label.ts` (provider short names)
-- `src/features/cli-screens/index.ts`
-- `src/features/terminal/terminal-screen.ts`
+- `src/features/cli-screens/index.ts` and `src/features/terminal/terminal-screen.ts` (the running CLI's screen)
 - `src/features/native-session/native-bridge.ts` (remote model catalog)
 - `electron/features/routing/seat-rules.mjs` (shared seat validation and model rules)
 - `electron/features/routing/role-rules.mjs` (shared role validation, locks and ID generation)
@@ -31,6 +30,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `src/shared/i18n.ts`
 - `src/shared/*routing*.ts` (routing commands and automatic lead-switch notices)
 - `src/shared/types.ts`
+- `src/features/workspace/useProjectReorder.ts` (the shared drag-to-reorder hook)
 
 ## Invariants
 - The chart uses the team order and exposes every seat's controls — test: `tests/seats-ui.test.cjs` › "org chart uses fixture order and gives each seat its own model, effort and fast controls"
@@ -38,6 +38,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - A project save uses the digest at the start of its draft — test: `tests/seats-ui.test.cjs` › "a file-watch refresh does not replace a draft’s compare-and-swap digest"
 - The read-only box follows accepted roles and the running lead — test: `tests/seats-ui.test.cjs` › "the conversation box uses accepted settings across drafts"
 - Confirmation shows full project text and main’s allowed actions — test: `tests/routing-review-ui.test.cjs` › "routing review shows every change, flag and custom text as plain text"
+- Cards after the lead reorder by drag and by the role menu; the order is saved — test: `tests/seats-ui.test.cjs` › "team cards reorder by drag and by the role menu, and the order is saved"
 - The key follows accepted roles and shows the lead the conversation runs now — test: `tests/seats-ui.test.cjs` › "the routing key refreshes accepted roles and shows the lead the conversation runs now"
 
 ## Not ours

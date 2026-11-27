@@ -1,6 +1,6 @@
 const { createIpcAdapter } = require('../../shared/ipc.cjs');
 
-function registerDashboardIpc({ ipcMain, dashboardWindow, getMainWindow, summary, decide, open, devUrl, t }) {
+function registerDashboardIpc({ ipcMain, dashboardWindow, getMainWindow, summary, open, devUrl, t }) {
   const handles = [], listeners = [];
   const mainUrl = devUrl ? devUrl.replace(/\/$/, '') : 'agentrix://app/index.html';
   function allowedWindow(dashboard) {
@@ -28,7 +28,6 @@ function registerDashboardIpc({ ipcMain, dashboardWindow, getMainWindow, summary
   adapter(false).handle('dashboard:open', open);
   const ipc = adapter(true);
   ipc.handle('dashboard:summary', summary);
-  ipc.handle('dashboard:decide', decide);
   ipc.handle('dashboard:appearance', dashboardWindow.appearance);
   for (const action of ['close', 'minimize', 'maximize']) {
     ipc.listen(`dashboard:${action}`, () => {

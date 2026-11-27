@@ -44,6 +44,7 @@ Test: `tests/agent-event-worker-permission.test.cjs` › "the Windows bridge for
 SDK bookkeeping denials stay in the policy audit. Only denied work is included in the run’s refusal list.
 An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.
 The end line includes the count and first action. Role status, wait and result expose the structured list.
+The signed end event also carries the role's finish_role checks as counts by result (`checks`), for the dashboard.
 A Claude role keeps its early session-based start. The first provider model updates signed routing and the detached
 receipt as it arrives. Status and the final line expose the resulting verdict.
 All briefs ask roles to report blocked actions under Needs approval. Claude briefs direct roles to finish with plain text and avoid owner dialogs.

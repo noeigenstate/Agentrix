@@ -1,68 +1,83 @@
-const { estimateCost, priceOf } = require('./cost.cjs');
 const { adapterOf } = require('../cli-adapters/registry.cjs');
-const { localModel } = require('../cli-adapters/registry.mjs');
-const { currentWeights } = require('./decisions.cjs');
-const { suggestions } = require('./suggestions.cjs');
-const { journalEntries, roundData, incidentOf, CATEGORIES } = require('./rounds.cjs');
-const { runSeries, trends, costOf } = require('./summary-series.cjs');
-const { nonnegative, text, modelOf, keyOf, execution, reviewFollowup, ratio, average, timedRate } = require('./summary-values.cjs');
+const { nonnegative, text, modelOf, keyOf, ratio, localDay } = require('./summary-values.cjs');
 
-// Definitions shared by both pages:
-// - Worker first pass: exit/0, no out-of-scope files, no finding against its author in the meeting, and no rework of
-//   that author's task kind. A rework invocation is never a first pass. Lead deliveries pass only at submission 1.
-// - Rework: execution starting after the meeting's first review ended, or an explicitly skipped review follow-up.
-// - Phases: sums of active time; build excludes rework. The round's duration is its journal timestamp span.
-// - First confirmation: every meeting session's first confirmation was confirmed (a later confirmation cannot fix it).
-// - Speed: summed timed output / the same replies' active time, grouped by local day. Quota: latest provider reading,
-//   longest window. Previous periods are adjacent, equally long windows; all has no previous period.
-const DAY = 24 * 60 * 60 * 1000;
+// The dashboard answers one question: of the tasks each model was handed, how many came back with their tests passed.
+// - A task is one dispatched role run. The lead's own turns and in-process sub-agents report no checks and are left out.
+// - Unfinished: the run did not end cleanly (an error, a stop, no confirmed start, a capacity end, files out of scope).
+// - Otherwise the role's own checks decide (finish_role verification): any failed check fails the task, else any passed
+//   check passes it; no checks, only skipped ones, or a record from before checks were kept is untested.
+// - The pass rate is passed over all tasks, so an untested or unfinished task counts against a model.
+// - Fewer than MIN_TASKS tasks is a small sample: it is marked and ranked after the models with enough tasks.
+// - The trend's daily point is the pass rate of the seven days ending that day; a weekly point is its own week.
+const DAY = 86_400_000, MIN_TASKS = 5, WEEKLY_AFTER_DAYS = 60, ROLLING_DAYS = 7;
+const OUTCOMES = ['passed', 'failed', 'untested', 'unfinished'];
 
-function normalizeRuns(records, now) {
+function outcomeOf(run) {
+  if (!['exit', 'permission'].includes(run.reason) || run.exitCode !== 0 || run.outOfScope > 0) return 'unfinished';
+  return run.checks?.failed > 0 ? 'failed' : run.checks?.passed > 0 ? 'passed' : 'untested';
+}
+
+function tasksOf(records, now) {
   const unique = new Map();
   for (const [index, record] of records.entries()) {
-    if (!nonnegative(record?.at) || record.at > now || !adapterOf(record.agent)) continue;
-    const run = { ...record, model: modelOf(record.model, record.agent), kind: text(record.kind, 32) || 'unreported' };
-    unique.set(record.usageRecordId ? keyOf('usage', record.usageRecordId) : keyOf(record.projectId, record.source === 'native' ? 'native' : record.source === 'subagent' ? 'subagent' : 'dispatch', record.id || index), run);
+    if (!nonnegative(record?.at) || record.at > now || (record.source ?? 'dispatch') !== 'dispatch' || !adapterOf(record.agent)) continue;
+    unique.set(record.usageRecordId ? keyOf('usage', record.usageRecordId) : keyOf(record.projectId, record.id || index), {
+      at: record.at, projectId: record.projectId, agent: record.agent, model: modelOf(record.model, record.agent),
+      kind: text(record.kind, 32) || 'unreported', outcome: outcomeOf(record) });
   }
   return [...unique.values()].sort((a, b) => a.at - b.at);
 }
 
-function workerPass(run, contexts) {
-  if (!execution(run) || !Number.isInteger(run.exitCode) || !nonnegative(run.outOfScope) || !text(run.reason, 32)) return null;
-  if (!['exit', 'permission'].includes(run.reason) || run.exitCode !== 0 || run.outOfScope !== 0 || reviewFollowup(run)) return false;
-  const context = contexts.get(keyOf(run.projectId, run.meeting));
-  return !context || !context.isRework(run) && !context.findingAuthors.has(run.model) && !context.reworkAuthors.has(keyOf(run.model, run.kind));
+function groupBy(tasks, key) {
+  const groups = new Map();
+  for (const task of tasks) {
+    const name = key(task);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(task);
+  }
+  return groups;
 }
 
-function quotaData(records) {
-  const latest = new Map();
-  for (const record of records) {
-    if (!adapterOf(record.provider) || !Array.isArray(record.windows)) continue;
-    // The newest reading replaces the older one even when its window duration is unreported.
-    latest.set(record.provider, record);
-  }
-  const providers = new Map(), grouped = new Map();
-  for (const [provider, record] of latest) {
-    const windows = record.windows.filter(value => nonnegative(value?.minutes) && nonnegative(value?.percent))
-      .sort((a, b) => b.minutes - a.minutes);
-    const window = windows[0], groupId = adapterOf(provider).usage?.quotaGroupId;
-    if (window) providers.set(provider, { provider, percent: window.percent, minutes: window.minutes, at: record.at });
-    for (const value of windows) {
-      const id = groupId?.(value.id), key = keyOf(provider, id);
-      if (id && !grouped.has(key)) grouped.set(key, { provider, id, percent: value.percent, minutes: value.minutes });
-    }
-  }
-  const recent = [...providers.values()].sort((a, b) => b.at - a.at || a.provider.localeCompare(b.provider))[0];
-  const groups = [...grouped.values()];
-  return {
-    groups, latest: recent ? { provider: recent.provider, percent: recent.percent, minutes: recent.minutes } : null,
-    forModel(provider, model) {
-      if (!groups.some(group => group.provider === provider)) return providers.get(provider)?.percent ?? null;
-      const id = adapterOf(provider)?.usage?.quotaGroupOfModel?.(model);
-      return grouped.get(keyOf(provider, id))?.percent ?? null;
-    },
-  };
+function tally(tasks) {
+  const counts = Object.fromEntries(OUTCOMES.map(outcome => [outcome, 0]));
+  for (const task of tasks) counts[task.outcome]++;
+  return { tasks: tasks.length, ...counts, passRate: ratio(counts.passed, tasks.length), small: tasks.length < MIN_TASKS };
 }
+
+// A week starts on Monday; both kinds of bucket are named by their first local day, yyyy-mm-dd.
+function bucketOf(at, unit) {
+  const date = new Date(at);
+  date.setHours(12, 0, 0, 0);
+  if (unit === 'week') date.setDate(date.getDate() - (date.getDay() + 6) % 7);
+  return localDay(date.getTime());
+}
+
+function trendOf(tasks, start, now) {
+  const first = tasks.length && start === null ? tasks[0].at : start ?? now;
+  const unit = (now - first) / DAY > WEEKLY_AFTER_DAYS ? 'week' : 'day';
+  const date = new Date(`${bucketOf(first, unit)}T12:00:00`), last = bucketOf(now, unit), buckets = [];
+  // Calendar steps keep local days apart across daylight-saving changes.
+  for (let bucket = localDay(date.getTime()); bucket <= last; bucket = localDay(date.getTime())) {
+    buckets.push(bucket);
+    date.setDate(date.getDate() + (unit === 'week' ? 7 : 1));
+  }
+  // A day's point covers the seven days ending with it: a model has a task or two a day, and one task alone reads only 0% or 100%.
+  const span = unit === 'day' ? ROLLING_DAYS : 1, points = [];
+  for (const [model, group] of groupBy(tasks, task => task.model)) {
+    const at = group.map(task => buckets.indexOf(bucketOf(task.at, unit)));
+    buckets.forEach((bucket, index) => {
+      const window = group.filter((_, task) => at[task] <= index && at[task] > index - span);
+      if (!window.length) return;
+      const { tasks: count, passed, passRate } = tally(window);
+      points.push({ bucket, model, tasks: count, passed, passRate });
+    });
+  }
+  points.sort((a, b) => a.bucket.localeCompare(b.bucket) || a.model.localeCompare(b.model));
+  return { unit, buckets, points };
+}
+
+// Models with enough tasks first, then by pass rate, then by how many tasks back it.
+const byReliability = (a, b) => a.small - b.small || b.passRate - a.passRate || b.tasks - a.tasks || a.model.localeCompare(b.model);
 
 function projectList(projects, records) {
   const list = new Map(projects.filter(project => text(project?.id)).map(project => [project.id, { id: project.id, name: text(project.name, 240) || project.id }]));
@@ -72,105 +87,17 @@ function projectList(projects, records) {
   return [...list.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
-function kindRates(runs, passes) {
-  const groups = new Map();
-  for (const run of runs) {
-    const key = keyOf(run.kind, run.model);
-    if (!groups.has(key)) groups.set(key, { kind: run.kind, model: run.model, outcomes: [] });
-    const outcome = passes.get(run);
-    if (outcome !== null) groups.get(key).outcomes.push(outcome);
-  }
-  return [...groups.values()].map(({ kind, model, outcomes }) => ({ kind, model, runs: outcomes.length,
-    firstPassRate: ratio(outcomes.filter(Boolean).length, outcomes.length) }))
-    .sort((a, b) => a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model));
+function summarize({ runs = [], projects = [], query = { projectId: null, range: '30d' }, now = 0 } = {}) {
+  const start = query.range === 'all' ? null : now - (query.range === '7d' ? 7 : 30) * DAY;
+  const tasks = tasksOf(runs, now).filter(task => (start === null || task.at >= start) && (query.projectId === null || task.projectId === query.projectId));
+  const models = [...groupBy(tasks, task => task.model)].map(([model, group]) => ({ model, agent: group.at(-1).agent, ...tally(group) }))
+    .sort(byReliability);
+  const kinds = [...groupBy(tasks, task => keyOf(task.kind, task.model))].map(([key, group]) => {
+    const [kind, model] = JSON.parse(key);
+    return { kind, model, ...tally(group) };
+  }).sort((a, b) => a.kind.localeCompare(b.kind) || byReliability(a, b));
+  return { generatedAt: now, query: { ...query }, projects: projectList(projects, runs), minTasks: MIN_TASKS,
+    models, kinds, trend: trendOf(tasks, start, now) };
 }
 
-function taskList(runs, passes, prices) {
-  const counts = new Map(), rows = [];
-  for (let index = runs.length - 1; index >= 0; index--) {
-    const run = runs[index], count = counts.get(run.model) || 0;
-    if (count >= 50) continue;
-    counts.set(run.model, count + 1);
-    // A task's count covers the whole invocation, rather than only the timed replies used for speed.
-    const outputTokens = run.totalOutputTokens ?? run.outputTokens;
-    rows.push({ model: run.model, at: run.at, project: text(run.project, 240), title: text(run.title, 240),
-      kind: run.kind === 'unreported' ? null : run.kind, role: text(run.role, 32) || null, meeting: text(run.meeting, 64) || null,
-      firstPass: passes.get(run), reason: text(run.reason, 32) || null,
-      activeMs: nonnegative(run.activeMs) ? run.activeMs : null, outputTokens: nonnegative(outputTokens) ? outputTokens : null,
-      costUsd: costOf(run, prices) });
-  }
-  return rows;
-}
-
-function summarize({ records = {}, journals = [], projects = [], prices = {}, decisions = [], live = { running: [], at: 0 },
-  query = { projectId: null, range: '30d' }, now = 0, t } = {}) {
-  const length = query.range === 'all' ? null : (query.range === '7d' ? 7 : 30) * DAY;
-  const start = length === null ? 0 : now - length;
-  const selected = record => nonnegative(record?.at) && record.at >= start && record.at <= now;
-  const inProject = record => query.projectId === null || record.projectId === query.projectId;
-  const globalRuns = normalizeRuns(records.runs || [], now);
-  const globalEntries = journalEntries(journals, projects, null, now);
-  const globalRounds = roundData(globalEntries, globalRuns);
-  const passes = new Map(globalRuns.map(run => [run, workerPass(run, globalRounds.contexts)]));
-  const allRuns = globalRuns.filter(inProject);
-  const allGrades = (records.grades || []).filter(grade => nonnegative(grade?.at) && grade.at <= now && inProject(grade) &&
-    adapterOf(grade.agent) && ['passed', 'sent-back'].includes(grade.outcome)).map(grade => ({ ...grade, model: modelOf(grade.model, grade.agent) }));
-  const entries = query.projectId === null ? globalEntries : journalEntries(journals, projects, query.projectId, now);
-  const allRounds = query.projectId === null ? globalRounds.rounds : roundData(entries, allRuns).rounds;
-  const runs = allRuns.filter(selected), grades = allGrades.filter(selected);
-  const rounds = allRounds.filter(round => selected(round.row)).sort((a, b) => b.row.at - a.row.at || a.key.localeCompare(b.key));
-  const incidents = entries.filter(entry => entry.type === 'incident' && selected(entry)).map(entry => ({ row: incidentOf(entry), key: entry.key }));
-  const findings = entries.filter(entry => entry.type === 'finding' && selected(entry) && CATEGORIES.includes(entry.category) && entry.author !== 'unreported');
-  const weights = currentWeights(decisions), quota = quotaData((records.quota || []).filter(selected).sort((a, b) => a.at - b.at));
-  const leadPasses = grades.filter(grade => grade.submission === 1);
-  const observations = runs.map(run => passes.get(run)).filter(value => value !== null).concat(leadPasses.map(grade => grade.outcome === 'passed'));
-  const modelNames = [...new Set([...runs, ...grades].map(value => value.model))].sort();
-  const modelTrends = trends(allRuns, modelNames, now);
-  const models = modelNames.map(model => {
-    const modelRuns = runs.filter(run => run.model === model), modelGrades = grades.filter(grade => grade.model === model);
-    const agent = modelRuns[0]?.agent || modelGrades[0].agent;
-    const outcomes = modelRuns.map(run => passes.get(run)).filter(value => value !== null)
-      .concat(modelGrades.filter(grade => grade.submission === 1).map(grade => grade.outcome === 'passed'));
-    const costs = modelRuns.map(run => costOf(run, prices)).filter(value => value !== null);
-    const modelWeights = weights.filter(weight => weight.model === model);
-    return { model, agent, runs: modelRuns.length, firstPassRate: ratio(outcomes.filter(Boolean).length, outcomes.length),
-      avgActiveMs: average(modelRuns.map(run => run.activeMs).filter(nonnegative)), tokensPerSecond: timedRate(modelRuns),
-      findingsPerRun: ratio(findings.filter(finding => finding.author === model).length, modelRuns.length),
-      sentBack: modelGrades.filter(grade => grade.outcome === 'sent-back').length,
-      outOfScope: modelRuns.reduce((sum, run) => sum + (nonnegative(run.outOfScope) ? run.outOfScope : 0), 0),
-      incidents: incidents.filter(incident => incident.row.model === model).length,
-      quotaPercent: quota.forModel(agent, model),
-      costUsd: costs.length ? costs.reduce((sum, cost) => sum + cost, 0) : null, costedRuns: costs.length,
-      weight: modelWeights.length ? Math.min(...modelWeights.map(weight => weight.to)) : 1, trend: modelTrends.get(model) };
-  });
-  const findingCells = new Map();
-  const kinds = kindRates(runs, passes);
-  const { daily, speed } = modelNames.length ? runSeries(runs, passes, prices, modelNames,
-    Math.max(0, length === null ? runs[0]?.at ?? now : start), now) : { daily: [], speed: [] };
-  for (const finding of findings) {
-    const key = keyOf(finding.author, finding.category);
-    const cell = findingCells.get(key) || { author: finding.author, category: finding.category, count: 0 };
-    cell.count++; findingCells.set(key, cell);
-  }
-  const previous = length === null ? null : allRounds.filter(round => round.row.at >= start - length && round.row.at < start);
-  const knownFixes = findings.filter(finding => typeof finding.fixed === 'boolean');
-  return { generatedAt: now, query: { ...query }, projects: projectList(projects, [...(records.runs || []), ...(records.grades || [])]),
-    kpis: { firstPassRate: ratio(observations.filter(Boolean).length, observations.length), runs: runs.length,
-      runsPrevious: length === null ? null : allRuns.filter(run => run.at >= start - length && run.at < start).length,
-      incidents: incidents.length, quota: quota.latest, ...(quota.groups.length ? { quotaGroups: quota.groups } : {}),
-      reworkPerRound: average(rounds.map(round => round.row.rework)),
-      reworkPerRoundPrevious: previous === null ? null : average(previous.map(round => round.row.rework)), rounds: rounds.length,
-      roundtableFirstConfirm: ratio(rounds.filter(round => round.row.firstConfirmed).length, rounds.length),
-      findingsPerRound: ratio(rounds.reduce((sum, round) => sum + round.row.findings, 0), rounds.length),
-      findingFixRate: ratio(knownFixes.filter(finding => finding.fixed).length, knownFixes.length) },
-    models, modelRuns: taskList(runs, passes, prices), kinds, speed, daily,
-    live: { at: live.at, running: live.running.map(run => ({ ...run })) },
-    incidents: incidents.map(incident => incident.row).sort((a, b) => b.at - a.at), rounds: rounds.map(round => round.row),
-    findings: [...findingCells.values()].sort((a, b) => a.author.localeCompare(b.author) || a.category.localeCompare(b.category)),
-    suggestions: suggestions({ incidents: globalEntries.filter(entry => entry.type === 'incident').map(entry => ({ row: incidentOf(entry), key: entry.key })),
-      kinds: kindRates(globalRuns.filter(run => run.model === 'unreported' || localModel(run.model) !== 'unreported'), passes),
-      rounds: globalRounds.rounds, decisions, t }),
-    weights, prices: { updated: prices.updated || '', unpriced: [...new Set(runs.filter(run => !priceOf(run.model, prices)).map(run => run.model))].sort() } };
-}
-
-module.exports = { summarize };
+module.exports = { summarize, outcomeOf, MIN_TASKS };

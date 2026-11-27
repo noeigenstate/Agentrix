@@ -824,6 +824,42 @@ test('detached Codex and Claude expose engine timing and decisions through the r
   }
 });
 
+test('a role’s finish_role checks reach its signed end event as counts by result', async t => {
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-checks-')));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const server = await createEventServer(() => {});
+  t.after(() => server.close());
+  const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md'), bootstrap = path.join(cwd, 'boot.json');
+  await fs.writeFile(brief, 'Synthetic role task');
+  await fs.writeFile(bootstrap, JSON.stringify({ pipeName: server.name, projectId: 'fixture', sessionKey: 'synthetic-session' }));
+  const id = randomUUID(), roleArtifacts = await createRoleArtifacts(cwd), out = path.join(roleArtifacts.folder, 'answer.md');
+  store.create({ id, cwd, out, roleArtifacts, createdAt: Date.now(), argv: ['claude', '--role', '执行', '--title', 'Checks fixture',
+    '--model', 'claude-sonnet-5-5', '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, '--permission', 'acceptEdits'] });
+  const ran = ['pass', 'pass', 'fail', 'skipped'].map(result => ({ command: 'node --test', result, note: '' }));
+  assert.equal(await runDetached(store.file(id), {
+    env: { AGENTRIX_BOOTSTRAP: bootstrap }, resolveExecutable: (_agent, args) => ({ file: 'synthetic-cli', args }),
+    launch: (_file, args) => {
+      const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+      child.kill = () => { child.exitCode = 0; child.stdout.end(); child.stderr.end(); child.emit('exit', 0); child.emit('close', 0); };
+      const { command, args: serverArgs } = JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.agentrix_role;
+      const request = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'finish_role', arguments: { answer: 'Done', verification: { ran, unverified: [] } } } };
+      execFileSync(command, serverArgs, { input: JSON.stringify(request) + '\n', encoding: 'utf8' });
+      child.stdin.once('finish', () => queueMicrotask(() => {
+        for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
+        child.kill();
+      }));
+      return child;
+    },
+  }), 0);
+  const directory = path.join(dispatchDirectory(bootstrap), id);
+  const frames = await Promise.all((await fs.readdir(directory)).map(async name => JSON.parse(await fs.readFile(path.join(directory, name), 'utf8'))));
+  const end = frames.find(frame => frame.type === 'dispatch-end');
+  assert.ok(validDispatch(end));
+  assert.deepEqual(end.checks, { passed: 2, failed: 1, skipped: 1 });
+  await sweepRoleArtifacts(cwd, { now: store.read(id).endedAt + RETENTION });
+});
+
 test('a mention, a fenced example and a different heading do not add a decision note', async t => {
   const answer = 'Mention ## Needs decision in prose.\n\n~~~md\n## Needs decision\n~~~\n\n### Needs decision\n## Needs decision later\n';
   const records = claude.map(record => ({ record: record.type === 'result' ? { ...record, result: answer } : record }));

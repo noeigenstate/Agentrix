@@ -17,6 +17,7 @@ Shows the expanded project's usage and quota in the Activity pane. The routing d
 ## May import
 
 - `electron/features/cli-adapters/*.mjs`
+- `src/features/agents/AgentBrandIcon.ts`
 - `src/features/agents/RoutingKeyCard.tsx`
 - `src/features/agents/SeatsHost.tsx`
 - `src/features/home/send-to-agent.ts`

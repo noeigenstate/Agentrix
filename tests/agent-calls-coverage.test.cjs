@@ -10,6 +10,7 @@ const { createHookIngest } = require('../electron/features/terminal-events/hook-
 
 const at = seconds => Date.parse('2026-01-01T00:00:00Z') + seconds * 1000;
 const items = calls => calls.snapshot().flatMap(group => group.items);
+const active = calls => items(calls).filter(item => ['starting', 'preparing', 'running'].includes(item.state));
 const signal = (kind, agentId = 'child', seconds = 0, extra = {}) => ({ kind, terminalId: 't', agentId,
   agentType: 'general-purpose', transcriptPath: null, toolUseId: null, at: at(seconds), ...extra });
 const use = (id = 'toolu_child', input = {}) => ({ type: 'assistant', timestamp: new Date(at(0)).toISOString(),
@@ -41,11 +42,11 @@ test('a SubagentStart gives the row before the sub-agent transcript exists; Suba
   f.calls.apply(use());
   f.calls.remoteRecords({ child: { toolUseId: 'toolu_child' } });
   assert.equal(items(f.calls).length, 1);
-  assert.equal(f.calls.running().length, 1);
+  assert.equal(active(f.calls).length, 1);
   assert.equal(items(f.calls)[0].viewable, false);
   assert.equal(f.calls.toolCall('toolu_child').filename, undefined, 'the parent transcript is not the child transcript');
   f.take('SubagentStop', { agent_id: 'child', agent_type: 'Explore', agent_transcript_path: '/subagents/agent-child.jsonl' }, 5);
-  assert.equal(f.calls.running().length, 0);
+  assert.equal(active(f.calls).length, 0);
   assert.equal(items(f.calls)[0].endedAt, at(5));
   assert.deepEqual(f.stateEvents, [], 'lifecycle hooks never start or finish the owner round');
 });
@@ -61,7 +62,7 @@ test('SendMessage keeps only bounded target fields and revives the finished row,
   f.take('PreToolUse', { tool_name: 'SendMessage', tool_use_id: 'continue-1', tool_input: { to: 'child', recipient: 'child',
     message: 'Private words', content: 'Private words', summary: 'Private summary' } }, 4);
   assert.deepEqual(items(f.calls).map(item => [item.id, item.resumed]), [[id, true]]);
-  assert.equal(f.calls.running().length, 1);
+  assert.equal(active(f.calls).length, 1);
   const captured = [];
   const ingest = createHookIngest({ keyOf: () => 'key', deliver: event => captured.push(event) });
   ingest.take('t', 'PreToolUse', JSON.stringify({ tool_name: 'SendMessage', tool_input: { to: 'x'.repeat(3000), recipient: 'child', message: 'Private words' } }));
@@ -80,11 +81,11 @@ test('hook and transcript identities deduplicate in either order and late transc
     if (first === 'transcript') calls.subagent(signal('start'));
     calls.apply(result(-1));
     assert.equal(items(calls).length, 1);
-    assert.equal(calls.running().length, 1);
+    assert.equal(active(calls).length, 1);
     calls.subagent(signal('stop', 'child', 5));
     calls.apply(result(6));
     assert.equal(items(calls).length, 1);
-    assert.equal(calls.running().length, 0);
+    assert.equal(active(calls).length, 0);
   }
 });
 
@@ -109,7 +110,7 @@ test('duplicate and stale lifecycle signals cannot revive a stopped run or doubl
   calls.subagent(signal('stop', 'child', 2));
   calls.subagent(signal('stop', 'child', 2));
   calls.subagent(signal('start', 'child', 1));
-  assert.equal(calls.running().length, 0);
+  assert.equal(active(calls).length, 0);
   assert.equal(finished.length, 1);
   calls.subagent(signal('continue', 'child', 3, { toolUseId: 'continue-1' }));
   calls.subagent(signal('start', 'child', 4));
@@ -117,7 +118,7 @@ test('duplicate and stale lifecycle signals cannot revive a stopped run or doubl
   calls.subagent(signal('stop', 'child', 5));
   calls.subagent(signal('stop', 'child', 5));
   calls.subagent(signal('continue', 'child', 6, { toolUseId: 'continue-1' }));
-  assert.equal(calls.running().length, 0, 'replayed continuation identity cannot reopen the run');
+  assert.equal(active(calls).length, 0, 'replayed continuation identity cannot reopen the run');
   assert.equal(finished.length, 2);
   assert.equal(new Set(finished.map(event => event.id)).size, 2);
   assert.equal(items(calls).length, 1);
@@ -132,7 +133,7 @@ test('a continuation cancels the previous retirement timer and retains its open 
   calls.subagent(signal('continue', 'child', 2, { toolUseId: 'continue-1' }));
   t.mock.timers.tick(30000);
   assert.equal(items(calls)[0].hidden, false);
-  assert.equal(calls.running().length, 1);
+  assert.equal(active(calls).length, 1);
   const call = calls.calls.values().next().value;
   assert.equal(calls.feeds.owned(call).completedAt, undefined);
 });
@@ -214,7 +215,7 @@ test('transcript history reset retains a signal-held row while parent exit clear
   calls.subagent(signal('start'));
   const id = items(calls)[0].id;
   calls.reset(true);
-  assert.equal(calls.running().length, 1);
+  assert.equal(active(calls).length, 1);
   assert.equal(items(calls)[0].id, id);
   calls.endSession();
   assert.deepEqual(items(calls), []);
@@ -230,7 +231,7 @@ test('local metadata joins a hook-first row to the tool identity before the fore
   calls.apply(use()); await calls.work;
   assert.equal(items(calls).length, 1);
   assert.equal(items(calls)[0].id, id);
-  assert.equal(calls.running().length, 1);
+  assert.equal(active(calls).length, 1);
 });
 
 test('a local child transcript supplies its own rate without inheriting the parent settings', async t => {
@@ -249,7 +250,7 @@ test('a local child transcript supplies its own rate without inheriting the pare
   assert.equal(calls.snapshot()[0].model, 'claude-opus-5-5');
   assert.equal(calls.snapshot()[0].rate.outputTokens, 75);
   assert.equal(items(calls)[0].viewable, true);
-  assert.equal(calls.running().length, 1);
+  assert.equal(active(calls).length, 1);
 });
 
 test('an intercepted declaration preserves source through starting, running and ended AgentCall items', t => {
@@ -292,15 +293,15 @@ test('SendMessage revives only known children from the parent and a matching fai
   assert.deepEqual(items(f.calls), [], 'a name is not proof of a running child');
   f.take('SubagentStart', { agent_id: 'child' }); f.take('SubagentStop', { agent_id: 'child' }, 2);
   f.take('PreToolUse', { agent_id: 'nested-child', tool_name: 'SendMessage', tool_use_id: 'nested', tool_input: { to: 'child' } }, 3);
-  assert.equal(f.calls.running().length, 0);
+  assert.equal(active(f.calls).length, 0);
   for (const [index, event] of ['PostToolUseFailure', 'PermissionDenied'].entries()) {
     const toolUseId = `continue-${index}`, seconds = 4 + index * 3;
     f.take('PreToolUse', { tool_name: 'SendMessage', tool_use_id: toolUseId, tool_input: { to: 'child' } }, seconds);
-    assert.equal(f.calls.running().length, 1);
+    assert.equal(active(f.calls).length, 1);
     f.take(event, { tool_name: 'SendMessage', tool_use_id: 'unrelated' }, seconds + 1);
-    assert.equal(f.calls.running().length, 1, 'another tool cannot undo this revival');
+    assert.equal(active(f.calls).length, 1, 'another tool cannot undo this revival');
     f.take(event, { tool_use_id: toolUseId }, seconds + 1);
-    assert.equal(f.calls.running().length, 0, event);
+    assert.equal(active(f.calls).length, 0, event);
     assert.equal(items(f.calls)[0].endedAt, at(2));
     assert.equal(items(f.calls)[0].resumed, undefined);
   }
@@ -322,20 +323,20 @@ test('current-generation terminal end proofs release signal-held rows with SSH c
     else if (['killed', 'failed'].includes(proof)) calls.apply({ type: 'user', isMeta: true, timestamp: new Date(at(3)).toISOString(), message: { content:
       `<task-notification><tool-use-id>toolu_child</tool-use-id><task-id>child</task-id><status>${proof}</status></task-notification>` } });
     else { const record = result(3); if (proof === 'interrupt') record.message.content[0].is_error = true; calls.apply(record); }
-    assert.equal(calls.running().length, 0, proof);
+    assert.equal(active(calls).length, 0, proof);
     calls.subagent(signal('continue', 'child', 4, { toolUseId: `continue-${proof}` }));
     calls.apply(result(5));
-    assert.equal(calls.running().length, 1, 'the original Agent result cannot end its continuation even when delivered later');
+    assert.equal(active(calls).length, 1, 'the original Agent result cannot end its continuation even when delivered later');
     calls.apply(toolRecord('TaskStop', 3, 'old-stop')); calls.apply(stopped(5, 'old-stop'));
-    assert.equal(calls.running().length, 1, 'a stop issued before this generation cannot end it');
+    assert.equal(active(calls).length, 1, 'a stop issued before this generation cannot end it');
     calls.apply({ type: 'user', isMeta: true, timestamp: new Date(at(5)).toISOString(), message: { content:
       '<task-notification><tool-use-id>toolu_child</tool-use-id><task-id>child</task-id><status>killed</status></task-notification>' } });
-    assert.equal(calls.running().length, 1, 'a notification for the original launch cannot end its continuation');
+    assert.equal(active(calls).length, 1, 'a notification for the original launch cannot end its continuation');
     calls.apply(toolRecord('TaskStop', 5, 'failed-stop'));
     const denied = stopped(6, 'failed-stop'); denied.message.content[0].is_error = true; calls.apply(denied);
-    assert.equal(calls.running().length, 1, 'an unsuccessful stop is not end proof');
+    assert.equal(active(calls).length, 1, 'an unsuccessful stop is not end proof');
     calls.apply(toolRecord('TaskStop', 4, 'new-stop')); calls.apply(stopped(7, 'new-stop'));
-    assert.equal(calls.running().length, 0);
+    assert.equal(active(calls).length, 0);
   }
   for (const offset of [-60000, 60000]) {
     const calls = tracker(t), project = { id: 'p', kind: 'ssh', path: '/project' };
@@ -348,7 +349,7 @@ test('current-generation terminal end proofs release signal-held rows with SSH c
     await s.activityMonitor.poll();
     calls.subagent(signal('start', 'child', offset / 1000 + 1, { toolUseId: 'toolu_child' }));
     records = [result(3)]; await s.activityMonitor.poll();
-    assert.equal(calls.running().length, 0, `offset ${offset}`);
+    assert.equal(active(calls).length, 0, `offset ${offset}`);
     assert.equal(items(calls)[0].endedAt, at(3) + offset);
   }
 });
@@ -364,7 +365,7 @@ test('SendMessage results cannot replace a known Agent or Task identity or compl
       [{ type: 'tool_use', name: 'SendMessage', id: 'send-message', input: { to: 'child' } }] } });
     const receipt = result(4); receipt.message.content[0].tool_use_id = 'send-message';
     calls.apply(receipt);
-    assert.equal(calls.running().length, 1, name);
+    assert.equal(active(calls).length, 1, name);
     assert.equal(child.toolUseId, 'toolu_child');
     assert.equal(calls.toolCall('toolu_child'), child);
     assert.equal(calls.toolCall('send-message'), null);
@@ -384,7 +385,7 @@ test('only an explicit killed stop outcome records a killed child and every othe
     assert.equal(finished[0].exitCode, killed ? null : 0);
     calls.subagent(signal('stop', 'child', 2, { outcome }));
     assert.equal(finished.length, 1);
-    assert.equal(calls.running().length, 0);
+    assert.equal(active(calls).length, 0);
   }
 });
 
@@ -395,9 +396,9 @@ test('a matching transcript error rolls back continuation when no failure hook a
   calls.subagent(signal('continue', 'child', 3, { toolUseId: 'denied-message' }));
   const error = { type: 'user', timestamp: new Date(at(4)).toISOString(), message: { content:
     [{ type: 'tool_result', tool_use_id: 'unrelated', is_error: true, content: 'Not allowed' }] } };
-  calls.apply(error); assert.equal(calls.running().length, 1);
+  calls.apply(error); assert.equal(active(calls).length, 1);
   error.message.content[0].tool_use_id = 'denied-message'; calls.apply(error);
-  assert.equal(calls.running().length, 0);
+  assert.equal(active(calls).length, 0);
   assert.equal(items(calls)[0].id, id);
   assert.equal(items(calls)[0].endedAt, at(2));
   assert.equal(items(calls)[0].resumed, undefined);
@@ -427,7 +428,7 @@ test('an existing transcript monitor sends remote records and clock updates to t
 
 // Claude Code 2.1.330 runs SubagentStart and SubagentStop for its internal helper agents: an agent id, no agent type,
 // and no Agent or Task call in the conversation.
-test("an internal helper's hook pair makes no row, no live entry and no run record, and is forgotten", async t => {
+test("an internal helper's hook pair makes no row and no run record, and is forgotten", async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = at(30);
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-helper-'));
@@ -435,12 +436,12 @@ test("an internal helper's hook pair makes no row, no live entry and no run reco
   const dashboard = new DashboardRecords(folder), project = { id: 'p', kind: 'local', path: folder }, finished = [];
   const f = hooks(t, { local: true, now: () => now, finished: (call, event) => { finished.push(event); dashboard.run(project, call, event); } });
   f.take('SubagentStart', { agent_id: 'a2665b99ece0b671d', transcript_path: '/parent.jsonl' });
-  assert.deepEqual([f.calls.snapshot(), f.calls.running()], [[], []], 'a running helper is not listed');
+  assert.deepEqual(f.calls.snapshot(), [], 'a running helper is not listed');
   f.take('SubagentStop', { agent_id: 'a2665b99ece0b671d', agent_transcript_path: '/subagents/agent-a2665b99ece0b671d.jsonl' });
   f.take('SubagentStart', { agent_id: 'typed-helper', agent_type: 'general-purpose' }, 2);
   f.take('SubagentStop', { agent_id: 'typed-helper', agent_type: 'general-purpose' }, 3);
   f.calls.review(at(4), true); t.mock.timers.tick(30000);
-  assert.deepEqual([f.calls.snapshot(), f.calls.running(), finished], [[], [], []]);
+  assert.deepEqual([f.calls.snapshot(), finished], [[], []]);
   assert.equal(f.calls.usage(null), null);
   assert.deepEqual(f.stateEvents, []);
   assert.equal(f.calls.calls.size, 2, 'an ended helper is kept a while: its tool call may only be read later');
@@ -464,7 +465,7 @@ test("an internal helper's hook pair makes no row, no live entry and no run reco
   local.subagent(signal('start', 'helper', 0, { agentType: '' }), true); await local.work;
   local.subagent(signal('stop', 'helper', 9, { agentType: '' }), true); await local.work;
   assert.equal(local.calls.get('subagent:helper').rate.outputTokens, 75, 'the helper was read, so a late tool call would lose nothing');
-  assert.deepEqual([local.snapshot(), local.running(), metered], [[], [], []]);
+  assert.deepEqual([local.snapshot(), metered], [[], []]);
 });
 
 test('an Agent-tool sub-agent has its row and one run record whichever of its hooks and its tool call is seen first', t => {
@@ -475,14 +476,14 @@ test('an Agent-tool sub-agent has its row and one run record whichever of its ho
     f.take('SubagentStart', { agent_id: 'child', agent_type: 'general-purpose' });
     assert.equal(items(f.calls).length, first === 'tool call' ? 1 : 0, first);
     if (first === 'hook') launch(f);
-    if (first !== 'hook pair') assert.deepEqual([items(f.calls).length, f.calls.running().length, finished.length], [1, 1, 0], first);
+    if (first !== 'hook pair') assert.deepEqual([active(f.calls).length, finished.length], [1, 0], first);
     f.take('SubagentStop', { agent_id: 'child', agent_type: 'general-purpose' }, 5);
     if (first === 'hook pair') {
       assert.deepEqual([items(f.calls), finished], [[], []], 'held until its tool call is read');
       launch(f);
     }
     assert.deepEqual(items(f.calls).map(item => [item.title, item.endedAt]), [['Inspect parser', at(5)]], first);
-    assert.equal(f.calls.running().length, 0, first);
+    assert.equal(active(f.calls).length, 0, first);
     assert.equal(finished.length, 1, first);
     assert.deepEqual(finished[0].slice(0, 2), ['Inspect parser', 'subagent'], first);
     f.take('SubagentStop', { agent_id: 'child', agent_type: 'general-purpose' }, 5); launch(f);

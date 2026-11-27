@@ -91,7 +91,7 @@ async function mainStartup(t, engineFactory) {
     },
     macTitlebar: null, registerMacTitlebar: noop, send: noop, broadcast: noop, screen: {},
     windowZoom: null, registerWindowZoom: () => ({ percent: 100 }), dashboardWindow: null, createDashboard: noop,
-    dashboard: {}, syncDashboardLive: noop, ipcMain, devUrl: null, labWindow: null,
+    dashboard: {}, ipcMain, devUrl: null, labWindow: null,
     createLab: options => createLab({ ...options, engineFactory }), registerWindowContents: noop,
     registerWindowLifecycle: ({ window }) => window.once('ready-to-show', () => window.show()),
     Menu: { setApplicationMenu: noop }, clipboard: {}, previewResources: {}, pictureFrom: noop,

@@ -448,7 +448,7 @@ function disposeTerminal(deps, id, { preserveNative = false, preserveSwitch = fa
   }
   if (!s) return;
   if (!preserveSwitch) {
-    deps.syncDashboardLive(); deps.endSkillSession(s); deps.routing.endSession(s.projectId, s.sessionId);
+    deps.endSkillSession(s); deps.routing.endSession(s.projectId, s.sessionId);
   }
   deps.stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);

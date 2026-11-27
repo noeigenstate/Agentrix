@@ -146,6 +146,13 @@ async function settleRoleResult({ folder, runId, answer, legacyDecision, warning
 
 const roleNeedsDecision = ({ source, needsDecision }) => source === 'legacy-heading' ? true : needsDecision === null ? null : needsDecision.length > 0;
 
+// The checks a role reported through finish_role, counted by result, for the dashboard; null when it reported none.
+function roleChecks({ source, verification }) {
+  if (source !== 'finish-role' || !Array.isArray(verification?.ran) || !verification.ran.length) return null;
+  const count = result => verification.ran.filter(check => check?.result === result).length;
+  return { passed: count('pass'), failed: count('fail'), skipped: count('skipped') };
+}
+
 function roleResultFields({ format, version, runId, ...result }) {
   return { ...result, ...(result.source !== 'finish-role' && { notice: '未调用 finish_role' }),
     ...(result.source === 'legacy-heading' && { legacyNeedsDecision: true }) };
@@ -233,4 +240,4 @@ async function sweepRoleArtifacts(root, { now = Date.now(), maxFolders = MAX_FOL
 }
 
 module.exports = { createRoleArtifacts, stampRoleArtifacts, trackRoleProcess, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION,
-  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleResultFields };
+  ROLE_RESULT_SERVER, roleResultServer, createRoleResultTools, readRoleResultFile, settleRoleResult, roleNeedsDecision, roleChecks, roleResultFields };

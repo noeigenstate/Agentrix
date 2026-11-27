@@ -170,7 +170,10 @@ try {
   assert.equal((await projectState()).terminals.length, 1);
   await grid();
   // Product Codex launch uses the native protocol; terminal interactions below use an explicitly typed command.
-  await panel.getByRole('button', { name: /^Codex/ }).click();
+  const launcher = panel.locator('.agent-launcher');
+  const hasAntigravity = await page.evaluate(async () => (await window.agentrix.getAgents()).value?.agy?.installed === true);
+  await waitFor(async () => await launcher.locator('.agent-launcher-agent').count() === (hasAntigravity ? 3 : 2), 'launcher shows the available entries');
+  await launcher.getByRole('button', { name: /^Codex/ }).click();
   await waitFor(async () => (await projectState()).terminals.some(item => item.nativeMode === 'codex-app-server' && item.cliActive), 'launcher starts Codex through app-server');
   const nativeTerminal = (await projectState()).terminals.find(item => item.nativeMode === 'codex-app-server');
   await waitFor(async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), nativeTerminal.id)).value?.state === 'idle', 'native Codex is ready');

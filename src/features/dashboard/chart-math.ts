@@ -1,6 +1,6 @@
-// The dashboard's chart arithmetic: how a model is told apart, which days a series covers, and where things go on a plot.
-// Pure, so the SVG components only draw.
-import type { DashboardDailyPoint, DashboardKindRate, DashboardSpeedPoint, DashboardSummary } from '../../shared/dashboard-types';
+// The dashboard's chart arithmetic: how a model is told apart, how the trend lines up with its buckets and where things go
+// on a plot. Pure, so the SVG components only draw.
+import type { DashboardKindCell, DashboardOutcomes, DashboardTrend } from '../../shared/dashboard-types';
 import { ALIAS, modelShort } from './format';
 
 export type Shape = 'circle' | 'square' | 'diamond' | 'triangle' | 'inverted' | 'hexagon';
@@ -18,7 +18,7 @@ export const lookOf = (slot: number): Look => ({ slot, colour: slot % PALETTE, s
 export const UNREPORTED = 'unreported';
 export const NEUTRAL: Look = { slot: -1, colour: -1, shape: 'circle', neutral: true };
 
-// One look per model for the whole page: every chart, the key and the tables read the same map. An alias ("sonnet") takes the look of the full id
+// One look per model for the whole page: every chart and table reads the same map. An alias ("sonnet") takes the look of the full id
 // of the same model when the page has one, so one model never shows as two.
 export function modelLooks(models: Iterable<string>) {
   const looks = new Map<string, Look>(), taken = new Set<number>(), all = [...new Set(models)].sort();
@@ -37,18 +37,10 @@ export function modelLooks(models: Iterable<string>) {
   return looks;
 }
 
-// Every model any part of the summary mentions.
-export const summaryModels = (summary: Pick<DashboardSummary, 'models' | 'daily' | 'kinds' | 'speed' | 'live'>) =>
-  [...summary.models, ...summary.daily, ...summary.kinds, ...summary.speed, ...summary.live.running].map(item => item.model);
-
-export const modelsWithSpeed = (speed: DashboardSpeedPoint[]) => new Set(speed.filter(point => point.tokensPerSecond !== null).map(point => point.model));
-
-// The smallest 1, 2 or 5 times a power of ten that holds the value, so the top gridline is a round number.
-export function niceMax(value: number) {
-  if (!(value > 0)) return 1;
-  const power = 10 ** Math.floor(Math.log10(value)), unit = value / power;
-  return (unit <= 1 ? 1 : unit <= 2 ? 2 : unit <= 5 ? 5 : 10) * power;
-}
+// The four parts of a reliability bar, in the order they are drawn, each a share of the tasks.
+export const OUTCOMES = ['passed', 'failed', 'untested', 'unfinished'] as const;
+export type Outcome = typeof OUTCOMES[number];
+export const shares = (row: DashboardOutcomes) => OUTCOMES.map(outcome => ({ outcome, count: row[outcome], share: row.tasks ? row[outcome] / row.tasks : 0 }));
 
 // Value to y: 0 at the bottom of the plot, max at its top, snapped to a half pixel so axis-aligned strokes stay crisp.
 export const yScale = (max: number, top: number, height: number) => (value: number) => Math.round(top + height * (1 - value / max)) + 0.5;
@@ -63,20 +55,7 @@ export function spreadLabels(ys: number[], gap: number, low: number, high: numbe
   return result;
 }
 
-// The same for labels beside points: only points whose labels could meet (their x within `reach`, chained left to right) are spread, the rest keep their y.
-export function spreadNearby(points: { x: number; y: number }[], reach: number, gap: number, low: number, high: number) {
-  const order = points.map((point, index) => ({ ...point, index })).sort((a, b) => a.x - b.x), result: number[] = [];
-  for (let start = 0; start < order.length;) {
-    let end = start + 1;
-    while (end < order.length && order[end].x - order[end - 1].x < reach) end++;
-    const group = order.slice(start, end), ys = spreadLabels(group.map(item => item.y), gap, low, high);
-    group.forEach((item, i) => { result[item.index] = group.length > 1 ? ys[i] : item.y; });
-    start = end;
-  }
-  return result;
-}
-
-// Runs of consecutive indexes that hold a value: a missing reading breaks the line instead of drawing a zero.
+// Runs of consecutive indexes that hold a value: a bucket without tasks breaks the line instead of drawing a zero.
 export function runs(values: (number | null)[]) {
   const out: number[][] = [];
   values.forEach((value, index) => {
@@ -84,17 +63,6 @@ export function runs(values: (number | null)[]) {
     if (index > 0 && values[index - 1] !== null) out[out.length - 1].push(index); else out.push([index]);
   });
   return out;
-}
-
-// yyyy-mm-dd as a day count, so a gap of idle days takes its width on the axis.
-export const dayNumber = (day: string) => { const [year, month, date] = day.split('-').map(Number); return Math.round(Date.UTC(year, month - 1, date) / 86_400_000); };
-
-const pad = (value: number) => String(value).padStart(2, '0');
-// The local calendar day of a time as yyyy-mm-dd, and the `count` days ending with that one, oldest first (a model's 14-day trend).
-export const localDay = (at: number) => { const date = new Date(at); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`; };
-export function recentDays(at: number, count: number) {
-  const date = new Date(at);
-  return Array.from({ length: count }, (_, back) => localDay(new Date(date.getFullYear(), date.getMonth(), date.getDate() - (count - 1 - back), 12).getTime()));
 }
 
 // The index of the position nearest to x.
@@ -107,53 +75,29 @@ export function nearest(xs: number[], x: number) {
 // Which points of a long series carry a marker: all of a short one, every k-th and the last of a long one.
 export const markerEvery = (points: number, limit = 16) => points <= limit ? 1 : Math.ceil(points / 8);
 
-export type SpeedDay = { day: string; values: Record<string, number | null> };
-// One row per local day, newest last, with every model's reading (null when it had none that day).
-export function speedByDay(speed: DashboardSpeedPoint[]): SpeedDay[] {
-  const days = new Map<string, Record<string, number | null>>();
-  for (const point of speed) days.set(point.day, { ...days.get(point.day), [point.model]: point.tokensPerSecond });
-  return [...days.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([day, values]) => ({ day, values }));
+export type TrendCell = { tasks: number; passed: number; passRate: number } | null;
+// One series per model, in the order given, with a cell per bucket (null where the model had no task).
+export function trendSeries(trend: DashboardTrend, models: string[]) {
+  const index = new Map(trend.buckets.map((bucket, at) => [bucket, at]));
+  return models.map(model => {
+    const cells: TrendCell[] = trend.buckets.map(() => null);
+    for (const point of trend.points) if (point.model === model && index.has(point.bucket)) {
+      cells[index.get(point.bucket)!] = { tasks: point.tasks, passed: point.passed, passRate: point.passRate };
+    }
+    return { model, cells };
+  }).filter(series => series.cells.some(Boolean));
 }
 
-export type RunDay = { day: string; runs: Record<string, number>; total: number; passes: number };
-// One row per local day of the daily series, oldest first, with each model's run count and the confirmed first passes of the day.
-export function runsByDay(daily: DashboardDailyPoint[]): RunDay[] {
-  const days = new Map<string, RunDay>();
-  for (const point of daily) {
-    const entry = days.get(point.day) ?? { day: point.day, runs: {}, total: 0, passes: 0 };
-    entry.runs[point.model] = (entry.runs[point.model] ?? 0) + point.runs;
-    entry.total += point.runs;
-    entry.passes += point.firstPass;
-    days.set(point.day, entry);
-  }
-  return [...days.values()].sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
-}
-
-export type KindGroup = { kind: string; rates: Record<string, { rate: number | null; runs: number }> };
-const KIND_ORDER = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable'];
-// One group per task kind, known kinds in their usual order and any other after them.
-export function kindGroups(kinds: DashboardKindRate[]): KindGroup[] {
-  const groups = new Map<string, KindGroup>();
-  for (const row of kinds) {
-    const group = groups.get(row.kind) ?? { kind: row.kind, rates: {} };
-    group.rates[row.model] = { rate: row.firstPassRate, runs: row.runs };
-    groups.set(row.kind, group);
+const KIND_ORDER = ['core', 'frontend', 'test', 'ui-check', 'docs', 'small', 'review', 'investigate', 'roundtable', 'unreported'];
+export type KindRow = { kind: string; cells: Record<string, DashboardKindCell> };
+// One row per task kind, known kinds in their usual order and any other after them.
+export function kindRows(kinds: DashboardKindCell[]): KindRow[] {
+  const rows = new Map<string, KindRow>();
+  for (const cell of kinds) {
+    const row = rows.get(cell.kind) ?? { kind: cell.kind, cells: {} };
+    row.cells[cell.model] = cell;
+    rows.set(cell.kind, row);
   }
   const rank = (kind: string) => KIND_ORDER.indexOf(kind) < 0 ? KIND_ORDER.length : KIND_ORDER.indexOf(kind);
-  return [...groups.values()].sort((a, b) => rank(a.kind) - rank(b.kind) || (a.kind < b.kind ? -1 : 1));
-}
-
-// A heat cell's step on the five-step slate ramp (1 lightest in dark, darkest in light: more is always further along the ramp).
-// A first-pass rate spans 45%..100% of the ramp; a count spans 0..the largest count shown.
-const step = (ratio: number) => Math.min(5, Math.max(1, Math.ceil(ratio * 5)));
-export const rateStep = (rate: number) => step((rate - RATE_FLOOR) / (1 - RATE_FLOOR));
-// The legend's low end: a rate below the ramp's start shares its lightest step, so the end then says "at most" instead of a rate it does not mean.
-const RATE_FLOOR = 0.45;
-export const rateLegendLow = (rates: number[]) => `${rates.some(rate => rate < RATE_FLOOR) ? '≤' : ''}${RATE_FLOOR * 100}%`;
-export const countStep = (value: number, max: number) => max > 0 ? step(value / max) : 1;
-
-// The share each phase takes of a round's measured build time; a phase with no runs takes none.
-export function phaseShares(phases: Record<string, number | null>) {
-  const total = Object.values(phases).reduce<number>((sum, value) => sum + (value ?? 0), 0);
-  return Object.fromEntries(Object.entries(phases).map(([name, value]) => [name, total && value ? value / total : 0])) as Record<string, number>;
+  return [...rows.values()].sort((a, b) => rank(a.kind) - rank(b.kind) || (a.kind < b.kind ? -1 : 1));
 }

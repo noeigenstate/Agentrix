@@ -115,6 +115,8 @@
 .api-agents { display: grid; gap: 8px; }
 .api-agent { display: grid; gap: 4px; min-width: 0; }
 .api-agent-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
+h4.api-agent-title { display: flex; align-items: center; gap: 4px; }
+.api-agent-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .api-usage { display: grid; gap: 2px; margin: 0; }
 .api-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
 .api-row:lang(en) { grid-template-columns: 112px minmax(0, 1fr); }
@@ -125,6 +127,13 @@
 .api-agent .activity-metric { grid-template-rows: 20px; }
 .api-quota-group { display: grid; gap: 2px; }
 .api-quota-group-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-muted); }
+.api-quota-trigger.text-button { display: inline-flex; align-items: center; gap: 8px; min-height: 24px; padding: 0; }
+.api-quota-trigger::after { content: ''; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1px 1px 0; transform: translateY(-2px) rotate(45deg); }
+.api-quota-popover:not(:popover-open) { display: none; }
+.api-quota-popover {
+  box-sizing: border-box; display: grid; gap: 8px; width: min(340px, calc(100% - 24px)); padding: 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--text-1);
+}
 /* The link to the console's billing page under the API spend: a quiet text button on the label column's left edge. */
 .api-agent .api-billing { justify-self: start; min-height: 32px; padding: 0; }
 

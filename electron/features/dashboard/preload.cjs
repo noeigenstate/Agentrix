@@ -8,7 +8,6 @@ const subscribe = (channel, callback) => {
 
 contextBridge.exposeInMainWorld('agentrixDashboard', {
   summary: query => ipcRenderer.invoke('dashboard:summary', query),
-  decide: (id, state, query) => ipcRenderer.invoke('dashboard:decide', id, state, query),
   appearance: () => ipcRenderer.invoke('dashboard:appearance'),
   onAppearance: callback => subscribe('dashboard:appearance-changed', callback),
   onChanged: callback => subscribe('dashboard:changed', () => callback()),

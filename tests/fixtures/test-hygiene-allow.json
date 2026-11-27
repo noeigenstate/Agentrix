@@ -30,7 +30,6 @@
     { "file": "tests/completion-history.test.cjs", "rule": "setImmediate", "count": 2 },
     { "file": "tests/dashboard-ui.test.cjs", "rule": "fixed-sleep", "count": 1 },
     { "file": "tests/dashboard-ui.test.cjs", "rule": "setImmediate", "count": 1 },
-    { "file": "tests/dashboard-window.test.cjs", "rule": "setImmediate", "count": 1 },
     { "file": "tests/dispatch-codex-usage.test.cjs", "rule": "elapsed-bound", "count": 1 },
     { "file": "tests/dispatch-codex-usage.test.cjs", "rule": "fixed-sleep", "count": 1 },
     { "file": "tests/dispatch-control.test.cjs", "rule": "fixed-sleep", "count": 1 },

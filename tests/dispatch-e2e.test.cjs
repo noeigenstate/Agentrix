@@ -194,7 +194,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
     dispatchRefused: value => reportDispatchRefusal(value, { warn: (_message, code, id) => warnings.push({ code, id }) }),
     dashboard: { run() {} }, createNativeUsage: () => ({ apply() {} }), nativeSessions: { forget: async () => {}, tokenRate: () => null },
     PromptQueue: class { reset() {} }, CompletionWork: class { reset() {} }, ActionLog: class {}, ConversationLog: class {},
-    readingHistory: { close() {} }, syncDashboardLive() {}, endSkillSession() {}, routing: { endSession() {}, launch: () => null }, stopUsageAccount() {},
+    readingHistory: { close() {} }, endSkillSession() {}, routing: { endSession() {}, launch: () => null }, stopUsageAccount() {},
     clearTimeout, startupErrors: new Map(), reportHookChannel() {}, acceptShellEvent: () => false,
     claudeConfigDir: () => path.join(root, 'claude'), rememberClaudeSource() {}, require: name => {
       if (name === './features/team/team-locate.cjs') return { locateTeam };

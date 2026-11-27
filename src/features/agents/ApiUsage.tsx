@@ -10,8 +10,8 @@
 // Windows come from the main process; the current session's agent falls back to what its own screen and records gave when the main process has none.
 // Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0. What the main process does not give (a read
 // that has not come back, one that failed, a project it cannot answer for) leaves the connection and the allowance 未知; the current session's own context, bars and tokens stay.
-import { type ReactNode, useEffect, useRef, useState } from 'react';
-import type { AgentUsage, ProjectTerminal } from '../../shared/types';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import type { AgentUsage, AgentsState, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { adapterOf, adapters } from '../../../electron/features/cli-adapters/registry.mjs';
 import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
@@ -20,12 +20,14 @@ import { useUsageRevision } from '../native-session/native-store.ts';
 import { BillingLink } from '../native-session/native-billing-link.ts';
 import { clockWords, connectionWord, consoleCheck, money, noticeWords, windowWords } from '../native-session/native-words';
 import { Metric, TokenMetric, exactCount, percentOf, resetTime, tokenCount } from './Metric';
+import { brandIconOf } from './AgentBrandIcon.ts';
 import { ResetQuota } from './ResetQuota';
 import './activity-pane.css';
 
 // Read again a minute after the last read (the month turns over, a limit recovers), and a second after an event says the numbers moved.
 const REFRESH_MS = 60_000, REVISION_DELAY_MS = 1000;
-const AGENTS = adapters().filter(({ manifest }) => support(manifest, 'accountLimits').ok).map(({ manifest }) => manifest.id);
+const AGENTS = adapters().filter(({ manifest }) => support(manifest, 'accountLimits').ok);
+type Installations = Partial<Pick<AgentsState, NativeAgent>>;
 const QUOTA_GROUP_NAMES: Partial<Record<NativeAgent, Record<string, string>>> = {
   agy: { gemini: 'Gemini 模型', '3p': '第三方模型' },
 };
@@ -105,13 +107,11 @@ function quotaWindows(limits: LimitsPayload | null | undefined, current: boolean
   return fromMain.length && !newer ? { windows: fromMain, onScreen: false } : { windows: fromScreen, onScreen: fromScreen.length > 0 };
 }
 
-// Where the numbers come from, under the bars: the account read (main's answer, with when it was observed) or the session's own source; null when nothing is said.
-function quotaSource(label: string, showUnavailable: boolean, limits: LimitsPayload | null | undefined, current: boolean, usage: AgentUsage | null | undefined) {
+// Under the bars only when the session's own windows have no observation time to stand on; null otherwise.
+function quotaUnavailable(showUnavailable: boolean, limits: LimitsPayload | null | undefined, current: boolean, usage: AgentUsage | null | undefined) {
   const { windows, onScreen } = quotaWindows(limits, current, usage);
-  if (!windows.length) return current && showUnavailable && usage?.limitsAt == null ? t('账号额度暂不可用。') : null;
-  if (onScreen) return usage?.limitsAt == null ? t('账号额度暂不可用。') : usage.limitsFrom === 'CodePulse' ? t('额度来自 CodePulse 状态记录，{time} 写入', { time: resetTime(usage.limitsAt) })
-    : t('额度来自 {source}，{time} 更新', { source: usage.limitsFrom || 'Claude Code', time: resetTime(usage.limitsAt) });
-  return typeof limits?.observedAtMs === 'number' ? t('额度来自 {source}，{time} 更新', { source: label, time: resetTime(limits.observedAtMs) }) : null;
+  const unobserved = usage?.limitsAt == null && (windows.length ? onScreen : current && showUnavailable);
+  return unobserved ? t('账号额度暂不可用。') : null;
 }
 
 // The subscription's windows as bars, what is not known said as such, and the provider's rate-limit lines.
@@ -149,6 +149,17 @@ function QuotaMetrics({ limits, current, usage, groupNames }: { limits: LimitsPa
 const ApiSpend = ({ usage }: { usage: NativeUsage }) =>
   <Metric className="activity-tokens" label={t('API 花费')} note={`${t('今天')} ${money(usage.todayUsdMicros)} · ${t('本月 {amount}', { amount: money(usage.monthUsdMicros) })}`} />;
 
+function GroupedQuota({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId(), heading = `${label} · ${t('额度')}`;
+  return <>
+    <button type="button" className="api-quota-trigger text-button" popoverTarget={id} aria-label={heading}>{t('额度')}</button>
+    <div id={id} popover="auto" className="api-quota-popover" role="region" aria-label={heading}>
+      <h5 className="api-agent-title">{heading}</h5>
+      <div className="activity-metrics">{children}</div>
+    </div>
+  </>;
+}
+
 function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) {
   const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
   // The session in view belongs to one agent; only it has a context length and a round.
@@ -170,37 +181,47 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
   // Only Claude on the API, and only once main has a spend record, has a spend row; Codex on the API has nothing of its own, so no empty block.
   const spend = display?.apiSpend && kind === 'api' && !!usage?.apiRecords;
-  const source = plan ? quotaSource(label, !!display?.showUnavailable, state?.limits, useScreen, tokens) : null;
+  const quotaNote = plan ? quotaUnavailable(!!display?.showUnavailable, state?.limits, useScreen, tokens) : null;
+  const quota = plan && <QuotaMetrics limits={state?.limits} current={useScreen} usage={tokens} groupNames={groupNames} />;
+  const Brand = brandIconOf(agent);
+  const title = <h4 className="api-agent-title"><Brand size={14} />{label}</h4>;
   return <section className="api-agent" aria-label={label}>
-    <h4 className="api-agent-title">{label}</h4>
+    {quota && groupNames ? <div className="api-agent-heading">
+      {title}<GroupedQuota label={label}>{quota}{quotaNote && <p className="activity-note">{quotaNote}</p>}</GroupedQuota>
+    </div> : title}
     <dl className="api-usage">
       {channel && <Row label={t('通道')}><span>{channel}</span></Row>}
       <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
       {unavailable ? <Row label={t('额度')}><span>{t(unavailable)}</span></Row>
         : !plan && kind !== 'api' && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
-    {(current || plan || spend) && <div className="activity-metrics">
+    {(current || plan && !groupNames || spend) && <div className="activity-metrics">
       {current && <ContextMetric usage={tokens} />}
-      {plan && <QuotaMetrics limits={state?.limits} current={useScreen} usage={tokens} groupNames={groupNames} />}
+      {!groupNames && quota}
       {spend && <ApiSpend usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
     {notice && <p className="activity-note" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
     {notice && checkNotice && <BillingLink projectId={projectId} />}
-    {source && <p className="activity-note" data-usage-detail>{source}</p>}
+    {quotaNote && !groupNames && <p className="activity-note" data-usage-detail>{quotaNote}</p>}
     {current && tokens?.context && !tokens.round && <p className="activity-note" data-usage-detail>{t('本轮从更早的记录开始，暂无法统计。')}</p>}
-    {current && tokens?.context && !tokens.total && <p className="activity-note" data-usage-detail>{t('本次对话的总量在更早的记录里。')}</p>}
     {current && display?.resetCredits && plan && <ResetQuota key={`${terminal.id}:${terminal.sessionId}:${terminal.agentStartedAt}`} terminal={terminal} />}
   </section>;
 }
 
-// Each agent's usage section takes its natural height.
-export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) => <div className="api-agents">
-  {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />)}
-</div>;
+export function AgentSections({ usage, terminal, projectId, installations }: {
+  usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string; installations?: Installations | null;
+}) {
+  return <div className="api-agents">{AGENTS.map(({ manifest }) => {
+    const agent = manifest.id, current = terminal.cliActive && terminal.agent === agent, state = usage?.agents[agent];
+    const hasUsage = installations?.[agent]?.installed !== false && (state?.connection?.active || state?.limits);
+    if (manifest.usage?.hideWithoutUsage && !current && !hasUsage) return null;
+    return <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />;
+  })}</div>;
+}
 
 // A pane belongs to one project for its whole life (the app keys each project's panel by its id), so the state below never changes project.
-export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
+export function ApiUsage({ terminal, projectId, installations }: { terminal: ProjectTerminal; projectId?: string; installations?: Installations | null }) {
   const bridge = nativeBridge(), revision = useUsageRevision(projectId);
   const key = projectId || '';
   const [usage, setUsage] = useState<NativeUsage | null>(() => observations.get(key)?.bridge === bridge ? observations.get(key)!.usage : null), [error, setError] = useState<string | null>(null);
@@ -235,6 +256,6 @@ export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; p
   return <section className="activity-card activity-api" aria-label={label}>
     <h3 className="activity-card-title">{label}</h3>
     {error && !usage && <p className="activity-note" role="alert">{t('无法读取额度：{message}', { message: error })}</p>}
-    <AgentSections usage={usage} terminal={terminal} projectId={projectId} />
+    <AgentSections usage={usage} terminal={terminal} projectId={projectId} installations={installations} />
   </section>;
 }

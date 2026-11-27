@@ -8,6 +8,7 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
+const { waitFor } = require('../scripts/wait.mjs');
 const { hookHarness: harnessFor } = require('./helpers/hook-harness.cjs');
 const hookHarness = (filename, overrides) => harnessFor(filename, { './routing-command.ts': routingCommand, ...overrides });
 
@@ -688,11 +689,12 @@ function launcher(runtime, calls, {
 
 test('an installed local agy starts natively and continues the selected Antigravity history entry', async () => {
   const calls = [], history = Promise.withResolvers(), finished = [Promise.withResolvers(), Promise.withResolvers()];
+  const historyRequested = Promise.withResolvers();
   let refreshed = 0;
   const view = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, calls, {
     agyHere: true, onRefresh: () => finished[refreshed++].resolve(),
     nativeCalls: {
-      history: (id, agent) => { calls.push(['history', id, agent]); return history.promise; },
+      history: (id, agent) => { calls.push(['history', id, agent]); historyRequested.resolve(); return history.promise; },
       resume: async (id, options) => { calls.push(['resume', id, options]); return { ok: true, value: { runtimeSessionId: 'rs2' } }; },
     },
   });
@@ -706,10 +708,12 @@ test('an installed local agy starts natively and continues the selected Antigrav
     assert.equal(next.props.disabled, false);
     next.props.onClick();
     assert.equal(view.button('agy').props.disabled, true);
+    await historyRequested.promise;
     assert.deepEqual(calls.at(-1), ['history', 't1', 'agy']);
     history.resolve({ ok: true, value: [{ id: 'latest', title: 'Latest task', at: NOW }, { id: 'earlier', title: null, at: null }] });
-    await history.promise;
-    const picker = elements(view.render()).find(node => node.props.label === 'Antigravity 历史会话');
+    const historyPicker = () => elements(view.render()).find(node => node.props.label === 'Antigravity 历史会话');
+    await waitFor(historyPicker, 'Antigravity history picker');
+    const picker = historyPicker();
     assert.deepEqual(picker.props.options.map(option => option.label), ['Latest task', '无标题会话']);
     picker.props.onChange('earlier');
     view.button('agy').props.onClick();
@@ -1974,7 +1978,8 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   const labels = section => [...section.matchAll(/<dt>([^<]+)<\/dt>/g)].map(match => match[1]);
   assert.deepEqual(asked, ['p1'], 'the read is scoped to the project in view');
   assert.match(html, /<h3 class="activity-card-title">运行方式与额度<\/h3>/);
-  assert.match(claude, /<h4[^>]*>Claude<\/h4>/); assert.match(codex, /<h4[^>]*>Codex<\/h4>/);
+  assert.match(claude, /<h4[^>]*><svg[^>]*agent-brand-claude[^>]*>.*<\/svg>Claude<\/h4>/);
+  assert.match(codex, /<h4[^>]*><svg[^>]*agent-brand-codex[^>]*>.*<\/svg>Codex<\/h4>/);
   assert.deepEqual(labels(claude), ['通道', '连接']); assert.deepEqual(labels(codex), ['通道', '连接']);
   assert.ok(claude.indexOf('<dt>通道</dt>') < claude.indexOf('<dt>连接</dt>'), '通道 precedes 连接');
   assert.ok(codex.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'), 'who pays and which way it runs are told apart');
@@ -2034,8 +2039,9 @@ test('the allowance of each agent follows its connection: the current session’
   // The session's agent without windows from main falls back to what its own records gave; the other agent has neither context nor round.
   const fallback = await usageHtml({ usage: async () => ({ ok: true, value: usage }) }, current('claude', { limits: [{ minutes: 300, percent: 20, resetsAt: future }, { minutes: 10080, percent: 26, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code' }));
   const claude = usageSection(fallback, 'Claude'), codex = usageSection(fallback, 'Codex');
-  const order = ['上下文长度', '5 小时额度', '每周额度', '>本轮<', '额度来自 Claude Code'].map(text => claude.indexOf(text));
-  assert.ok(order.every((position, i) => position >= 0 && (!i || position > order[i - 1])), 'context, the two windows, the round, then where the numbers come from');
+  const order = ['上下文长度', '5 小时额度', '每周额度', '>本轮<'].map(text => claude.indexOf(text));
+  assert.ok(order.every((position, i) => position >= 0 && (!i || position > order[i - 1])), 'context, the two windows, then the round');
+  assert.doesNotMatch(claude, /额度来自|本次对话的总量/, 'no line says where the numbers come from or that the total is in earlier records');
   assert.match(claude, /aria-valuenow="20"/); assert.match(claude, /aria-valuenow="26"/); assert.match(claude, /aria-valuenow="17"/);
   assert.doesNotMatch(claude, /API 花费/, 'a subscription has no spend');
   assert.doesNotMatch(codex, /上下文长度|>本轮<|>本次对话</, 'the other agent has no context or round');
@@ -2043,7 +2049,7 @@ test('the allowance of each agent follows its connection: the current session’
   // Windows from main come first: the session's own numbers do not replace them.
   const main = usageOf({  }); main.agents.claude = { ...main.agents.claude, connection: sub, limits: { state: 'ready', observedAtMs: Date.now(), limitsById: { five: { primary: { usedPercent: 33, windowDurationMins: 300, resetsAtMs: future }, secondary: null } } } };
   const preferred = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: main }) }, current('claude', { limits: [{ minutes: 300, percent: 20, resetsAt: future }] })), 'Claude');
-  assert.match(preferred, /aria-valuenow="33"/); assert.doesNotMatch(preferred, /aria-valuenow="20"/); assert.match(preferred, /额度来自 Claude，/);
+  assert.match(preferred, /aria-valuenow="33"/); assert.doesNotMatch(preferred, /aria-valuenow="20"/); assert.doesNotMatch(preferred, /额度来自/);
   // A window nobody measured says 未知 (never 0), and one past its reset time keeps the percent last observed while it waits for its next reading.
   const odd = usageOf({  }); odd.agents.codex.limits = { state: 'stale', limitsById: { a: { primary: { usedPercent: null, windowDurationMins: 300, resetsAtMs: null }, secondary: { usedPercent: 50, windowDurationMins: 10080, resetsAtMs: Date.now() - 1000 } } } };
   const staleHtml = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: odd }) }), 'Codex');
@@ -2083,7 +2089,7 @@ test('an account signed in while the agent has no main session names its plan an
   const html = await usageHtml({ usage: async () => ({ ok: true, value: idle }) }), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
   assert.match(claude, /<dd><span[^>]*>API<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅<\/span><\/dd>/);
   assert.doesNotMatch(html, /未开会话/, 'a sub-agent may be running on this account, so no session is not something the pane can say');
-  assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.match(codex, /额度来自 Codex/);
+  assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.doesNotMatch(codex, /额度来自/);
   assert.match(claude, /API 花费/); assert.doesNotMatch(claude, /月预算/);
   assert.doesNotMatch(claude + codex, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'these signed-in accounts have no session: no context, no round, no empty row');
   const signed = { ...base.agents.codex, connection: c('api', false) }, codexApi = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: { ...base.agents, codex: signed } }) }) }), 'Codex');

@@ -34,7 +34,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
     submissions: new SubmissionTracker(), promptQueue: new PromptQueue(), completionWork: new CompletionWork(), approval: { invalidate() {} } };
   const context = { createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage, sessions: new Map([['t', host]]), store: { findTerminal: () => ({ project, record: { restore: {} } }) },
     nativeSpecs: new Map(), randomUUID: require('node:crypto').randomUUID, wholeThread: value => !!value, launchPlans: new Map(), quitting: false,
-    fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, routing: { endSession() {} }, syncDashboardLive() {}, report(error) { throw error; },
+    fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, routing: { endSession() {} }, report(error) { throw error; },
     InputGate, isTerminalResponse, nativeSessions: null, scheduleState() {}, broadcast() {}, setTimeout, applyActivity() {}, findProject: () => project,
     PromptQueue, CompletionWork, ActionLog, ConversationLog, dashboard: { run() {} }, t: value => value,
     AgentCalls, sameDirectory: require('../electron/session-files.cjs').sameDirectory, path, os: { homedir: () => directory }, claudeConfigDir: () => directory, send() {} };
@@ -134,7 +134,7 @@ test('F15 staged main dispatch updates use the source tracker and survive activa
   const staged = { ...f.host, switchPreviousHost: f.host, calls: undefined }; f.context.sessions.set('t', staged);
   const incoming = f.context.callsOf(staged, { kind: 'local' }); assert.equal(incoming, calls);
   incoming.dispatch({ type: 'dispatch-end', id, model: 'fake', reason: 'exit', exitCode: 0, endedAt: Date.now(), outputTokens: null, activeMs: null });
-  f.context.retainAgentState(staged, f.host); assert.equal(staged.calls.running().length, 0); assert.equal(staged.calls.snapshot()[0].items[0].failure, null);
+  f.context.retainAgentState(staged, f.host); assert.equal(staged.calls.snapshot()[0].items[0].state, 'done'); assert.equal(staged.calls.snapshot()[0].items[0].failure, null);
 });
 
 test('F13/F14 a no-history terminal starts fresh through actual main activation and releases retired background tracking only', async t => {

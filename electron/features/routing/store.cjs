@@ -282,7 +282,7 @@ class RoutingStore {
     const restartLead = agent && leadForHost({ effective, installed, catalog, lead, leads: leadConfig.leads }, agent, remote);
     const applied = snapshot && binding.appliedRouting;
     const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: restartLead || runningLead } : null;
-    return { seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
+    return { seats: team.seats, roles, shippedOrder: team.shippedOrder, lead, authors: team.authors, fresh: team.fresh,
       ...leadConfig, defaults, template, config, routing: source, conductor: !!(config ?? template).conductor,
       effective, current, currentRoles: current ? applied?.roles ?? roles : null,
       catalog, installed, issues: modelSeats.seatIssues(effective, catalog),

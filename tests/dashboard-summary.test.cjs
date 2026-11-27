@@ -1,446 +1,104 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { summarize } = require('../electron/features/dashboard/summary.cjs');
-const prices = require('../electron/features/dashboard/prices.json');
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
+const { summarize, outcomeOf, MIN_TASKS } = require('../electron/features/dashboard/summary.cjs');
 
 const DAY = 86400000, now = new Date(2026, 9, 31, 12).getTime();
-const sol = 'gpt-6.1-sol', sonnet = 'claude-sonnet-5-5';
+const sol = 'gpt-6.1-sol', sonnet = 'claude-sonnet-5-5', gemini = 'gemini-3.8-flash';
 const projects = [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }];
-const query = { projectId: null, range: '7d' };
-const run = (id, extra = {}) => ({ id, at: now - 1000, projectId: 'a', project: 'Alpha', model: sol, agent: 'codex',
-  role: '执行', kind: 'core', meeting: null, reason: 'exit', exitCode: 0, outOfScope: 0,
-  activeMs: 1000, outputTokens: 20, totalOutputTokens: 30, inputTokens: 40, cachedTokens: 10, ...extra });
-const journal = entries => [{ projectId: 'a', project: 'Alpha', entries }];
-const entry = (type, meeting, extra = {}) => ({ type, meeting, time: now - 500, ...extra });
-const summary = (extra = {}) => summarize({ now, query, projects, prices, ...extra });
-const model = (result, name = sol) => result.models.find(row => row.model === name);
+const query = { projectId: null, range: '30d' };
+const checks = (passed, failed = 0, skipped = 0) => ({ checks: { passed, failed, skipped } });
+const run = (id, extra = {}) => ({ id, at: now - 1000, projectId: 'a', project: 'Alpha', model: sol, agent: 'codex', source: 'dispatch',
+  role: '执行', kind: 'core', reason: 'exit', exitCode: 0, outOfScope: 0, ...extra });
+const summary = (runs, extra = {}) => summarize({ runs, now, query, projects, ...extra });
+const counts = row => [row.tasks, row.passed, row.failed, row.untested, row.unfinished];
 
-test('agy runs and grades use their own models, weights and quota', () => {
-  const gemini = 'gemini-3.8-flash', collision = 'agy:claude-sonnet-5-5';
-  const records = { runs: [run('codex'), run('claude', { agent: 'claude', model: sonnet }),
-    run('agy', { agent: 'agy', model: gemini }), run('agy-collision', { agent: 'agy', model: sonnet })],
-  grades: [{ at: now - 1, agent: 'agy', model: collision, projectId: 'a', submission: 2, outcome: 'sent-back' }],
-  quota: ['codex', 'claude', 'agy'].map((provider, i) => ({ provider, at: now - 3 + i, windows: [{ minutes: 10080, percent: 20 * i }] })) };
-  const result = summary({ records, decisions: [{ id: 'weight', state: 'adopted', at: now - 1, weight: { model: collision, kind: 'core', from: 1, to: 0.8 } }] });
-  assert.deepEqual(result.models.map(row => [row.model, row.agent, row.runs, row.quotaPercent, row.weight]), [
-    [collision, 'agy', 1, 40, 0.8], [sonnet, 'claude', 1, 20, 1], [gemini, 'agy', 1, 40, 1], [sol, 'codex', 1, 0, 1],
-  ]);
-  assert.equal(model(result, collision).sentBack, 1);
-  assert.equal(model(result, collision).costUsd, null);
-  assert.equal(result.kpis.quota.provider, 'agy');
-});
-
-test('unconfirmed agy runs do not inherit the legacy unconfirmed row or its quota', () => {
-  const result = summary({ records: { runs: [run('legacy', { model: null }), run('agy', { agent: 'agy', model: 'unreported' })],
-    quota: [{ provider: 'codex', at: now - 1, windows: [{ minutes: 300, percent: 20 }] }] } });
-  assert.deepEqual(result.models.map(row => [row.model, row.agent, row.runs, row.quotaPercent]), [
-    ['agy:unreported', 'agy', 1, null], ['unreported', 'codex', 1, 20],
-  ]);
-});
-
-test('dashboard assigns each agy model its own longest quota window', () => {
-  const gemini = 'gemini-3.8-flash', thirdParty = 'agy:claude-sonnet-5-5';
-  const result = summary({ records: {
-    runs: [run('agy-gemini', { agent: 'agy', model: gemini }), run('agy-third-party', { agent: 'agy', model: thirdParty }), run('codex')],
-    quota: [{ provider: 'agy', at: now - 2, windows: [
-      { id: 'gemini', minutes: 300, percent: 90 }, { id: 'gemini', minutes: 10080, percent: 25 }, { id: '3p', minutes: 10080, percent: 50 },
-    ] }, { provider: 'codex', at: now - 1, windows: [{ minutes: 300, percent: 5 }] }],
-  } });
-  assert.equal(model(result, gemini).quotaPercent, 25);
-  assert.equal(model(result, thirdParty).quotaPercent, 50);
-  assert.equal(model(result).quotaPercent, 5);
-  assert.deepEqual(result.kpis.quota, { provider: 'codex', minutes: 300, percent: 5 });
-  assert.deepEqual(result.kpis.quotaGroups, [
-    { provider: 'agy', id: 'gemini', minutes: 10080, percent: 25 }, { provider: 'agy', id: '3p', minutes: 10080, percent: 50 },
-  ]);
-});
-
-test('SDK billing provenance deduplicates root charges and excludes included subagent cost', () => {
-  const root = run('root', { title: 'root', agent: 'claude', model: sonnet, source: 'native', billingPath: 'api', reportedCostUsd: 2, usageRecordId: 'session:result' });
-  const child = run('child', { title: 'child', agent: 'claude', model: sonnet, source: 'subagent', reportedCostUsd: 1, costIncludedIn: 'session:result' });
-  const result = summary({ records: { runs: [root, { ...root, id: 'duplicate-end' }, child] } });
-  assert.equal(result.kpis.runs, 2); assert.equal(model(result, sonnet).costUsd, 2);
-  assert.equal(result.daily.reduce((sum, row) => sum + (row.costUsd || 0), 0), 2);
-  assert.equal(result.modelRuns.find(row => row.title === child.title && row.costUsd === null)?.costUsd, null);
-});
-
-test('empty dashboard preserves unknown rates, costs, times and previous-round averages', () => {
-  const result = summary();
-  assert.deepEqual(result.kpis, { firstPassRate: null, runs: 0, runsPrevious: 0, incidents: 0, quota: null,
-    reworkPerRound: null, reworkPerRoundPrevious: null, rounds: 0, roundtableFirstConfirm: null, findingsPerRound: null, findingFixRate: null });
-  for (const key of ['models', 'modelRuns', 'kinds', 'speed', 'incidents', 'rounds', 'findings', 'suggestions', 'weights']) assert.deepEqual(result[key], [], key);
-  assert.deepEqual(result.prices, { updated: prices.updated, unpriced: [] });
-});
-
-test('worker first pass requires exit zero in scope and no finding against its author', () => {
-  const runs = [run('clean'), run('exit', { exitCode: 1 }), run('scope', { outOfScope: 2 }),
-    run('error', { reason: 'error' }), run('finding', { meeting: 'reviewed' }), run('unknown', { exitCode: null }),
-    run('reviewer', { role: '审查', kind: 'review' })];
-  const result = summary({ records: { runs }, journals: journal([
-    entry('finding', 'reviewed', { author: sol, category: 'correctness', fixed: true }),
-    entry('finding', 'reviewed', { author: sonnet, category: 'ui', fixed: false }),
-  ]) });
-  assert.equal(model(result).firstPassRate, 1 / 5);
-  assert.equal(result.kpis.firstPassRate, 1 / 5);
-  assert.equal(model(result).outOfScope, 2);
-  assert.equal(model(result).findingsPerRun, 1 / 7);
-  assert.equal(result.kinds.find(row => row.kind === 'review').firstPassRate, null);
-  assert.equal(result.kpis.findingFixRate, 0.5);
-  assert.deepEqual(result.modelRuns.map(row => row.firstPass), [null, null, false, false, false, false, true]);
-});
-
-test('rework follows review completion and explicit review follow-ups, with author and kind isolation', () => {
-  const runs = [
-    run('build', { meeting: 'r', startedAt: now - 900, endedAt: now - 800, activeMs: 100 }),
-    run('other-kind', { meeting: 'r', kind: 'frontend', startedAt: now - 900, endedAt: now - 700, activeMs: 200 }),
-    run('review', { meeting: 'r', role: '审查', kind: 'review', startedAt: now - 700, endedAt: now - 600, activeMs: 50 }),
-    run('repair', { meeting: 'r', startedAt: now - 550, endedAt: now - 500, activeMs: 30 }),
-    run('skip', { skipMeeting: 'review follow-up', activeMs: 10 }),
-  ];
-  const ends = runs.slice(0, 4).map(value => entry('end', 'r', { ...value, time: value.endedAt }));
-  const result = summary({ records: { runs }, journals: journal([
-    entry('end', 'r', { id: 'table', role: '圆桌', activeMs: 25, time: now - 1000 }), ...ends,
-    entry('consolidate', 'r', { time: now - 400 }),
-  ]) });
-  assert.equal(result.kinds.find(row => row.kind === 'core').firstPassRate, 0);
-  assert.equal(result.kinds.find(row => row.kind === 'frontend').firstPassRate, 1);
-  assert.deepEqual(result.rounds[0].phases, { roundtable: 25, build: 300, review: 50, rework: 30 });
-  assert.equal(result.rounds[0].tasks, 2); assert.equal(result.rounds[0].rework, 1);
-  assert.equal(result.rounds[0].durationMs, 600, 'journal ends and app run records are not counted twice');
-  assert.equal(result.rounds[0].questions, null);
-  assert.deepEqual(result.modelRuns.map(row => row.firstPass), [false, false, null, true, false]);
-});
-
-test('a permission note preserves a successful in-scope first pass and its original reason', () => {
-  const result = summary({ records: { runs: [run('noted', { title: 'Noted', reason: 'permission' }),
-    run('failed', { title: 'Failed', reason: 'permission', exitCode: 1 })] } });
-  assert.equal(result.kpis.firstPassRate, 0.5);
-  assert.equal(model(result).firstPassRate, 0.5);
-  assert.deepEqual(result.modelRuns.find(row => row.title === 'Noted' && row.firstPass)?.reason, 'permission');
-});
-
-test('model task lists follow the range and project, newest first, with the same cost and outcome evidence', () => {
-  const recent = run('recent', { title: 'Latest task', at: now, fast: true, meeting: 'r',
-    inputTokens: 1e6, cachedTokens: 1e6, totalOutputTokens: 1e6 });
-  const boundary = run('boundary', { title: 'Boundary task', at: now - 7 * DAY });
-  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs: [recent, boundary,
-    run('old', { at: now - 7 * DAY - 1 }), run('future', { at: now + 1 }),
-    run('beta', { projectId: 'b', project: 'Beta' })] } });
-  assert.deepEqual(result.modelRuns, [
-    { model: sol, at: now, project: 'Alpha', title: 'Latest task', kind: 'core', role: '执行', meeting: 'r',
-      firstPass: true, reason: 'exit', activeMs: 1000, outputTokens: 1e6, costUsd: 24.2 },
-    { model: sol, at: now - 7 * DAY, project: 'Alpha', title: 'Boundary task', kind: 'core', role: '执行', meeting: null,
-      firstPass: true, reason: 'exit', activeMs: 1000, outputTokens: 30, costUsd: 0.000381 },
-  ]);
-});
-
-test('model task lists cap each model at its latest 50 without truncating the model metrics or mutating records', () => {
-  const runs = [sol, sonnet].flatMap((model, m) => Array.from({ length: 55 + m * 5 }, (_, i) =>
-    run(`${m}-${i}`, { model, agent: m ? 'claude' : 'codex', at: now - i, title: `${m}-${i}` }))).reverse();
-  const before = JSON.stringify(runs);
-  const result = summary({ records: { runs: [...runs, runs[0]] } });
-  assert.equal(result.modelRuns.length, 100);
-  for (const [index, name] of [sol, sonnet].entries()) {
-    assert.deepEqual(result.modelRuns.filter(row => row.model === name).map(row => row.title),
-      Array.from({ length: 50 }, (_, i) => `${index}-${i}`));
-    assert.equal(model(result, name).runs, 55 + index * 5);
+test('a task passes on its own passed checks, fails on any failed one, is untested without any that ran and unfinished when it did not end cleanly', () => {
+  assert.equal(outcomeOf(run('p', checks(3))), 'passed');
+  assert.equal(outcomeOf(run('f', checks(3, 1))), 'failed');
+  assert.equal(outcomeOf(run('s', checks(0, 0, 2))), 'untested');
+  assert.equal(outcomeOf(run('n')), 'untested', 'a record from before checks were kept is untested');
+  assert.equal(outcomeOf(run('permission', { reason: 'permission', ...checks(1) })), 'passed', 'a refused action still returned the work');
+  for (const [reason, extra] of [['error', { exitCode: 1 }], ['killed', {}], ['unconfirmed', {}], ['capacity', {}], ['scope', { outOfScope: 2 }], ['exit', { exitCode: 2 }]]) {
+    assert.equal(outcomeOf(run(reason, { reason, ...extra, ...checks(4) })), 'unfinished', reason);
   }
-  assert.ok(result.modelRuns.every((row, index, rows) => index === 0 || rows[index - 1].at >= row.at));
-  assert.equal(JSON.stringify(runs), before);
+  assert.equal(outcomeOf(run('out', { outOfScope: 1, ...checks(1) })), 'unfinished');
 });
 
-test('model task lists preserve unknown values, recorded zeros, and the legacy output-count fallback', () => {
-  const result = summary({ records: { runs: [
-    run('unknown', { model: 'custom', at: now, exitCode: null, title: null, role: null, kind: null, reason: null,
-      activeMs: -1, totalOutputTokens: null, outputTokens: null, inputTokens: null }),
-    run('zero', { title: 'zero', at: now - 1, activeMs: 0, totalOutputTokens: 0, outputTokens: 20, reportedCostUsd: 0 }),
-    run('legacy', { title: 'legacy', at: now - 2, totalOutputTokens: undefined }),
-  ] } });
-  assert.deepEqual(result.modelRuns[0], { model: 'custom', at: now, project: 'Alpha', title: '', kind: null, role: null,
-    meeting: null, firstPass: null, reason: null, activeMs: null, outputTokens: null, costUsd: null });
-  assert.deepEqual(result.modelRuns.slice(1).map(row => [row.activeMs, row.outputTokens, row.costUsd]),
-    [[0, 0, 0], [1000, 20, 0.000281]]);
-});
-
-test('a build already running when review ends is not rework', () => {
-  const runs = [run('build', { meeting: 'r', startedAt: now - 900, endedAt: now - 300 }),
-    run('review', { meeting: 'r', role: '审查', kind: 'review', startedAt: now - 700, endedAt: now - 500 })];
-  const result = summary({ records: { runs }, journals: journal([entry('consolidate', 'r')]) });
-  assert.equal(result.rounds[0].rework, 0); assert.equal(model(result).firstPassRate, 1);
-});
-
-test('every session must have its first confirmation confirmed, and later confirmation cannot repair it', () => {
-  const meeting = (round, session, status, phase, time) => entry('meeting', round, { session, agent: 'codex', status, time,
-    ...(phase === 'understanding' ? { understanding: { goal: 'task' } } : { confirmation: { status, questions: [] } }) });
-  const result = summary({ journals: journal([
-    meeting('ok', 'one', 'understood', 'understanding', now - 900), meeting('ok', 'one', 'confirmed', 'confirmation', now - 800),
-    meeting('ok', 'two', 'confirmed', 'confirmation', now - 700),
-    meeting('retry', 'one', 'open', 'confirmation', now - 900), meeting('retry', 'one', 'confirmed', 'confirmation', now - 700),
-    meeting('missing', 'one', 'understood', 'understanding', now - 900),
-    meeting('invalid', 'one', 'invalid', 'confirmation', now - 900),
-  ]) });
-  assert.equal(result.rounds.find(round => round.meeting === 'ok').firstConfirmed, true);
-  for (const round of result.rounds.filter(round => round.meeting !== 'ok')) assert.equal(round.firstConfirmed, false);
-  assert.equal(result.kpis.roundtableFirstConfirm, 0.25);
-});
-
-test('lead deliveries belong to the graded session model and only first submissions determine first pass', () => {
-  const grades = [
-    { at: now - 900, projectId: 'a', agent: 'claude', model: 'claude-opus-5-5', sessionId: 'lead', submission: 1, outcome: 'sent-back' },
-    { at: now - 800, projectId: 'a', agent: 'claude', model: 'claude-opus-5-5', sessionId: 'lead', submission: 2, outcome: 'passed' },
-    { at: now - 700, projectId: 'a', agent: 'claude', model: 'claude-opus-5-5', sessionId: 'lead', submission: 1, outcome: 'passed' },
-  ];
-  const result = summary({ records: { runs: [run('worker')], grades } });
-  assert.equal(model(result, 'claude-opus-5-5').runs, 0);
-  assert.equal(model(result, 'claude-opus-5-5').firstPassRate, 0.5);
-  assert.equal(model(result, 'claude-opus-5-5').sentBack, 1);
-  assert.equal(model(result).firstPassRate, 1);
-  assert.equal(result.kpis.firstPassRate, 2 / 3);
-});
-
-test('range and project filtering use adjacent equal previous windows and retain complete round evidence', () => {
-  const current = run('now', { at: now });
-  const boundary = run('boundary', { at: now - 7 * DAY });
-  const previous = run('previous', { at: now - 14 * DAY });
-  const outside = run('outside', { at: now - 14 * DAY - 1 });
-  const future = run('future', { at: now + 1 });
-  const beta = run('beta', { projectId: 'b', project: 'Beta', meeting: 'current' });
-  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs: [current, boundary, previous, outside, future, beta] },
-    journals: [
-      ...journal([entry('end', 'old', { time: now - 8 * DAY, role: '执行', activeMs: 10 }), entry('consolidate', 'old', { time: now - 8 * DAY + 1 }),
-        entry('meeting', 'current', { time: now - 8 * DAY, session: 's', agent: 'codex', status: 'confirmed', confirmation: { status: 'confirmed' } }),
-        entry('issues', 'current', { time: now - 8 * DAY, issues: [] }), entry('consolidate', 'current', { time: now - DAY })]),
-      { projectId: 'b', entries: [entry('incident', 'current', { model: sol, kind: 'core', cause: 'Beta only' })] },
-    ] });
-  assert.equal(result.kpis.runs, 2); assert.equal(result.kpis.runsPrevious, 1);
-  assert.equal(result.kpis.rounds, 1); assert.equal(result.kpis.reworkPerRoundPrevious, 0);
-  assert.equal(result.kpis.incidents, 0); assert.equal(result.rounds[0].firstConfirmed, true);
-  assert.equal(result.rounds[0].questions, 0);
-  const all = summary({ query: { projectId: null, range: 'all' }, records: { runs: [current, boundary, previous, outside, future, beta] } });
-  assert.equal(all.kpis.runs, 5); assert.equal(all.kpis.runsPrevious, null); assert.equal(all.kpis.reworkPerRoundPrevious, null);
-  assert.equal(summary({ query: { projectId: null, range: '30d' }, records: { runs: [outside] } }).kpis.runs, 1);
-});
-
-test('project filters include only their grades and journal, even when meetings have the same name', () => {
-  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs: [run('one', { meeting: 'same' })], grades: [
-    { at: now, projectId: 'b', model: sol, agent: 'codex', outcome: 'sent-back', submission: 1 },
-  ] }, journals: [...journal([entry('consolidate', 'same')]), { projectId: 'b', entries: [
-    entry('finding', 'same', { author: sol, category: 'correctness', fixed: false }), entry('consolidate', 'same'),
-  ] }] });
-  assert.equal(model(result).firstPassRate, 1); assert.equal(model(result).sentBack, 0); assert.equal(result.findings.length, 0);
-});
-
-test('daily speed weights the same timed replies and uses the local calendar day', () => {
-  const morning = new Date(2026, 9, 31, 0, 1).getTime(), evening = new Date(2026, 9, 30, 23, 59).getTime();
-  const result = summary({ records: { runs: [run('short', { at: morning, activeMs: 1000, outputTokens: 10 }),
-    run('long', { at: morning + 1, activeMs: 3000, outputTokens: 90 }),
-    run('untimed', { at: morning + 2, activeMs: null, outputTokens: 90000 }),
-    run('yesterday', { at: evening, activeMs: 1000, outputTokens: 0 })] } });
-  assert.deepEqual(result.speed, [
-    { day: '2026-10-30', model: sol, tokensPerSecond: 0 }, { day: '2026-10-31', model: sol, tokensPerSecond: 25 },
+test('the pass rate is passed over all tasks, each model is counted from its own runs and the three CLIs appear side by side', () => {
+  const runs = [run('1', checks(2)), run('2', checks(1, 1)), run('3'), run('4', { reason: 'error', exitCode: 1 }),
+    ...[5, 6, 7, 8, 9].map(index => run(`c${index}`, { agent: 'claude', model: sonnet, ...checks(1) })),
+    run('agy', { agent: 'agy', model: gemini, ...checks(1) })];
+  const result = summary(runs);
+  assert.deepEqual(result.models.map(row => [row.model, row.agent, ...counts(row), row.passRate, row.small]), [
+    [sonnet, 'claude', 5, 5, 0, 0, 0, 1, false],
+    [gemini, 'agy', 1, 1, 0, 0, 0, 1, true],
+    [sol, 'codex', 4, 1, 1, 1, 1, 0.25, true],
   ]);
-  assert.equal(model(result).tokensPerSecond, 20);
-  assert.equal(model(result).avgActiveMs, 5000 / 3);
+  assert.equal(result.minTasks, MIN_TASKS);
 });
 
-test('quota uses the latest reading per provider and its longest window, without adding different account scopes', () => {
-  const quota = [
-    { at: now - 800, provider: 'codex', scope: 'old-host', windows: [{ minutes: 10080, percent: 99 }] },
-    { at: now - 700, provider: 'codex', scope: 'new-host', windows: [{ minutes: 300, percent: 90 }, { minutes: 10080, percent: 15 }] },
-    { at: now - 600, provider: 'claude', windows: [{ minutes: 10080, percent: 0 }] },
-    { at: now + 1, provider: 'codex', windows: [{ minutes: 10080, percent: 100 }] },
-  ];
-  const result = summary({ records: { runs: [run('sol'), run('sonnet', { model: sonnet, agent: 'claude' })], quota } });
-  assert.equal(model(result).quotaPercent, 15); assert.equal(model(result, sonnet).quotaPercent, 0);
-  assert.deepEqual(result.kpis.quota, { provider: 'claude', percent: 0, minutes: 10080 });
-  const unknown = summary({ records: { runs: [run('one')], quota: [...quota, { at: now, provider: 'codex', windows: [{ minutes: null, percent: 5 }] }] } });
-  assert.equal(model(unknown).quotaPercent, null);
+test('a small sample is marked and ranked after every model with enough tasks, even at 100%', () => {
+  const enough = Array.from({ length: MIN_TASKS }, (_, index) => run(`s${index}`, index < 2 ? checks(1) : {}));
+  const result = summary([...enough, run('tiny-1', { model: sonnet, agent: 'claude', ...checks(1) }), run('tiny-2', { model: sonnet, agent: 'claude', ...checks(1) })]);
+  assert.deepEqual(result.models.map(row => [row.model, row.passRate, row.small]), [[sol, 0.4, false], [sonnet, 1, true]]);
+  const ranked = summary([...enough, ...Array.from({ length: MIN_TASKS }, (_, index) => run(`c${index}`, { model: sonnet, agent: 'claude', ...checks(1) }))]);
+  assert.deepEqual(ranked.models.map(row => row.model), [sonnet, sol], 'among enough tasks the higher pass rate leads');
 });
 
-test('costs distinguish partial prices, fast rows, unpriced models and a reported zero', () => {
-  const result = summary({ records: { runs: [run('priced', { fast: true, inputTokens: 1e6, cachedTokens: 1e6, totalOutputTokens: 1e6 }),
-    run('partial', { inputTokens: null }), run('zero', { reportedCostUsd: 0, inputTokens: null }),
-    run('custom', { model: 'custom-model', inputTokens: null })] } });
-  assert.equal(model(result).costedRuns, 2); assert.equal(model(result).costUsd, 24.2);
-  assert.equal(model(result, 'custom-model').costUsd, null);
-  assert.deepEqual(result.prices.unpriced, ['custom-model']);
+test('only dispatched role runs are tasks; duplicates collapse, future, foreign and unknown-provider records are ignored', () => {
+  const runs = [run('one', checks(1)), run('one', checks(1)), run('lead', { source: 'native' }), run('child', { source: 'subagent', agent: 'claude', model: sonnet }),
+    run('legacy', { source: undefined }), run('later', { at: now + 1 }), run('mystery', { agent: 'other' }),
+    run('usage-1', { usageRecordId: 'u' }), run('usage-2', { usageRecordId: 'u' })];
+  assert.deepEqual(summary(runs).models.map(row => [row.model, row.tasks]), [[sol, 3]]);
 });
 
-test('unreported values remain null and duplicate dispatch ends do not inflate runs', () => {
-  const unknown = run('one', { exitCode: null, activeMs: null, inputTokens: null, model: null });
-  const result = summary({ records: { runs: [unknown, unknown] } });
-  assert.equal(result.kpis.runs, 1);
-  const row = model(result, 'unreported');
-  for (const key of ['firstPassRate', 'avgActiveMs', 'tokensPerSecond', 'costUsd', 'quotaPercent']) assert.equal(row[key], null, key);
-  assert.equal(result.speed[0].tokensPerSecond, null);
-  assert.equal(result.models.filter(item => item.model === 'unreported').length, 1, 'old records without a model form one bucket');
+test('the range and project filters select tasks, and the project list keeps every known project', () => {
+  const runs = [run('old', { at: now - 10 * DAY }), run('beta', { projectId: 'b', project: 'Beta' }), run('gone', { projectId: 'c', project: 'Closed' })];
+  assert.equal(summary(runs, { query: { projectId: null, range: '7d' } }).models[0].tasks, 2);
+  assert.equal(summary(runs, { query: { projectId: 'b', range: 'all' } }).models[0].tasks, 1);
+  assert.deepEqual(summary(runs).projects, [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }, { id: 'c', name: 'Closed' }]);
+  assert.deepEqual(summary([], { query: { projectId: 'a', range: '7d' } }).models, []);
 });
 
-test('latest issues snapshots distinguish zero from historical absence and supply changed-plan suggestions', () => {
-  const issues = [{ issue: 'old plan', raisedBy: sol, answer: 'split module', result: 'changed the plan' }];
-  const result = summary({ journals: journal([
-    entry('issues', 'r', { time: now - 900, issues: [] }), entry('issues', 'r', { time: now - 800, issues }),
-    entry('consolidate', 'r'), entry('consolidate', 'old'),
-  ]) });
-  assert.equal(result.rounds.find(round => round.meeting === 'r').questions, 1);
-  assert.equal(result.rounds.find(round => round.meeting === 'old').questions, null);
-  assert.ok(result.suggestions.some(suggestion => suggestion.title === '保留开工前的圆桌确认'));
+test('a daily trend point is the pass rate of the seven days ending that day, from a model’s first task on', () => {
+  const day = back => now - back * DAY;
+  const result = summary([run('a', { at: day(2), ...checks(1) }), run('b', { at: day(2) }), run('c', { at: day(0), ...checks(1) }),
+    run('d', { at: day(1), model: sonnet, agent: 'claude', ...checks(0, 1) }), run('e', { at: day(20), ...checks(1) })], { query: { projectId: null, range: '30d' } });
+  assert.equal(result.trend.unit, 'day');
+  assert.equal(result.trend.buckets.length, 31); assert.equal(result.trend.buckets.at(-1), '2026-10-31');
+  const of = model => result.trend.points.filter(point => point.model === model).map(point => [point.bucket.slice(5), point.tasks, point.passRate]);
+  assert.deepEqual(of(sol), [...['10-11', '10-12', '10-13', '10-14', '10-15', '10-16', '10-17'].map(bucket => [bucket, 1, 1]),
+    ['10-29', 2, 0.5], ['10-30', 2, 0.5], ['10-31', 3, 2 / 3]], 'a week with no task has no point; the window rolls over the newer tasks');
+  assert.deepEqual(of(sonnet), [['10-30', 1, 0], ['10-31', 1, 0]]);
 });
 
-test('weights are global, use the lowest adopted kind on a model row, and survive project and date filtering', () => {
-  const decisions = [
-    { id: 'one', state: 'adopted', at: now - 100 * DAY, weight: { model: sol, kind: 'core', from: 1, to: 0.8 } },
-    { id: 'two', state: 'adopted', at: now - 100 * DAY, weight: { model: sol, kind: 'frontend', from: 1, to: 1.2 } },
-  ];
-  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs: [run('one')] }, decisions });
-  assert.equal(model(result).weight, 0.8); assert.equal(result.weights.length, 2);
+test('a range longer than sixty days is bucketed by weeks that start on Monday', () => {
+  const result = summary([run('first', { at: now - 90 * DAY }), run('last', { at: now, ...checks(1) })], { query: { projectId: null, range: 'all' } });
+  assert.equal(result.trend.unit, 'week');
+  assert.ok(result.trend.buckets.every(bucket => new Date(`${bucket}T12:00:00`).getDay() === 1));
+  assert.equal(result.trend.buckets.at(-1), '2026-10-26');
+  assert.deepEqual(result.trend.points.map(point => [point.bucket, point.passRate]), [[result.trend.buckets[0], 0], ['2026-10-26', 1]]);
+  assert.equal(summary([run('recent', { at: now - 3 * DAY })], { query: { projectId: null, range: 'all' } }).trend.unit, 'day');
 });
 
-test('suggestions use all project and date evidence while displayed metrics follow the query', () => {
-  const terra = 'gpt-6.1-terra';
-  const runs = Array.from({ length: 5 }, (_, i) => [
-    run(`pass-${i}`, { at: now - 40 * DAY }),
-    run(`fail-${i}`, { projectId: 'b', model: terra, at: now - 10 * DAY, exitCode: 1 }),
-  ]).flat();
-  const journals = journal([entry('incident', 'old', { time: now - 40 * DAY, model: sol, kind: 'core',
-    weight: { kind: 'core', from: 1, to: 0.8 } }), entry('issues', 'old', { time: now - 40 * DAY,
-    issues: [{ issue: 'scope', raisedBy: sol, answer: 'split', result: 'changed the plan' }] })]);
-  const options = { records: { runs }, journals };
-  const first = summary(options);
-  assert.equal(first.kpis.runs, 0); assert.equal(first.suggestions.length, 3);
-  for (const projectId of [null, 'a', 'b']) for (const range of ['7d', '30d', 'all']) {
-    assert.deepEqual(summary({ ...options, query: { projectId, range } }).suggestions, first.suggestions);
-  }
-  const suggestion = first.suggestions.find(value => value.weight?.model === terra);
-  const decisions = [{ id: suggestion.id, state: 'adopted', at: now, weight: suggestion.weight }];
-  runs.push(run('one-more', { model: terra, exitCode: 1, projectId: 'b' }));
-  const next = summary({ ...options, decisions });
-  assert.equal(next.suggestions.length, first.suggestions.length);
-  assert.deepEqual(next.weights, [suggestion.weight]);
-  assert.equal(next.suggestions.find(value => value.id === suggestion.id).state, 'adopted');
+test('model × kind cells count each pair on its own, mark small pairs and keep unreported kinds', () => {
+  const runs = [...Array.from({ length: MIN_TASKS }, (_, index) => run(`core${index}`, checks(index ? 1 : 0, index ? 0 : 1))),
+    run('ui', { kind: 'frontend', ...checks(1) }), run('blank', { kind: null }), run('c', { kind: 'frontend', model: sonnet, agent: 'claude' })];
+  const cells = summary(runs).kinds.map(cell => [cell.kind, cell.model, cell.tasks, cell.passRate, cell.small]);
+  assert.deepEqual(cells, [['core', sol, 5, 0.8, false], ['frontend', sol, 1, 1, true], ['frontend', sonnet, 1, 0, true], ['unreported', sol, 1, 0, true]]);
 });
 
-test('first-pass sample thresholds exclude runs without an observed outcome on either model', () => {
-  for (const unknownModel of [sol, sonnet]) {
-    const runs = Array.from({ length: 5 }, (_, i) => [run(`good-${i}`), run(`bad-${i}`, { model: sonnet, agent: 'claude', exitCode: 1 })]).flat();
-    const unknown = runs.find(value => value.model === unknownModel);
-    unknown.exitCode = null;
-    runs.push(run('review', { model: unknownModel, role: '审查', kind: 'core' }));
-    const result = summary({ records: { runs } });
-    assert.equal(result.kpis.runs, 11);
-    assert.equal(result.kinds.find(row => row.model === unknownModel).runs, 4);
-    assert.deepEqual(result.suggestions, []);
-    unknown.exitCode = unknownModel === sol ? 0 : 1;
-    assert.equal(summary({ records: { runs } }).suggestions.length, 1);
-  }
-});
-
-test('worktrees sharing one common journal count once globally and remain selectable per project', () => {
-  const entries = [entry('consolidate', 'shared')];
-  const journals = [{ projectId: 'a', key: 'common', entries }, { projectId: 'b', key: 'common', entries }];
-  assert.equal(summary({ journals }).rounds.length, 1);
-  const beta = summary({ journals, query: { ...query, projectId: 'b' } });
-  assert.equal(beta.rounds.length, 1); assert.equal(beta.rounds[0].project, 'Beta');
-});
-
-test('shared worktree journals apply author findings to runs from every associated project', () => {
-  const entries = [entry('finding', 'shared', { author: sol, category: 'correctness', fixed: true }), entry('consolidate', 'shared')];
-  const journals = [{ projectId: 'a', key: 'common', entries }, { projectId: 'b', key: 'common', entries }];
-  const result = summary({ journals, records: { runs: [run('beta', { projectId: 'b', meeting: 'shared' })] } });
-  assert.equal(result.rounds.length, 1); assert.equal(model(result).firstPassRate, 0);
-});
-
-test('incident suggestion ids survive a sliding journal tail and reordered project aliases', () => {
-  const incident = entry('incident', 'r', { model: sol, kind: 'core', cause: 'same evidence', fix: 'same fix', weight: { kind: 'core', from: 1, to: 0.8 } });
-  const prior = entry('consolidate', 'old', { time: now - 100 * DAY });
-  const first = summary({ journals: [{ projectId: 'a', key: 'common', entries: [prior, incident] }, { projectId: 'b', key: 'common', entries: [prior, incident] }] });
-  const next = summary({ journals: [{ projectId: 'b', key: 'common', entries: [incident] }, { projectId: 'a', key: 'common', entries: [incident] }] });
-  assert.equal(first.suggestions[0].id, next.suggestions[0].id);
-});
-
-test('malformed journal issue and weight fields stay unavailable instead of creating suggestions', () => {
-  const result = summary({ journals: journal([
-    entry('issues', 'r', { issues: [null] }), entry('consolidate', 'r'),
-    entry('incident', 'r', { model: sol, kind: 'core', weight: { kind: 'core', from: 1, to: null } }),
-  ]) });
-  assert.equal(result.rounds[0].questions, null); assert.equal(result.incidents[0].weight, null);
-  assert.deepEqual(result.suggestions, []);
-});
-
-test('summary is pure and never changes caller records or journal arrays', () => {
-  const input = { now, query, projects, prices, live: { at: now - 10, running: [{ id: 'agent:live', project: 'a',
-    agent: 'Claude Code', model: sonnet, title: 'Synthetic task', role: '搜索', startedAt: now - 1000, tokensPerSecond: null }] },
-    records: { runs: [run('one', { meeting: 'r' })] }, journals: journal([
-    entry('skip', 'r', { id: 'one', reason: 'review follow-up' }), entry('consolidate', 'r'),
-  ]) };
-  const before = JSON.stringify(input);
-  const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } };
-  freeze(input);
-  assert.deepEqual(summarize(input), summarize(input)); assert.equal(JSON.stringify(input), before);
-});
-
-test('daily series use the selected range and project, count confirmed passes, and fill missing local days', () => {
-  const runs = [run('pass', { at: now, reportedCostUsd: 0 }), run('fail', { at: now, exitCode: 1, reportedCostUsd: 2 }),
-    run('unknown', { at: now, exitCode: null, activeMs: null, inputTokens: null }),
-    run('review', { at: now, role: '审查', kind: 'review', reportedCostUsd: 3 }),
-    run('boundary', { at: now - 7 * DAY }), run('old', { at: now - 7 * DAY - 1 }),
-    run('future', { at: now + 1 }), run('other-project', { projectId: 'b', reportedCostUsd: 100 })];
-  const result = summary({ query: { ...query, projectId: 'a' }, records: { runs } });
-  assert.equal(result.daily.length, 8, 'a rolling seven-day interval intersects eight local calendar dates');
-  assert.deepEqual(result.daily.at(-1), { day: '2026-10-31', model: sol, runs: 4, firstPass: 1, costUsd: 5, activeMs: null });
-  assert.equal(result.daily[0].runs, 1); assert.equal(result.daily[0].firstPass, 1);
-  assert.deepEqual(result.daily[1], { day: '2026-10-25', model: sol, runs: 0, firstPass: 0, costUsd: 0, activeMs: 0 });
-  assert.equal(result.daily.reduce((sum, row) => sum + row.runs, 0), result.kpis.runs);
-  const unavailable = summary({ records: { runs: [run('unknown', { model: 'custom', activeMs: null, inputTokens: null })] } }).daily.at(-1);
-  assert.equal(unavailable.costUsd, null); assert.equal(unavailable.activeMs, null);
-  assert.deepEqual(summary().daily, []); assert.deepEqual(summary().live, { running: [], at: 0 });
-});
-
-test('fourteen-day model trends use local dates and project scope independently of the selected time range', () => {
-  const first = new Date(now); first.setHours(0, 0, 0, 0); first.setDate(first.getDate() - 13);
-  const runs = [run('today', { at: now }), run('first', { at: first.getTime() }), run('before', { at: first.getTime() - 1 }),
-    run('last-week', { at: now - 10 * DAY }), run('future', { at: now + 1 }), run('other', { projectId: 'b' })];
-  const options = { query: { ...query, projectId: 'a' }, records: { runs } };
-  const result = summary(options), trend = model(result).trend;
-  assert.equal(trend.length, 14); assert.equal(trend[0], 1); assert.equal(trend[3], 1); assert.equal(trend[13], 1);
-  assert.equal(trend.reduce((sum, count) => sum + count, 0), 3);
-  for (const range of ['30d', 'all']) assert.deepEqual(model(summary({ ...options, query: { projectId: 'a', range } })).trend, trend);
-  assert.equal(result.kpis.runs, 1, 'the fixed sparkline does not widen the selected KPI range');
-  const all = summary({ ...options, query: { projectId: 'a', range: 'all' } });
-  assert.equal(all.daily[0].day, '2026-10-17'); assert.equal(all.daily.at(-1).day, '2026-10-31');
-  assert.equal(all.daily.reduce((sum, row) => sum + row.runs, 0), 4);
-});
-
-test('subagents participate in every run series, while duplicate ends and source-id collisions do not lose or inflate them', () => {
-  const child = run('agent:task', { source: 'subagent', agent: 'claude', model: sonnet, role: '搜索', kind: 'investigate',
-    at: now, meeting: 'r', reportedCostUsd: 0.25, activeMs: 2000, outputTokens: 80 });
-  const result = summary({ records: { runs: [child, { ...child }, run('dispatch:task', { at: now, meeting: 'r' })] },
-    journals: journal([entry('consolidate', 'r')]) });
-  assert.equal(result.kpis.runs, 2); assert.equal(model(result, sonnet).runs, 1);
-  assert.equal(model(result, sonnet).firstPassRate, 1); assert.equal(model(result, sonnet).trend.at(-1), 1);
-  assert.equal(result.modelRuns.filter(row => row.model === sonnet).length, 1);
-  assert.deepEqual(result.daily.find(row => row.day === '2026-10-31' && row.model === sonnet),
-    { day: '2026-10-31', model: sonnet, runs: 1, firstPass: 1, costUsd: 0.25, activeMs: 2000 });
-  assert.equal(result.speed.find(row => row.model === sonnet).tokensPerSecond, 40);
-  assert.equal(result.kinds.find(row => row.model === sonnet).runs, 1);
-  assert.equal(result.rounds[0].tasks, 2); assert.equal(result.rounds[0].phases.build, 3000);
-  const collision = summary({ records: { runs: [run('same'), run('same', { source: 'dispatch' }),
-    run('same', { source: 'subagent', model: sonnet, agent: 'claude', role: '搜索' })] } });
-  assert.equal(collision.kpis.runs, 2, 'legacy dispatch ids remain compatible and subagent ids have their own namespace');
-  assert.equal(model(summary({ records: { runs: [{ ...child, role: '审查', kind: 'review' }] } }), sonnet).firstPassRate, null);
-});
-
-test('daily and trend bins follow local calendar days across a daylight-saving transition', () => {
-  const { execFileSync } = require('node:child_process');
+test('trend buckets follow local calendar days across a daylight-saving transition', () => {
   const script = `const { summarize } = require('./electron/features/dashboard/summary.cjs');
     const now = new Date(2026, 2, 9, 12).getTime();
-    const records = { runs: [7, 8, 9].map(day => ({ id: String(day), agent: 'codex', model: 'test',
-      at: new Date(2026, 2, day, 0, 30).getTime() })) };
-    const result = summarize({ records, now, query: { projectId: null, range: '7d' } });
-    process.stdout.write(JSON.stringify({ daily: result.daily, trend: result.models[0].trend }));`;
-  const result = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: require('node:path').resolve(__dirname, '..'),
+    const runs = [7, 8, 9].map(day => ({ id: String(day), agent: 'codex', model: 'test', source: 'dispatch', reason: 'exit', exitCode: 0,
+      at: new Date(2026, 2, day, 0, 30).getTime() }));
+    process.stdout.write(JSON.stringify(summarize({ runs, now, query: { projectId: null, range: '7d' } }).trend));`;
+  const trend = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: path.resolve(__dirname, '..'),
     env: { SystemRoot: process.env.SystemRoot, TZ: 'America/New_York' }, windowsHide: true, encoding: 'utf8' }));
-  assert.deepEqual(result.daily.filter(row => row.runs).map(row => [row.day, row.runs]),
-    [['2026-03-07', 1], ['2026-03-08', 1], ['2026-03-09', 1]]);
-  assert.equal(result.trend.length, 14); assert.deepEqual(result.trend.slice(-3), [1, 1, 1]);
+  assert.equal(new Set(trend.buckets).size, trend.buckets.length);
+  assert.deepEqual(trend.buckets.slice(-3), ['2026-03-07', '2026-03-08', '2026-03-09']);
+  assert.deepEqual(trend.points.map(point => point.bucket), ['2026-03-07', '2026-03-08', '2026-03-09']);
 });

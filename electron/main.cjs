@@ -227,7 +227,7 @@ const host = {
   summarizeTask, promptText, isLocalAgentCommand, rememberClaudeSource, claudeConfigDir, findClaudeSession, TranscriptTail, claudeRecord,
   claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap, startupNote, READING_NOTE,
   handoffFile, integrationDir,
-  dispatchRefused: reportDispatchRefusal, sameDirectory, get dashboardWindow() { return dashboardWindow; },
+  dispatchRefused: reportDispatchRefusal, sameDirectory,
   get store() { return store; }, get quitting() { return quitting; }, get eventServer() { return eventServer; },
   get controlAddress() { return controlAddress; }, set controlAddress(value) { controlAddress = value; },
   get claudeRuntime() { return claudeRuntime; }, set claudeRuntime(value) { claudeRuntime = value; }, get terminalInput() { return terminalInput; },
@@ -283,7 +283,7 @@ const host = {
 Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
 Object.assign(host, createTerminalLifecycle(host), createShellEvents(host), createNativeHost(host));
 const { initializeNativeSessions, registerUnavailableNative, tellMode, tellRemoteRouting, takeModeNote } = host;
-const { onEvent, callsOf, dispatchedOnly, resolveIntervention, syncDashboardLive } = host;
+const { onEvent, callsOf, dispatchedOnly, resolveIntervention } = host;
 const { firstLooksSettled, remoteFor, localShell, restoreTerminal, startTerminal, disposeTerminal, cleanupTerminalFiles } = host;
 const { followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook, acceptDispatchEvent, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox } = host;
 const { localSwitchSessions, observeSwitchTerminal, retainAgentState, prepareSwitchTerminal, retireTerminal, activateNative } = host;
@@ -311,7 +311,6 @@ const agents = new AgentsManager({ onChange: state => send('agents:changed', sta
   agy: agyInstall?.peek, refreshAgy: agyInstall?.refresh });
 function broadcast() {
   dashboardWindow?.sync();
-  syncDashboardLive();
   labWindow?.sync();
   routing?.syncWatchers();
   clearTimeout(stateTimer);
@@ -445,7 +444,7 @@ if (!app.requestSingleInstanceLock()) {
     const windowStartup = {
       store, desktopGlassBackend, desktopGlassOptions, applyDesktopGlass, applyNativeTheme, runtimeDir, registerMacTitlebar,
       t, send, broadcast, appUserModelId, relaunchDisplayName, app, root, registerWindowZoom, screen, createDashboard, BrowserWindow,
-      ipcMain, devUrl, dashboard, windowBackgroundColor, syncDashboardLive, createLab, integrationDir, registerWindowContents, Menu,
+      ipcMain, devUrl, dashboard, windowBackgroundColor, createLab, integrationDir, registerWindowContents, Menu,
       clipboard, previewResources, pictureFrom, registerWindowLifecycle, requestQuit, report, updateIndicators,
       showRendererFailure: () => dialog.showErrorBox(t('Agentrix 窗口反复崩溃'), t('已停止自动重载。请退出并重新打开 Agentrix。')),
       Tray, trayImage, trayMenu, showWindow, macMenu, captureBranch,

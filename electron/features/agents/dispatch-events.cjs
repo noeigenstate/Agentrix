@@ -122,7 +122,7 @@ function validDispatch(event) {
     (event.meeting == null || typeof event.meeting === 'string' && /^[\w.-]{1,64}$/.test(event.meeting)) &&
     (event.skipMeeting == null || line(event.skipMeeting, 1024));
   return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed', 'scope', 'permission'].includes(event.reason) &&
-    (event.refused === undefined || validRefusals(event.refused)) &&
+    (event.refused === undefined || validRefusals(event.refused)) && (event.checks === undefined || validChecks(event.checks)) &&
     (event.treeStopFailure === undefined || event.reason === 'killed' && line(event.treeStopFailure, 160)) &&
     (event.outOfScope === undefined || Array.isArray(event.outOfScope) && event.outOfScope.length <= 50 && event.outOfScope.every(file => line(file, 4096))) &&
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&
@@ -137,6 +137,9 @@ function validDispatch(event) {
 const validRefusal = entry => line(entry?.action, 160) && typeof entry.reason === 'string' &&
   (entry.reason === 'needs approval' || /^[a-z_]{1,40}$/.test(entry.reason)) && Object.keys(entry).length === 2;
 const validRefusals = value => Array.isArray(value) && value.length <= REFUSAL_LIMIT && value.every(validRefusal);
+// The role's own checks by result (finish_role verification), as the dashboard records them.
+const validChecks = value => object(value) && Object.keys(value).sort().join() === 'failed,passed,skipped'
+  && Object.values(value).every(count => Number.isSafeInteger(count) && count >= 0);
 
 // calls: the session's called models (AgentCalls), present whether or not an agent runs in that terminal.
 // observeAccount: takes a running Codex call's account report as a limits payload (dispatchAccount); it may decline it.

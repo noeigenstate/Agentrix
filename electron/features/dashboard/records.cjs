@@ -54,11 +54,8 @@ class DashboardRecords {
     const windows = quotaWindows(limits, adapter.usage?.quotaGroupId);
     if (!windows.length) return;
     const key = `${provider}:${scope}`, signature = JSON.stringify(windows);
-    const previous = this.quotas.get(key) || { provider, scope };
-    this.quotas.delete(key); this.quotas.set(key, previous);
-    previous.latest = { v: 1, at: this.now(), provider, scope, windows };
-    // The UI follows observations immediately; durable history keeps its existing write throttle.
-    this.notify('quota');
+    let previous = this.quotas.get(key);
+    if (!previous) { previous = { provider, scope }; this.quotas.set(key, previous); }
     if (previous.signature === undefined) { this.writeQuota(previous, windows); return; }
     if (previous.signature === signature) {
       clearTimeout(previous.timer); previous.timer = null; previous.trailing = null;
@@ -69,9 +66,6 @@ class DashboardRecords {
     previous.trailing = windows;
     previous.timer ??= setTimeout(() => this.writeQuota(previous, previous.trailing), remaining);
     previous.timer.unref?.();
-  }
-  latestQuota() {
-    return [...this.quotas.values()].map(({ latest }) => ({ ...latest, windows: latest.windows.map(window => ({ ...window })) }));
   }
   writeQuota(state, windows) {
     clearTimeout(state.timer); state.timer = null; state.trailing = null;

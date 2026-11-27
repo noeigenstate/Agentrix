@@ -9,6 +9,9 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const number = value => Number.isFinite(value) && value >= 0 ? value : null;
 const route = value => ({ model: text(value?.model) || 'unreported', effort: text(value?.effort, 32), fast: typeof value?.fast === 'boolean' ? value.fast : null });
 const projectName = project => (project.kind === 'ssh' ? path.posix : path).basename(project.path);
+// The checks a dispatched role reported at its end, by result. Absent on runs that reported none and on older records.
+const checksOf = value => ['passed', 'failed', 'skipped'].every(key => count(value?.[key]) !== null)
+  ? { checks: { passed: value.passed, failed: value.failed, skipped: value.skipped } } : {};
 
 function runRecord(project, call, event) {
   const source = (event.source || call.source) === 'native' ? 'native' : (event.source || call.source) === 'subagent' ? 'subagent' : 'dispatch';
@@ -27,7 +30,7 @@ function runRecord(project, call, event) {
     ...(text(event.usageRecordId) ? { usageRecordId: text(event.usageRecordId) } : {}),
     ...(text(event.costIncludedIn) ? { costIncludedIn: text(event.costIncludedIn) } : {}),
     ...(['estimated', 'unknown'].includes(event.costCompleteness) ? { costCompleteness: event.costCompleteness } : {}),
-    exitCode: Number.isSafeInteger(event.exitCode) ? event.exitCode : null,
+    exitCode: Number.isSafeInteger(event.exitCode) ? event.exitCode : null, ...checksOf(event.checks),
     outOfScope: count(event.outOfScopeCount) ?? (Array.isArray(event.outOfScope) ? event.outOfScope.length : source === 'subagent' ? null : 0), verdict };
 }
 

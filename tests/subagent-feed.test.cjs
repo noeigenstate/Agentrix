@@ -195,12 +195,10 @@ test('dispatched Codex exec workers resolve their own rollout identity and reuse
   await fs.appendFile(filename, partial.slice(-8));
   assert.equal((await f.calls.feed('dispatch:codex')).entries.at(-1).text, 'Synthetic partial answer.');
   f.calls.dispatch({ type: 'dispatch-rate', id: 'codex', outputTokens: 40, activeMs: 2000 });
-  assert.deepEqual(f.calls.running().find(call => call.id === 'dispatch:codex'), { id: 'dispatch:codex', agent: 'Codex',
-    model: 'gpt-6.1-sol', title: 'Dispatch codex', role: '执行', startedAt: BASE,
-    rate: { outputTokens: 40, activeMs: 2000, samples: 1, updatedAt: f.calls.calls.get('codex').rate.updatedAt, partial: false } });
+  assert.equal(f.calls.snapshot()[0].rate.outputTokens, 40);
+  assert.equal(f.calls.snapshot()[0].rate.activeMs, 2000);
   endDispatch(f, 'codex'); await f.calls.work;
   assert.equal((await f.calls.feed('dispatch:codex')).state, 'done');
-  assert.ok(!f.calls.running().some(call => call.id === 'dispatch:codex'));
 });
 
 test('Codex dispatch cwd aliases retain the worker feed and token-rate records', async t => {
@@ -527,7 +525,6 @@ test('Claude completion records drain the last reply, deduplicate usage and noti
     f.calls.apply(notice(id, status)); f.calls.apply(result(id)); await f.calls.work;
   }
   assert.equal(f.finished.length, 3);
-  assert.equal(f.calls.running().length, 0);
 });
 
 test('foreground, poll and stop receipts complete once; missing measurements stay null and history replay never counts', async t => {

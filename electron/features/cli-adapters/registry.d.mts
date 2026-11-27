@@ -8,7 +8,7 @@ type Manifest = Readonly<{
   brand?: 'anthropic' | 'openai' | 'antigravity';
   command: string;
   usage?: Readonly<{ label?: string; showUnavailable?: boolean; apiSpend?: boolean; resetCredits?: boolean; provider?: string;
-    inputExcludesCache?: boolean; quotaUnavailable?: string }>;
+    inputExcludesCache?: boolean; quotaUnavailable?: string; hideWithoutUsage?: boolean }>;
   install: Readonly<{
     npm?: string; page: string; versionPattern: RegExp; minVersion: string; label: string; diagnostics?: 'split-install' | 'drive-scan';
     commands?: Readonly<{ windows: string; unix: string }>;

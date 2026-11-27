@@ -119,6 +119,33 @@ test('run and grade hooks retain only local evaluation metadata', async t => {
   assert.equal(grades[0].note.length, 2000); assert.equal(grades[1].note, undefined); assert.equal(grades[1].submission, 3);
 });
 
+test('a role’s reported checks reach its run record by result; malformed counts are refused and older records read as untested', async t => {
+  const { roleChecks } = require('../integration/role-artifacts.cjs');
+  const { summarize } = require('../electron/features/dashboard/summary.cjs');
+  const ran = (...results) => ({ source: 'finish-role', verification: { ran: results.map(result => ({ command: 'node --test', result, note: '' })), unverified: [] } });
+  assert.deepEqual(roleChecks(ran('pass', 'pass', 'fail', 'skipped')), { passed: 2, failed: 1, skipped: 1 });
+  for (const none of [ran(), { source: 'finish-role' }, { ...ran('pass'), source: 'final-text' }]) assert.equal(roleChecks(none), null);
+  const { records } = await lab(t, { now: () => 10000 });
+  const session = { terminalId: 'terminal', projectId: 'owner', sessionKey: 'key', agent: 'claude' };
+  const calls = new AgentCalls({ local: false, finished: (call, event) => records.run({ id: 'owner', path: '/fake/project' }, call, event) });
+  t.after(() => calls.reset());
+  const start = id => ({ type: 'dispatch-start', id, projectId: 'terminal', sessionKey: 'key', agent: 'claude', model: 'claude-sonnet-5-5', effort: 'high', fast: false,
+    role: '执行', kind: 'test', title: 'Checks', cwd: '/fake', brief: '/fake/brief', out: '/fake/out', sessionId: randomUUID(), startedAt: 1 });
+  const end = (id, extra) => ({ type: 'dispatch-end', id, projectId: 'terminal', sessionKey: 'key', model: 'claude-sonnet-5-5', effort: 'high', fast: false,
+    endedAt: 9999, outputTokens: null, activeMs: null, reason: 'exit', exitCode: 0, ...extra });
+  const [reported, legacy, forged] = [randomUUID(), randomUUID(), randomUUID()];
+  for (const id of [reported, legacy, forged]) assert.equal(acceptDispatch(session, start(id), calls), true);
+  assert.equal(acceptDispatch(session, end(reported, { checks: { passed: 3, failed: 0, skipped: 1 } }), calls), true);
+  assert.equal(acceptDispatch(session, end(legacy), calls), true);
+  for (const checks of [{ passed: 1 }, { passed: -1, failed: 0, skipped: 0 }, { passed: 1, failed: 0, skipped: 0, extra: 1 }, [1, 0, 0]]) {
+    assert.equal(acceptDispatch(session, end(forged, { checks }), calls), false, JSON.stringify(checks));
+  }
+  const runs = await records.read('runs');
+  assert.deepEqual(runs.map(run => run.checks ?? null), [{ passed: 3, failed: 0, skipped: 1 }, null]);
+  const [row] = summarize({ runs, now: 20000, query: { projectId: null, range: 'all' } }).models;
+  assert.deepEqual([row.tasks, row.passed, row.untested], [2, 1, 1]);
+});
+
 test('unconfirmed runs retain declarations without inventing an actual route', async t => {
   const { records } = await lab(t);
   records.run({ id: 'p', path: path.join(os.tmpdir(), 'project') }, { sourceAgent: 'codex', role: '执行', unconfirmed: true,
@@ -146,23 +173,6 @@ test('subagent run records retain their source and observed metrics without reta
   assert.equal(run.activeMs, 1000); assert.equal(run.inputTokens, null); assert.equal(run.outputTokens, 20);
   assert.equal(run.outOfScope, null, 'missing subagent scope evidence stays unknown');
   assert.equal(run.reason, 'exit'); assert.equal(run.exitCode, 0); assert.doesNotMatch(JSON.stringify(run), /private-fixture/);
-});
-
-test('latest quota snapshots isolate scopes, return copies, and never replace durable history', async t => {
-  let now = 100;
-  const { records } = await lab(t, { now: () => now });
-  records.quota('codex', [{ minutes: 300, percent: 10 }], 'one');
-  now++; records.quota('codex', [{ minutes: 300, percent: 20, accountId: 'private-fixture' }], 'one');
-  now++; records.quota('codex', [{ minutes: 300, percent: 30 }], 'two');
-  now++; records.quota('claude', [{ minutes: 300, percent: 0 }], 'one');
-  const snapshots = records.latestQuota();
-  assert.equal(snapshots.length, 3);
-  assert.deepEqual(snapshots.map(record => record.windows[0].percent), [20, 30, 0]);
-  assert.equal(snapshots[0].at, 101); assert.doesNotMatch(JSON.stringify(snapshots), /private-fixture/);
-  snapshots[0].windows[0].percent = 99;
-  assert.equal(records.latestQuota()[0].windows[0].percent, 20);
-  assert.deepEqual((await records.read('quota')).map(record => record.windows[0].percent), [10, 30, 0]);
-  records.waitForQuit(); await records.flush();
 });
 
 test('quota snapshots throttle each provider and preserve zero', async t => {

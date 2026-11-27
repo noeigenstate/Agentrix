@@ -8,6 +8,7 @@ import { aliasTarget, modelLabel } from '../../shared/routing-command.ts';
 import { routingNotice, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
 import { unverifiedScreenSwitch } from '../cli-screens/index.ts';
 import { useScreen } from '../terminal/terminal-screen.ts';
+import { useReorder, type ReorderTarget } from '../workspace/useProjectReorder';
 import { nativeBridge } from '../native-session/native-bridge.ts';
 import type { AgentProvider } from '../../shared/agent-events';
 import { agentShortLabel } from '../../shared/agent-label.ts';
@@ -16,7 +17,7 @@ import { t, currentLanguage } from '../../shared/i18n';
 import {
   paletteGroups, ageOf, menuPlacement, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, rowFor,
-  sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, agentOfModel, allowsUltracode, withSlot,
+  sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, agentOfModel, allowsUltracode, withSlot, moveRole,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
 } from './routing-seats';
 import { adapters, adapterOf, adapterOfModel } from '../../../electron/features/cli-adapters/registry.mjs';
@@ -73,6 +74,16 @@ type Notice = { kind: 'info' | 'ok' | 'error'; text: string };
 type Menu = { kind: 'model' | 'role'; slot: SlotId } & ReturnType<typeof menuPlacement>;
 type Custom = { text: string; error: string };
 const inside = (node: unknown, target: unknown) => !!node && typeof (node as Node).contains === 'function' && (node as Node).contains(target as Node);
+// The team cards after the lead, picked up anywhere but their controls (the model button drags its model instead), as
+// the project cards are; the chart scrolls while a card is held near its edge.
+const ROLE_CARDS: ReorderTarget = {
+  slots: ':scope > [data-role-slot]', slotId: slot => slot.dataset.roleSlot!,
+  item: target => {
+    const card = target.closest<HTMLElement>('[data-role-slot] > .seats-team-card');
+    return card && !target.closest('button, input, [role="menu"]') ? { element: card, id: card.dataset.seat! } : null;
+  },
+  area: container => container.closest<HTMLElement>('.seats-chart') ?? container,
+};
 
 function modelMenuItems(catalog: SeatModel[], selected: string | undefined, pick: (model: string) => void, unavailable?: string) {
   const current = selected && (aliasTarget(catalog, selected) ?? selected);
@@ -219,10 +230,12 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
   const original = configFor(info, scope), current = drafts[scope], config = current?.config ?? original;
   const roles = draftRoles(info, config), working = resolveDraftSeats(info.defaults, roles, config), baseline = baselineFor(info, scope);
   const enabled = roles.filter(role => role.enabled), live = Object.fromEntries(enabled.flatMap(role => working[role.id] ? [[role.id, working[role.id]]] : []));
+  const team = enabled.filter(role => role.kind !== 'lead').map(role => role.id);
   const clean = cleanDraft(info, config);
   const saved = cleanDraft(info, original);
   const roleIds = new Set([...Object.keys(clean.roles), ...Object.keys(saved.roles)]);
-  const count = [...roleIds].filter(id => !sameRoleConfig(clean.roles[id], saved.roles[id])).length + Number(!!clean.conductor !== !!saved.conductor);
+  const count = [...roleIds].filter(id => !sameRoleConfig(clean.roles[id], saved.roles[id])).length + Number(!!clean.conductor !== !!saved.conductor)
+    + Number(String(clean.order ?? '') !== String(saved.order ?? ''));
   const dirty = !!current && count > 0;
   const teamError = checkTeamRules(roles);
   const refusal = firstRefusal(live, catalog);
@@ -263,9 +276,9 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
     setNotice({ kind: 'error', text: t('没有保存：{message}', { message }) });
   };
   return {
-    baseline, working, roles, config, enabled, dirty, count, refusal, teamError, scope, saving, createFile, mayOverwrite, stale, reload,
+    baseline, working, roles, config, enabled, team, dirty, count, refusal, teamError, scope, saving, createFile, mayOverwrite, stale, reload,
     hasDrafts: dirty || !!drafts[scope === 'project' ? 'template' : 'project'],
-    canReset: Object.keys(clean.roles).length > 0 || !!clean.conductor,
+    canReset: Object.keys(clean.roles).length > 0 || !!clean.conductor || !!clean.order,
     discardShown: discarding, setDiscarding, setDraft, setConfig, changeScope: setScope, reset, save,
   };
 }
@@ -350,7 +363,7 @@ function useMenu({ catalog }: ReturnType<typeof useCatalog>, { setNowOpen }: Ret
     opener.current = button;
     setCustom(null);
     setModelFolds({});
-    const rows = kind === 'model' ? catalog.length : 6;
+    const rows = kind === 'model' ? catalog.length : 8;
     setNowOpen(false);
     setMenu({ kind, slot, ...menuPlacement({ left: box.left, top: box.top, bottom: box.bottom }, { width: window.innerWidth, height: window.innerHeight }, rows) });
   };
@@ -493,9 +506,12 @@ function useRoleActions(source: ReturnType<typeof useCatalog>, draft: ReturnType
   });
   const save = (id: string, value: RoleConfig) => {
     const roles = { ...draft.config.roles, [id]: value };
-    if (editor?.existing && editor.existing.id !== id) delete roles[editor.existing.id];
+    const renamed = editor?.existing && editor.existing.id !== id ? editor.existing.id : undefined;
+    if (renamed) delete roles[renamed];
     if (editor?.replace) roles[editor.replace] = { ...roles[editor.replace], enabled: false };
-    draft.setConfig({ ...draft.config, roles }, editor?.base);
+    // A renamed role, or the copy that replaces one, keeps that card's place.
+    const held = renamed ?? editor?.replace, order = draft.config.order?.map(item => item === held ? id : item);
+    draft.setConfig({ ...draft.config, roles, ...(order && { order }) }, editor?.base);
     close();
   };
   const remove = (role: TeamRole) => {
@@ -503,7 +519,15 @@ function useRoleActions(source: ReturnType<typeof useCatalog>, draft: ReturnType
     delete roles[role.id];
     draft.setConfig({ ...draft.config, roles });
   };
-  return { editor, taken, close, edit, create, change, save, remove };
+  const arrange = (order: SeatId[]) => draft.setConfig({ ...draft.config, order });
+  // 前移 / 后移: the keyboard's way to reorder, one place at a time.
+  const move = (role: TeamRole, step: -1 | 1) => {
+    const order = moveRole(draft.team, role.id, step);
+    if (!order) return;
+    arrange(order);
+    source.setNotice({ kind: 'info', text: t('草稿 · {seat} 移到第 {index} 位', { seat: roleName(role), index: order.indexOf(role.id) + 1 }) });
+  };
+  return { editor, taken, close, edit, create, change, save, remove, arrange, move };
 }
 
 function useReviewCooldown(visible: boolean, digest: string | null) {
@@ -566,6 +590,8 @@ function useDialogState(props: SeatsDialogProps) {
   const warnedFast = useRef(false);
   const [tab, setTab] = useState<Tab>('team');
   const switchTab = (next: Tab) => { popup.setMenu(null); panels.setPaletteOpen(false); setTab(next); };
+  const reorder = useReorder(!!draft.config.conductor && !draft.saving && tab === 'team' && !review.visible, draft.scope, draft.team,
+    ids => { roles.arrange(ids); return Promise.resolve(); }, ROLE_CARDS);
   const { dialog, nowOpen, nowButton, paletteOpen, paletteButton, setNowOpen, setPaletteOpen, close } = panels;
   const { menu, closeMenu } = popup;
   const { discardShown, setDiscarding } = draft;
@@ -588,7 +614,7 @@ function useDialogState(props: SeatsDialogProps) {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   };
-  return { props, source, draft, panels, popup, edits, drag, tab, switchTab, keys, roles, review, warnedFast, switchReason };
+  return { props, source, draft, panels, popup, edits, drag, reorder, tab, switchTab, keys, roles, review, warnedFast, switchReason };
 }
 type DialogState = ReturnType<typeof useDialogState>;
 type DialogPart = { state: DialogState };
@@ -629,7 +655,8 @@ function SeatPicker({ state, role }: DialogPart & { role: TeamRole }) {
 }
 
 function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; library?: boolean }) {
-  const { saving, enabled, roles } = state.draft, { edit, create, change, remove } = state.roles;
+  const { saving, enabled, roles, team } = state.draft, { edit, create, change, remove, move } = state.roles;
+  const place = library ? -1 : team.indexOf(role.id);
   const lock = role.locked.includes('enabled');
   const full = enabled.length >= MAX_ENABLED_ROLES, copiesFull = roles.filter(role => role.source === 'custom').length >= MAX_CUSTOM_ROLES;
   const custom = role.source === 'custom', canCopy = !custom && !role.locked.includes('copy');
@@ -663,6 +690,12 @@ function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; li
     {custom && <button type="button" className={cls} role={itemRole} disabled={saving || !!library && lock}
       aria-disabled={lock || undefined} aria-describedby={lock ? reasonId : undefined}
       onClick={() => { if (!lock) membership(() => remove(role)); }}>{t('删除角色')}</button>}
+    {place >= 0 && <>
+      <button type="button" className={cls} role={itemRole} data-move-role="-1" disabled={saving || place === 0}
+        onClick={() => run(() => move(role, -1))}>{t('前移')}</button>
+      <button type="button" className={cls} role={itemRole} data-move-role="1" disabled={saving || place === team.length - 1}
+        onClick={() => run(() => move(role, 1))}>{t('后移')}</button>
+    </>}
   </div>;
 }
 
@@ -720,7 +753,7 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
   const specialtyCount = specialties.length === 1 ? t('专长 1') : t('专长 {count}', { count: specialties.length });
   const specialtyNames = specialties.join(roleSeparator());
   const leadDetail = [duty, output].filter(Boolean).join(' · ');
-  const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over'].filter(Boolean).join(' ');
+  const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over', state.reorder.drag?.id === id && 'drag-source'].filter(Boolean).join(' ');
   const moreTitle = t('{seat}：角色操作', { seat: roleName(role) });
   return <article className={classes} data-seat={id} data-slot={id} aria-label={roleName(role)}>
     <div className="seats-team-info">
@@ -753,8 +786,9 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
 }
 
 function TeamChart({ state }: DialogPart) {
-  const { info } = state.source, { enabled, working, baseline } = state.draft;
+  const { info } = state.source, { enabled, working, baseline } = state.draft, { drag, order, onPointerDown, onClickCapture } = state.reorder;
   const lead = enabled.find(role => role.id === info.lead), team = enabled.filter(role => role.id !== info.lead);
+  const shown = order ? order.flatMap(id => team.find(role => role.id === id) ?? []) : team;
   const changed = changedSeats(enabled.map(role => role.id), working, baseline);
   return <div className="seats-chart" id="seats-team-panel" role="tabpanel" aria-labelledby="seats-team-tab">
     <div className="seats-owner" data-owner>
@@ -764,8 +798,10 @@ function TeamChart({ state }: DialogPart) {
     {lead && <><div className="seats-chart-link" aria-hidden="true" />
       <TeamCard state={state} role={lead} lead changed={changed.includes(lead.id)} /><div className="seats-chart-bus" aria-hidden="true" /></>}
     {!state.draft.config.conductor && <p className="seats-mode-note" role="status">{t('指挥家模式已关闭：总指挥自己完成所有任务，其余角色不可用。')}</p>}
-    <div className={`seats-team-grid${state.draft.config.conductor ? '' : ' is-unavailable'}`} aria-disabled={!state.draft.config.conductor || undefined}>
-      {team.map(role => <TeamCard key={role.id} state={state} role={role} changed={changed.includes(role.id)} />)}
+    <div className={`seats-team-grid${state.draft.config.conductor ? '' : ' is-unavailable'}${drag ? ' is-reordering' : ''}`}
+      aria-disabled={!state.draft.config.conductor || undefined} onPointerDown={onPointerDown} onClickCapture={onClickCapture}>
+      {shown.map(role => <div key={role.id} className={`seats-team-slot${drag?.id === role.id ? ' drag-placeholder' : ''}`} data-role-slot={role.id}>
+        <TeamCard state={state} role={role} changed={changed.includes(role.id)} /></div>)}
       {enabled.length < MAX_ENABLED_ROLES && <button type="button" className="seats-btn seats-add-role" onClick={() => state.switchTab('library')}>
         <Plus size={16} aria-hidden="true" />{t('添加角色')}<span>{t('{count}/{limit}，从角色库选', { count: enabled.length, limit: MAX_ENABLED_ROLES })}</span>
       </button>}

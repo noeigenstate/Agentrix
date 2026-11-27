@@ -1,6 +1,4 @@
-/* A new project's card: the two agents side by side, how to start above them, the plain terminal below. */
-/* The launcher is the card's own scroll area and a size container: its body stands at least as tall as the card (centred when it fits, scrolling inside the card when it does not), and in a short or narrow card
-   the heading goes and the gaps and padding step down the spacing scale, so the start buttons are on screen without scrolling. Tiles, marks, titles and mode buttons keep their size at every width. */
+/* The launcher centres its controls when they fit and scrolls inside the card otherwise. */
 .agent-launcher { container-type: size; height: 100%; overflow: auto; }
 .agent-launcher-body { box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: 16px; min-height: 100%; padding: 20px; }
 @container (max-width: 340px) { .agent-launcher-body { padding: 12px; } }
@@ -11,6 +9,7 @@
 .agent-launcher-mode button[aria-checked="true"] { background: var(--bg-selected); color: var(--text-1); }
 .agent-launcher-mode button:not([aria-checked="true"]):not(:disabled):hover { color: var(--text-1); }
 .agent-launcher-mode button:disabled { opacity: .45; cursor: default; }
+.agent-launcher-body > .select-trigger { max-width: 100%; }
 .agent-launcher-agents { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; width: 100%; max-width: 520px; }
 .agent-launcher-agent { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; row-gap: 4px; align-items: center; flex: 1 1 200px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-card); color: var(--text-1); text-align: left; cursor: pointer; }
 .agent-launcher-agent:hover:not(:disabled) { background: var(--bg-hover); }
@@ -27,3 +26,10 @@
 /* An agent not installed yet: the same card, quieter, saying a click installs it. */
 .agent-launcher-agent.is-missing { opacity: .78; }
 .agent-launcher-error { max-width: 520px; margin: 0; font-size: 12px; line-height: 20px; font-weight: 600; color: var(--text-1); white-space: pre-wrap; text-align: center; overflow-wrap: anywhere; }
+
+/* Three stacked choices and a history picker can share the short card. */
+@container (max-height: 340px) {
+  .agent-launcher-agents:has(> :nth-child(3)) { gap: 8px; }
+  .agent-launcher-agents:has(> :nth-child(3)) .agent-launcher-agent { padding: 4px 12px; }
+  .agent-launcher-agents:has(> :nth-child(3)) .agent-launcher-mark { width: 32px; height: 32px; }
+}

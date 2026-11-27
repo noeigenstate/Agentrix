@@ -11,7 +11,7 @@ const windows = process.platform === 'win32';
 function fixture(t, extra = {}) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-agents-'));
   t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
-  const env = windows ? { Path: `;"${folder}";`, ...extra } : { PATH: `:${folder}:`, ...extra };
+  const env = windows ? { Path: `;"${folder}";`, ...extra } : { PATH: `:${folder}:`, HOME: folder, ...extra };
   return { folder, env, add: name => fs.writeFileSync(path.join(folder, windows ? `${name}.cmd` : name), '', { mode: 0o755 }) };
 }
 function fakeLaunch() {
@@ -57,6 +57,24 @@ test('isolated profiles report installed agents unless the agent test opt-in is 
   assert.equal(manager.getState().codex.installed, true); assert.equal(manager.getState().claude.installed, true);
   env.AGENTRIX_TEST_AGENTS = '1';
   assert.equal(manager.getState().codex.installed, false); assert.equal(manager.getState().claude.installed, false);
+});
+
+test('Antigravity is detected in its default install folder before the background version check', t => {
+  const output = path.resolve(__dirname, '../.test-output');
+  fs.mkdirSync(output, { recursive: true });
+  const folder = fs.mkdtempSync(path.join(output, 'agy-install-'));
+  t.after(() => {
+    assert.equal(path.dirname(path.resolve(folder)), output);
+    fs.rmSync(folder, { recursive: true, force: true });
+  });
+  const env = { Path: '', LOCALAPPDATA: folder, HOME: folder };
+  const agy = windows ? path.join(folder, 'agy', 'bin', 'agy.exe') : path.join(folder, '.local', 'bin', 'agy');
+  const manager = new AgentsManager({ env });
+  assert.deepEqual(manager.getState().agy, { installed: false });
+  fs.mkdirSync(path.dirname(agy), { recursive: true });
+  fs.writeFileSync(agy, '', { mode: 0o755 });
+  assert.equal(onPath('agy', env), false);
+  assert.deepEqual(manager.getState().agy, { installed: true });
 });
 
 test('only the immutable fixed package map is accepted, including prototype names and shell input', t => {

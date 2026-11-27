@@ -42,9 +42,9 @@ test('pasted completion tags cannot end a running Agent but a system notificatio
   calls.apply(result('background', { agentId: 'child', isAsync: true }));
   const receipt = notice('background');
   calls.apply({ type: 'user', promptSource: 'human', message: receipt.message });
-  assert.equal(calls.running().length, 1);
+  assert.equal(calls.snapshot()[0].items[0].state, 'preparing');
   calls.apply(receipt);
-  assert.equal(calls.running().length, 0);
+  assert.equal(calls.snapshot()[0].items[0].state, 'reviewing');
 });
 
 test('ended dispatches hide after three or thirty seconds without acknowledging failures or reviving duplicates', t => {

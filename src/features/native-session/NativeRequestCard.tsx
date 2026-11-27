@@ -1,7 +1,7 @@
 // What the agent waits for you to decide: allow a command, a file change or a permission once, or answer its questions. Nothing is allowed by
 // itself — a card stays until you answer or the main process resolves it (stop and session end deny it there). The answer goes to the main
 // process by the request's id; a secret answer lives only in this card's fields until sent.
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Check } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { type NativeAnswer, nativeBridge } from './native-bridge.ts';
@@ -66,7 +66,7 @@ function QuestionForm({ request, drafts, onDraft, busy, onAnswer }: { request: N
   </>;
 }
 
-export function NativeRequestCard({ request, terminalId, sessionId }: { request: NativeRequest; terminalId: string; sessionId: string }) {
+export function NativeRequestCard({ request, terminalId, sessionId, mark }: { request: NativeRequest; terminalId: string; sessionId: string; mark?: ReactNode }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [drafts, setDrafts] = useState<Drafts>({});
   // A sent answer keeps the card shut until the main process resolves the request; a refused one opens it again with the reason.
   const answer = async (value: NativeAnswer) => {
@@ -79,7 +79,7 @@ export function NativeRequestCard({ request, terminalId, sessionId }: { request:
   // A question has its own words and its options; the tool's name and its raw input are no part of it.
   const asking = request.questions.length > 0, title = asking ? t(KIND_WORDS.question) : t(request.title || KIND_WORDS[request.kind] || '它在等你的回答');
   return <section className={`reading-choice native-request${asking ? ' is-question' : ''}`} role="group" aria-label={title} aria-busy={busy}>
-    <div className="reading-choice-head"><strong>{title}</strong></div>
+    <div className="reading-choice-head">{mark}<strong>{title}</strong></div>
     {request.preview && !asking && <pre className="reading-choice-context native-preview">{request.preview}</pre>}
     {asking
       ? <QuestionForm request={request} drafts={drafts} onDraft={(key, draft) => setDrafts(current => ({ ...current, [key]: draft }))} busy={busy} onAnswer={value => void answer(value)} />
