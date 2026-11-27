@@ -12,6 +12,9 @@
 .agent-launcher-body > .select-trigger { max-width: 100%; }
 .agent-launcher-agents { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; width: 100%; max-width: 520px; }
 .agent-launcher-agent { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; row-gap: 4px; align-items: center; flex: 1 1 200px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-card); color: var(--text-1); text-align: left; cursor: pointer; }
+/* With three or more, a card left alone on a row keeps the half width of the row above; when only one fits per row
+   (under 2 × 200px + gap) the cap lifts and each card fills the row. */
+.agent-launcher-agents:has(> :nth-child(3)) .agent-launcher-agent { max-width: max(calc(50% - 6px), (412px - 100%) * 999); }
 .agent-launcher-agent:hover:not(:disabled) { background: var(--bg-hover); }
 .agent-launcher-agent:disabled { cursor: default; opacity: .7; }
 .agent-launcher-mark { grid-row: span 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; background: var(--bg-input); }
